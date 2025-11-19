@@ -1,22 +1,19 @@
 {
   "name": "asf-scheduler",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "ASF Scheduler Desktop App",
   "main": "main.js",
   "author": "Edouard Gonnu",
   "license": "MIT",
-
   "scripts": {
     "start": "electron .",
     "build-mac": "electron-builder --mac dmg zip",
-    "build-win": "electron-builder --win nsis",
+    "build-win": "electron-builder --win nsis zip",
     "release": "node bump-version.js"
   },
-
   "build": {
     "appId": "org.asf.scheduler",
     "productName": "ASF Scheduler",
-
     "files": [
       "../app.py",
       "../launcher.py",
@@ -28,14 +25,11 @@
       "main.js",
       "start-streamlit.js",
       "preload.js",
-      "splash.html",
-      "style.css"
+      "splash.html"
     ],
-
     "directories": {
       "output": "dist"
     },
-
     "publish": [
       {
         "provider": "github",
@@ -43,25 +37,27 @@
         "repo": "asf_scheduler"
       }
     ],
-
     "mac": {
       "category": "public.app-category.productivity",
       "icon": "icon.icns",
-      "target": ["dmg", "zip"]
+      "target": [
+        "dmg",
+        "zip"
+      ]
     },
-
     "win": {
-      "target": ["nsis"],
+      "target": [
+        "nsis",
+        "zip"
+      ],
       "icon": "icon.ico",
       "publisherName": "Aviation Sans Frontières"
     }
   },
-
   "dependencies": {
-    "wait-on": "^7.2.0",
-    "electron-updater": "^6.1.8"
+    "electron-updater": "^6.1.8",
+    "wait-on": "^7.2.0"
   },
-
   "devDependencies": {
     "electron": "^31.0.0",
     "electron-builder": "^25.1.8"
