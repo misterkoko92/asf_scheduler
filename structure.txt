@@ -1,0 +1,185 @@
+.
+├── __init__.py
+├── __pycache__
+│   ├── __init__.cpython-313.pyc
+│   ├── airfrance_api.cpython-313.pyc
+│   ├── generate_all_vols_from_api.cpython-313.pyc
+│   ├── main.cpython-313.pyc
+│   └── scheduler.cpython-313.pyc
+├── api
+│   ├── build_vols_from_api.py
+│   ├── generate_all_vols_from_api source.py
+│   └── generate_all_vols_from_api_AF_log.py
+├── app.py
+├── asf_app
+│   ├── __init__.py
+│   ├── __pycache__
+│   │   ├── __init__.cpython-313.pyc
+│   │   ├── state.cpython-313.pyc
+│   │   ├── ui_communication.cpython-313.pyc
+│   │   ├── ui_inputs.cpython-313.pyc
+│   │   ├── ui_logs.cpython-313.pyc
+│   │   ├── ui_manual.cpython-313.pyc
+│   │   ├── ui_params.cpython-313.pyc
+│   │   ├── ui_planning.cpython-313.pyc
+│   │   ├── utils_clean_planning.cpython-313.pyc
+│   │   ├── utils_export_planning.cpython-313.pyc
+│   │   ├── utils_mail_airfrance.cpython-313.pyc
+│   │   ├── utils_mail_asf.cpython-313.pyc
+│   │   ├── utils_mail_destinations.cpython-313.pyc
+│   │   ├── utils_mail_expediteurs.cpython-313.pyc
+│   │   ├── utils_outlook.cpython-313.pyc
+│   │   ├── utils_pdf_planning.cpython-313.pyc
+│   │   ├── utils_planning_xlsx.cpython-313.pyc
+│   │   └── utils_whatsapp.cpython-313.pyc
+│   ├── assets
+│   │   └── HORIZONTAL.jpg
+│   ├── config
+│   │   ├── __init__.py
+│   │   ├── __pycache__
+│   │   │   ├── __init__.cpython-313.pyc
+│   │   │   ├── paths.cpython-313.pyc
+│   │   │   └── settings.cpython-313.pyc
+│   │   ├── config_defaults.yml
+│   │   ├── paths.py
+│   │   └── settings.py
+│   ├── services
+│   │   ├── __init__.py
+│   │   ├── __pycache__
+│   │   │   ├── __init__.cpython-313.pyc
+│   │   │   ├── be_placement_service.cpython-313.pyc
+│   │   │   ├── files_service.cpython-313.pyc
+│   │   │   ├── params_service.cpython-313.pyc
+│   │   │   └── planning_service.cpython-313.pyc
+│   │   ├── be_placement_service.py
+│   │   ├── files_service.py
+│   │   ├── params_service.py
+│   │   └── planning_service.py
+│   ├── state.py
+│   ├── ui_communication.py
+│   ├── ui_inputs.py
+│   ├── ui_logs.py
+│   ├── ui_manual.py
+│   ├── ui_params.py
+│   ├── ui_planning.py
+│   ├── utils_clean_planning.py
+│   ├── utils_export_planning.py
+│   ├── utils_mail_airfrance.py
+│   ├── utils_mail_asf.py
+│   ├── utils_mail_destinations.py
+│   ├── utils_mail_expediteurs.py
+│   ├── utils_outlook.py
+│   ├── utils_pdf_planning.py
+│   ├── utils_planning_xlsx
+│   │   ├── __init__.py
+│   │   ├── __pycache__
+│   │   │   ├── __init__.cpython-313.pyc
+│   │   │   ├── block_render.cpython-313.pyc
+│   │   │   ├── borders.cpython-313.pyc
+│   │   │   ├── generate.cpython-313.pyc
+│   │   │   ├── helpers.cpython-313.pyc
+│   │   │   └── routing.cpython-313.pyc
+│   │   └── generate_from_template.py
+│   └── utils_whatsapp.py
+├── asf_scheduler.log
+├── build.sh
+├── data
+│   ├── ASFmm - PLANNING SEMAINE N° 47 - 2025.xlsx
+│   ├── ParamBE.xlsx
+│   ├── ParamBenev.xlsx
+│   ├── ParamDest.xlsx
+│   ├── Planning-maquette.xlsx
+│   └── Vols.xlsx
+├── launcher.py
+├── loaders
+│   ├── __init__.py
+│   ├── __pycache__
+│   │   ├── __init__.cpython-313.pyc
+│   │   ├── load_be.cpython-313.pyc
+│   │   ├── load_benevoles.cpython-313.pyc
+│   │   ├── load_shipments.cpython-313.pyc
+│   │   └── load_vols.cpython-313.pyc
+│   ├── load_benevoles.py
+│   ├── load_shipments.py
+│   └── load_vols.py
+├── main.py
+├── planning_resultats
+│   ├── archive
+│   │   ├── Planning-2025-11-14-19h04.csv
+│   │   └── Planning-2025-11-14-19h04.xlsx
+│   ├── asf_scheduler.log
+│   ├── ASFmm - PLANNING SEMAINE N° 47 - 2025.xlsx
+│   └── Planning_ASF.pdf
+├── scheduler
+│   ├── __init__.py
+│   ├── __pycache__
+│   │   ├── __init__.cpython-313.pyc
+│   │   ├── be_manager.cpython-313.pyc
+│   │   ├── config_paths.cpython-313.pyc
+│   │   ├── config.cpython-313.pyc
+│   │   ├── core_scheduler.cpython-313.pyc
+│   │   ├── flight_manager.cpython-313.pyc
+│   │   ├── models.cpython-313.pyc
+│   │   └── volunteer_manager.cpython-313.pyc
+│   ├── be_manager.py
+│   ├── config_paths.py
+│   ├── config.py
+│   ├── core_scheduler copy.py
+│   ├── core_scheduler.py
+│   ├── flight_manager.py
+│   ├── models.py
+│   └── volunteer_manager.py
+├── setup.py
+├── structure.txt
+├── test_api_token.py
+└── venv
+    ├── bin
+    │   ├── __pycache__
+    │   │   └── vba_extract.cpython-313.pyc
+    │   ├── activate
+    │   ├── activate.csh
+    │   ├── activate.fish
+    │   ├── Activate.ps1
+    │   ├── dotenv
+    │   ├── f2py
+    │   ├── flask
+    │   ├── jsonschema
+    │   ├── macho_dump
+    │   ├── macho_find
+    │   ├── macho_standalone
+    │   ├── normalizer
+    │   ├── numpy-config
+    │   ├── pip
+    │   ├── pip3
+    │   ├── pip3.13
+    │   ├── py.test
+    │   ├── pygmentize
+    │   ├── pyi-archive_viewer
+    │   ├── pyi-bindepend
+    │   ├── pyi-grab_version
+    │   ├── pyi-makespec
+    │   ├── pyi-set_version
+    │   ├── pyinstaller
+    │   ├── pytest
+    │   ├── python -> python3.13
+    │   ├── python3 -> python3.13
+    │   ├── python3.13 -> /Library/Frameworks/Python.framework/Versions/3.13/bin/python3.13
+    │   ├── streamlit
+    │   ├── streamlit.cmd
+    │   ├── tree-cli
+    │   ├── vba_extract.py
+    │   └── watchmedo
+    ├── etc
+    │   └── jupyter
+    │       └── nbconfig
+    ├── include
+    │   └── python3.13
+    ├── lib
+    │   └── python3.13
+    │       └── site-packages
+    ├── pyvenv.cfg
+    └── share
+        └── jupyter
+            └── nbextensions
+
+33 directories, 150 files

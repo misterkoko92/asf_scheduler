@@ -1,0 +1,47 @@
+{
+  "name": "asf-scheduler",
+  "version": "1.0.1",
+  "main": "main.js",
+  "description": "ASF Scheduler Desktop App",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder",
+    "build-mac": "electron-builder --mac dmg",
+    "release": "node bump-version.js"
+  },
+  "build": {
+    "appId": "org.asf.scheduler",
+    "productName": "ASF Scheduler",
+    "files": [
+      "main.js",
+      "start-streamlit.js",
+      "icon.icns"
+    ],
+    "extraResources": [
+      {
+        "from": "../",
+        "to": "python",
+        "filter": [
+          "app.py",
+          "launcher.py",
+          "asf_app/**/*",
+          "scheduler/**/*",
+          "loaders/**/*",
+          "data/**/*",
+          "planning_resultats/**/*"
+        ]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "icon.icns"
+    }
+  },
+  "dependencies": {
+    "wait-on": "^7.2.0"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^25.1.8"
+  }
+}
