@@ -1,18 +1,33 @@
-const fs = require('fs');
-const cp = require('child_process');
+// bump-version.js — incrémente la version, commit, tag, push
 
-const pkgPath = './package.json';
-const pkg = JSON.parse(fs.readFileSync(pkgPath));
+const fs = require("fs");
+const { execSync } = require("child_process");
+const path = require("path");
 
-const old = pkg.version.split('.').map(n => parseInt(n));
-old[2] += 1;  // patch++
-pkg.version = old.join('.');
+function run(cmd) {
+  console.log("▶", cmd);
+  return execSync(cmd, { stdio: "inherit" });
+}
 
-fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2));
+function bump() {
+  const pkgPath = path.join(__dirname, "package.json");
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
 
-console.log(`📦 Nouvelle version : ${pkg.version}`);
+  const parts = pkg.version.split(".").map(n => parseInt(n, 10));
+  parts[2] += 1; // patch++
+  const newVersion = parts.join(".");
 
-cp.execSync(`git add ${pkgPath}`);
-cp.execSync(`git commit -m "bump version to ${pkg.version}"`);
-cp.execSync(`git tag v${pkg.version}`);
-cp.execSync(`git push && git push --tags`);
+  pkg.version = newVersion;
+  fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n", "utf8");
+
+  console.log(`📦 Nouvelle version : ${newVersion}`);
+
+  // Commit, tag, push
+  run(`git add ${pkgPath}`);
+  run(`git commit -m "bump version to ${newVersion}"`);
+  run(`git tag v${newVersion}`);
+  run("git push");
+  run("git push --tags");
+}
+
+bump();
