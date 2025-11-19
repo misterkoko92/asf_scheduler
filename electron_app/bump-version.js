@@ -1,30 +1,18 @@
-const fs = require("fs");
-const path = require("path");
-const { execSync } = require("child_process");
+const fs = require('fs');
+const cp = require('child_process');
 
-const packagePath = path.join(__dirname, "package.json");
+const pkgPath = './package.json';
+const pkg = JSON.parse(fs.readFileSync(pkgPath));
 
-// Lire package.json
-const pkg = JSON.parse(fs.readFileSync(packagePath));
+const old = pkg.version.split('.').map(n => parseInt(n));
+old[2] += 1;  // patch++
+pkg.version = old.join('.');
 
-// extraire la version
-let [major, minor, patch] = pkg.version.split(".").map(Number);
+fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2));
 
-// incrémenter
-patch += 1;
+console.log(`📦 Nouvelle version : ${pkg.version}`);
 
-const newVersion = `${major}.${minor}.${patch}`;
-pkg.version = newVersion;
-
-// écrire
-fs.writeFileSync(packagePath, JSON.stringify(pkg, null, 2));
-
-console.log("📦 Nouvelle version :", newVersion);
-
-// commit + tag
-execSync("git add .");
-execSync(`git commit -m "Auto bump to v${newVersion}"`);
-execSync(`git tag v${newVersion}`);
-execSync("git push --follow-tags");
-
-console.log("🚀 Tag envoyé : v" + newVersion);
+cp.execSync(`git add ${pkgPath}`);
+cp.execSync(`git commit -m "bump version to ${pkg.version}"`);
+cp.execSync(`git tag v${pkg.version}`);
+cp.execSync(`git push && git push --tags`);

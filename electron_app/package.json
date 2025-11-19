@@ -1,45 +1,67 @@
 {
   "name": "asf-scheduler",
   "version": "1.0.1",
-  "main": "main.js",
   "description": "ASF Scheduler Desktop App",
+  "main": "main.js",
+  "author": "Edouard Gonnu",
+  "license": "MIT",
+
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder",
-    "build-mac": "electron-builder --mac dmg",
+    "build-mac": "electron-builder --mac dmg zip",
+    "build-win": "electron-builder --win nsis",
     "release": "node bump-version.js"
   },
+
   "build": {
     "appId": "org.asf.scheduler",
     "productName": "ASF Scheduler",
+
     "files": [
+      "../app.py",
+      "../launcher.py",
+      "../asf_app/**/*",
+      "../scheduler/**/*",
+      "../loaders/**/*",
+      "../data/**/*",
+      "../planning_resultats/**/*",
       "main.js",
       "start-streamlit.js",
-      "icon.icns"
+      "preload.js",
+      "splash.html",
+      "style.css"
     ],
-    "extraResources": [
+
+    "directories": {
+      "output": "dist"
+    },
+
+    "publish": [
       {
-        "from": "../",
-        "to": "python",
-        "filter": [
-          "app.py",
-          "launcher.py",
-          "asf_app/**/*",
-          "scheduler/**/*",
-          "loaders/**/*",
-          "data/**/*",
-          "planning_resultats/**/*"
-        ]
+        "provider": "github",
+        "owner": "misterkoko92",
+        "repo": "asf_scheduler"
       }
     ],
+
     "mac": {
       "category": "public.app-category.productivity",
-      "icon": "icon.icns"
+      "icon": "icon.icns",
+      "target": ["dmg", "zip"]
+    },
+
+    "win": {
+      "target": ["nsis"],
+      "icon": "icon.ico",
+      "publisherName": "Aviation Sans Frontières"
     }
   },
+
   "dependencies": {
-    "wait-on": "^7.2.0"
+    "wait-on": "^7.2.0",
+    "electron-updater": "^6.1.8"
   },
+
   "devDependencies": {
     "electron": "^31.0.0",
     "electron-builder": "^25.1.8"

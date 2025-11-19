@@ -1,143 +1,126 @@
-const { app, BrowserWindow, ipcMain } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain } = require("electron");
 const path = require("path");
+const { autoUpdater } = require("electron-updater");
 const { spawn } = require("child_process");
 const waitOn = require("wait-on");
-const { autoUpdater } = require("electron-updater");
 
-let splash = null;
-let mainWindow = null;
+let mainWindow;
+let splashWindow;
 let streamlitProcess = null;
 
-const STREAMLIT_PORT = 8501;
-
-const PYTHON_EXEC = process.platform === "win32"
-  ? path.join(process.resourcesPath, "python", "venv", "Scripts", "python.exe")
-  : path.join(process.resourcesPath, "python", "venv", "bin", "python3");
-
-const STREAMLIT_SCRIPT = path.join(process.resourcesPath, "python", "app.py");
-
-// ----------------------------------------------------------------------
-// 1. Splash Screen avec barre de progression
-// ----------------------------------------------------------------------
 function createSplash() {
-  splash = new BrowserWindow({
-    width: 480,
-    height: 320,
+  splashWindow = new BrowserWindow({
+    width: 500,
+    height: 300,
     frame: false,
+    transparent: false,
     alwaysOnTop: true,
-    transparent: true,
-    center: true,
     resizable: false,
     show: true,
     webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false,
+      preload: path.join(__dirname, "preload.js")
     }
   });
 
-  splash.loadFile(path.join(__dirname, "splash.html"));
+  splashWindow.loadFile(path.join(__dirname, "splash.html"));
 }
 
-// ----------------------------------------------------------------------
-// 2. Fenêtre principale (Streamlit)
-// ----------------------------------------------------------------------
 function createMainWindow() {
   mainWindow = new BrowserWindow({
-    width: 1350,
+    width: 1400,
     height: 900,
-    icon: path.join(process.resourcesPath, "icon.png"),
-    webPreferences: {
-      devTools: true,
-    },
     show: false,
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js")
+    }
   });
 
-  mainWindow.loadURL("http://localhost:" + STREAMLIT_PORT + "/");
-
-  mainWindow.once("ready-to-show", () => {
-    if (splash) splash.close();
-    mainWindow.show();
+  mainWindow.on("closed", () => {
+    mainWindow = null;
   });
 }
 
-// ----------------------------------------------------------------------
-// 3. Démarrer Streamlit
-// ----------------------------------------------------------------------
 function startStreamlit() {
-  streamlitProcess = spawn(
-    PYTHON_EXEC,
-    [
-      "-m", "streamlit",
-      "run", STREAMLIT_SCRIPT,
-      "--server.headless", "true",
-      "--server.port", String(STREAMLIT_PORT),
-      "--browser.serverAddress", "localhost"
-    ],
+  const pythonPath = path.join(process.resourcesPath, "venv/bin/python3");
+  const scriptPath = path.join(process.resourcesPath, "app.py");
+
+  console.log("➡️ Python =", pythonPath);
+  console.log("➡️ Script Streamlit =", scriptPath);
+
+  streamlitProcess = spawn(pythonPath, ["-m", "streamlit", "run", scriptPath, "--server.port=8501"], {
+    cwd: process.resourcesPath
+  });
+
+  streamlitProcess.stdout.on("data", data => {
+    console.log("[Streamlit]", data.toString());
+  });
+
+  streamlitProcess.stderr.on("data", data => {
+    console.error("[Streamlit ERROR]", data.toString());
+    if (splashWindow) {
+      splashWindow.webContents.send("log", data.toString());
+    }
+  });
+
+  streamlitProcess.on("close", code => {
+    console.error("❌ Streamlit exited with code", code);
+    app.quit();
+  });
+}
+
+function monitorStreamlit() {
+  waitOn(
     {
-      env: { ...process.env, PYTHONUNBUFFERED: "1" }
+      resources: ["http://localhost:8501"],
+      timeout: 30000
+    },
+    err => {
+      if (err) {
+        console.error("❌ Streamlit not responding:", err);
+        return;
+      }
+      console.log("🚀 Streamlit READY!");
+      
+      if (mainWindow) {
+        mainWindow.loadURL("http://localhost:8501");
+        mainWindow.show();
+      }
+      if (splashWindow) {
+        splashWindow.close();
+      }
     }
   );
-
-  streamlitProcess.stdout.on("data", (data) => console.log("[Streamlit]", data.toString()));
-  streamlitProcess.stderr.on("data", (data) => console.error("[Streamlit ERR]", data.toString()));
 }
 
-// ----------------------------------------------------------------------
-// 4. Attente de Streamlit + Progression visuelle
-// ----------------------------------------------------------------------
-async function waitForStreamlit() {
-  let progress = 0;
-
-  // simulation de progression pendant boot Python + Streamlit
-  const timer = setInterval(() => {
-    if (progress < 80) {
-      progress += 3;
-      if (splash) splash.webContents.send("progress", progress);
-    }
-  }, 300);
-
-  try {
-    await waitOn({
-      resources: ["http://localhost:" + STREAMLIT_PORT],
-      timeout: 30000,
-      interval: 500,
-    });
-
-    clearInterval(timer);
-
-    // remplir jusqu'à 100%
-    let finalProgress = 80;
-    const finalize = setInterval(() => {
-      finalProgress += 5;
-      splash.webContents.send("progress", finalProgress);
-      if (finalProgress >= 100) clearInterval(finalize);
-    }, 80);
-
-    createMainWindow();
-
-  } catch (e) {
-    console.error("❌ Streamlit n'a pas répondu :", e);
-  }
-}
-
-// ----------------------------------------------------------------------
-// Auto-update
-// ----------------------------------------------------------------------
-autoUpdater.on("update-downloaded", () => {
-  autoUpdater.quitAndInstall();
-});
-
-// ----------------------------------------------------------------------
-// Cycle Electron
-// ----------------------------------------------------------------------
-app.whenReady().then(async () => {
+app.whenReady().then(() => {
   createSplash();
+  createMainWindow();
   startStreamlit();
-  waitForStreamlit();
+  monitorStreamlit();
+
+  // 🔄 Auto-update
   autoUpdater.checkForUpdatesAndNotify();
+
+  autoUpdater.on("update-downloaded", () => {
+    dialog.showMessageBox({
+      title: "Mise à jour prête",
+      message:
+        "Une nouvelle version d’ASF Scheduler a été téléchargée. Elle sera installée au prochain redémarrage."
+    });
+  });
 });
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
-  if (streamlitProcess) streamlitProcess.kill();
+  if (streamlitProcess) {
+    streamlitProcess.kill();
+  }
+  if (process.platform !== "darwin") {
+    app.quit();
+  }
+});
+
+ipcMain.on("log", (_, msg) => {
+  if (splashWindow) {
+    splashWindow.webContents.send("log", msg);
+  }
 });
