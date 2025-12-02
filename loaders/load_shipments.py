@@ -4,6 +4,7 @@
 from typing import List, Dict
 import uuid
 import pandas as pd
+import numpy as np
 
 from scheduler.models import Shipment
 from scheduler.config_paths import TABLEAU_DE_BORD, SHEET_MAG_CENTRAL
@@ -332,6 +333,15 @@ def load_shipments_df() -> pd.DataFrame:
             return val[0] if val else 0
         if isinstance(val, pd.Series):
             return val.iloc[0] if not val.empty else 0
+        if isinstance(val, np.ndarray):
+            return val.ravel()[0] if val.size else 0
+        # Force scalar fallback
+        if isinstance(val, dict):
+            # take first value
+            try:
+                return next(iter(val.values()))
+            except Exception:
+                return 0
         return val
 
     def _safe_equiv(row):
@@ -345,6 +355,13 @@ def load_shipments_df() -> pd.DataFrame:
             return val[0] if val else 0
         if isinstance(val, pd.Series):
             return val.iloc[0] if not val.empty else 0
+        if isinstance(val, np.ndarray):
+            return val.ravel()[0] if val.size else 0
+        if isinstance(val, dict):
+            try:
+                return next(iter(val.values()))
+            except Exception:
+                return 0
         return val
 
     df["Priorite"] = df.apply(_safe_priority, axis=1)
