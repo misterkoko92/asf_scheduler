@@ -28,7 +28,13 @@ jobs:
       - name: Build
         shell: bash
         run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            ADD_DATA="app.py;."
+          else
+            ADD_DATA="app.py:."
+          fi
           pyinstaller run_app.py --onefile --name ASF-Scheduler --paths . \
+            --add-data "$ADD_DATA" \
             --copy-metadata streamlit --copy-metadata pandas --copy-metadata altair --copy-metadata click \
             --collect-all asf_app --collect-all scheduler
 
