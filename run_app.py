@@ -15,6 +15,11 @@ def _app_path() -> Path:
 
 if __name__ == "__main__":
     app_file = _app_path()
+    base_dir = app_file.parent
+    # Ensure bundled modules are importable by Streamlit (PyInstaller onefile).
+    sys.path.insert(0, str(base_dir))
+    os.chdir(base_dir)
+
     port = os.environ.get("ASF_APP_PORT", "8501")
     url = f"http://localhost:{port}"
     # Headless mode avoids UI issues in onefile; we open the browser ourselves.
