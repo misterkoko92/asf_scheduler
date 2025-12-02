@@ -28,7 +28,7 @@ jobs:
       - name: Build
         shell: bash
         run: |
-          pyinstaller app.py --onefile --name ASF-Scheduler --paths . \
+          pyinstaller run_app.py --onefile --name ASF-Scheduler --paths . \
             --copy-metadata streamlit --copy-metadata pandas --copy-metadata altair --copy-metadata click \
             --collect-all asf_app --collect-all scheduler
 
