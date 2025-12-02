@@ -25,6 +25,7 @@ if __name__ == "__main__":
         "--server.headless=true",
         f"--server.port={port}",
         "--browser.serverAddress=localhost",
+        f"--browser.serverPort={port}",
     ]
     try:
         webbrowser.open(url)
