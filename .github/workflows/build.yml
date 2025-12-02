@@ -36,11 +36,12 @@ jobs:
           ADD_APP="app.py${SEP}."
           ADD_ASF="asf_app${SEP}asf_app"
           ADD_SCHED="scheduler${SEP}scheduler"
+          ADD_LOADERS="loaders${SEP}loaders"
           pyinstaller run_app.py --onefile --name ASF-Scheduler --paths . \
-            --add-data "$ADD_APP" --add-data "$ADD_ASF" --add-data "$ADD_SCHED" \
+            --add-data "$ADD_APP" --add-data "$ADD_ASF" --add-data "$ADD_SCHED" --add-data "$ADD_LOADERS" \
             --copy-metadata streamlit --copy-metadata pandas --copy-metadata altair --copy-metadata click \
-            --collect-all streamlit --collect-submodules asf_app --collect-submodules scheduler \
-            --hidden-import asf_app --hidden-import scheduler
+            --collect-all streamlit --collect-submodules asf_app --collect-submodules scheduler --collect-submodules loaders \
+            --hidden-import asf_app --hidden-import scheduler --hidden-import loaders
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
