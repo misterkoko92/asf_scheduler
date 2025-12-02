@@ -36,7 +36,8 @@ jobs:
           pyinstaller run_app.py --onefile --name ASF-Scheduler --paths . \
             --add-data "$ADD_DATA" \
             --copy-metadata streamlit --copy-metadata pandas --copy-metadata altair --copy-metadata click \
-            --collect-all streamlit --collect-all asf_app --collect-all scheduler
+            --collect-all streamlit --collect-all asf_app --collect-all scheduler \
+            --hidden-import asf_app --hidden-import scheduler
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
