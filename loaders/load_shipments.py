@@ -364,8 +364,15 @@ def load_shipments_df() -> pd.DataFrame:
                 return 0
         return val
 
-    df["Priorite"] = df.apply(_safe_priority, axis=1)
-    df["Equiv_Colis"] = df.apply(_safe_equiv, axis=1)
+    priorities = df.apply(_safe_priority, axis=1)
+    if isinstance(priorities, pd.DataFrame):
+        priorities = priorities.iloc[:, 0]
+    df["Priorite"] = pd.to_numeric(priorities, errors="coerce").fillna(0)
+
+    equivs = df.apply(_safe_equiv, axis=1)
+    if isinstance(equivs, pd.DataFrame):
+        equivs = equivs.iloc[:, 0]
+    df["Equiv_Colis"] = pd.to_numeric(equivs, errors="coerce").fillna(0)
 
     # -----------------------------------------------------------
     # 5) Nettoyage final
