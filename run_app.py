@@ -1,5 +1,7 @@
 """Launcher to run the Streamlit app inside PyInstaller onefile builds."""
+import os
 import sys
+import webbrowser
 from pathlib import Path
 from streamlit.web import cli as stcli
 
@@ -13,5 +15,19 @@ def _app_path() -> Path:
 
 if __name__ == "__main__":
     app_file = _app_path()
-    sys.argv = ["streamlit", "run", str(app_file), "--server.headless=true"]
+    port = os.environ.get("ASF_APP_PORT", "8501")
+    url = f"http://localhost:{port}"
+    # Headless mode avoids UI issues in onefile; we open the browser ourselves.
+    sys.argv = [
+        "streamlit",
+        "run",
+        str(app_file),
+        "--server.headless=true",
+        f"--server.port={port}",
+        "--browser.serverAddress=localhost",
+    ]
+    try:
+        webbrowser.open(url)
+    except Exception:
+        pass
     sys.exit(stcli.main())
