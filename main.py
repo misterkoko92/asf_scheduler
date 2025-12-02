@@ -3,6 +3,10 @@
 
 import pandas as pd
 
+# Chemins configurés + copies temporaires
+from scheduler.config_paths import print_config_paths, cleanup_tmp, prepare_paths
+
+# Moteur
 from scheduler.core_scheduler import Scheduler
 
 
@@ -80,19 +84,11 @@ def build_stats_jours(planning_df: pd.DataFrame) -> pd.DataFrame:
 
 
 # -------------------------------------------------------------------------
-#  Export XLSX final
+# EXPORT XLSX FINAL
 # -------------------------------------------------------------------------
 
 def export_results(planning_df: pd.DataFrame, bilan_df: pd.DataFrame):
-    """
-    Exporte :
-    - Planning.xlsx (simple)
-    - Bilan.xlsx multi-feuilles :
-        ✔ Bilan
-        ✔ Résumé bénévoles
-        ✔ Stats destinations
-        ✔ Stats jours
-    """
+    """Génère Planning.xlsx + Bilan.xlsx avec plusieurs feuilles."""
 
     # ---------------------------
     # Planning.xlsx
@@ -101,43 +97,62 @@ def export_results(planning_df: pd.DataFrame, bilan_df: pd.DataFrame):
     planning_df.to_excel(planning_xlsx, index=False)
 
     # ---------------------------
-    # Bilan.xlsx (multi-feuilles)
+    # Bilan.xlsx
     # ---------------------------
     bilan_xlsx = "Bilan.xlsx"
 
     with pd.ExcelWriter(bilan_xlsx, engine="xlsxwriter") as writer:
 
-        # 1) Feuille Bilan
+        # 1) Bilan principal
         bilan_df.to_excel(writer, sheet_name="Bilan", index=False)
 
-        # 2) Feuille Résumé bénévoles
+        # 2) Résumé bénévoles
         df_res_benev = build_resume_benevoles(planning_df)
         df_res_benev.to_excel(writer, sheet_name="Résumé_Bénévoles", index=False)
 
-        # 3) Statistiques destinations
+        # 3) Stat destinations
         df_stats_dest = build_stats_destinations(planning_df)
         df_stats_dest.to_excel(writer, sheet_name="Stats_Destinations", index=False)
 
-        # 4) Statistiques jours
+        # 4) Stat par jour
         df_stats_jours = build_stats_jours(planning_df)
         df_stats_jours.to_excel(writer, sheet_name="Stats_Jours", index=False)
 
     print("=== FICHIERS GÉNÉRÉS ===")
-    print(f"📘 Planning.xlsx")
-    print(f"📘 Bilan.xlsx")
+    print(f"📘 {planning_xlsx}")
+    print(f"📘 {bilan_xlsx}")
 
 
 # -------------------------------------------------------------------------
-#  MAIN
+# MAIN
 # -------------------------------------------------------------------------
 
 def main():
+    # Prépare les copies locales avant toute lecture
+    prepare_paths(copy_sources=True)
+
+    # Toujours afficher les chemins
+    print_config_paths()
+
     print("=== LANCEMENT DU PLANNING ===")
 
     scheduler = Scheduler()
-    planning_df, bilan_df = scheduler.run()
 
-    export_results(planning_df, bilan_df)
+    try:
+        # → Exécute le moteur
+        planning_df, bilan_df = scheduler.run()
+
+        # → Export
+        export_results(planning_df, bilan_df)
+
+    except Exception as e:
+        print("\n❌ ERREUR FATALE :", e)
+        raise
+
+    finally:
+        # → Supprime le dossier TMP même en cas d’erreur
+        cleanup_tmp()
+        print("🧹 TMP nettoyé")
 
 
 if __name__ == "__main__":

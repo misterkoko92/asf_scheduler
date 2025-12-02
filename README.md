@@ -1,82 +1,36 @@
-# ✈️ ASF Scheduler  
-Gestion automatisée du planning Messagerie Médicale & Fret Humanitaire  
-*Aviation Sans Frontières – Desktop App (macOS & Windows)*
+# ASF Scheduler — Moteur Automatisé de Planification MAB
 
-![GitHub Release](https://img.shields.io/github/v/release/misterkoko92/asf_scheduler)
-![Build CI](https://img.shields.io/github/actions/workflow/status/misterkoko92/asf_scheduler/build.yml)
-![Auto Update](https://img.shields.io/badge/auto--update-enabled-brightgreen)
-![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-orange)
-![License](https://img.shields.io/badge/license-MIT-blue)
+ASF Scheduler est un moteur Python/Streamlit conçu pour automatiser
+le planning hebdomadaire de la **Messagerie Médicale & Fret Humanitaire** 
+d’Aviation Sans Frontières.
 
----
-
-## 🚀 Présentation
-
-ASF Scheduler permet :
-
-- 📦 Planification automatique des expéditions (BE)
-- ✈️ Gestion des vols, capacités, bénévoles
-- 📄 Génération des PDFs & Excel
-- 📬 Génération des emails (destinations / ASF / expéditeurs)
-- 💬 WhatsApp / Outlook Mac / Outlook Windows
-- 📊 Interface Streamlit en mode Desktop (via Electron)
-
-L’application fonctionne **offline**, en gardant une interface moderne.
+Il combine :
+- les expéditions (BE) du Magasin Central / Tableau de Bord
+- les disponibilités bénévoles
+- les vols Air France / partenaires
+- les règles métiers ASF (fenêtres horaires, types BE, équivalences HF…)
+- le placement intelligent des colis par destination
+- l’affectation optimale des bénévoles par vol
+- la génération du Planning.xlsx et du Bilan.xlsx
 
 ---
 
-## 📥 Installation
+## 🚀 Fonctionnalités principales
 
-### 🔹 macOS
-
-Télécharger le `.dmg` ou `.zip` depuis :  
-👉 https://github.com/misterkoko92/asf_scheduler/releases
-
-Étapes :
-
-1. Ouvrir le `.dmg`
-2. Glisser *ASF Scheduler.app* dans *Applications*
-3. Lancer l’application
-
-### 🔹 Windows
-
-Télécharger le `.exe` depuis :  
-👉 https://github.com/misterkoko92/asf_scheduler/releases
-
-Suivre l’installation classique.
-
----
-
-## 🔄 Auto-update
-
-Les versions Windows `.exe` et macOS `.zip` se mettent à jour automatiquement :  
-
-- Le système vérifie les mises à jour via GitHub Releases  
-- Télécharge la nouvelle version  
-- Installe au prochain démarrage  
-- Aucun téléchargement manuel nécessaire  
-
----
-
-## 🛠 Technologies utilisées
-
-**Backend :**
-
-- Python 3.11/3.13
-- Streamlit
-- Pandas, OpenPyXL
-
-**Frontend :**
-
-- Electron 31
-- Electron-Updater
-- Splash Screen + Preload
-
-**Build :**
-
-- Electron-Builder
-- GitHub Actions (macOS + Windows)
-- Publication automatique en Releases
+- Import automatique des BE, vols et disponibilités
+- Nettoyage, normalisation et consolidation des données
+- Application des règles ASF :
+  - statuts BE (P, X, D…)
+  - priorités par type
+  - équivalences colis → HF
+  - règles destination / routing
+  - capacité vol physique et capacité bénévole dynamique
+- Placement intelligent des colis par destination et par vol
+- Affectation optimale des bénévoles (fenêtre horaire + charge)
+- Génération Excel :
+  - planning complet
+  - bilan expéditions
+- Interface Streamlit complète
 
 ---
 

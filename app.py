@@ -1,28 +1,49 @@
-# app.py
+# app.py — VERSION PROPRE (avec import communication corrigé)
 # -*- coding: utf-8 -*-
 
 import streamlit as st
+import pandas as pd
+import warnings
 
-# Onglets UI
-from asf_app.ui_inputs import render_tab_inputs
-from asf_app.ui_params import render_tab_params
-from asf_app.ui_planning import render_tab_planning
-from asf_app.ui_logs import render_tab_logs
-from asf_app.ui_manual import render_tab_manual
-from asf_app.ui_communication import render_tab_communication   # ⬅️ NOUVEL ONGLET
+from asf_app.ui.theme import apply_theme
 
-# Chemins des fichiers par défaut
+# ---------------------------------------
+# IMPORTS UI
+# ---------------------------------------
+from asf_app.ui.ui_inputs import render_tab_inputs
+from asf_app.ui.ui_week_data import render_tab_week_data
+from asf_app.ui.ui_params import render_tab_params
+from asf_app.ui.ui_planning.ui_planning import render_tab_planning
+from asf_app.ui.ui_manual import render_tab_manual
+from asf_app.ui.ui_logs import render_tab_logs
+from asf_app.ui.ui_communication.ui_communication import render_tab_communication  # <-- FIX IMPORT
+from asf_app.ui.ui_shipments_update import render_tab_shipments_update
+from asf_app.ui.ui_stats.ui_stats import render_tab_stats
+from asf_app.ui.ui_faq import render_tab_faq
+
 from scheduler.config_paths import (
     TABLEAU_DE_BORD,
     PLANNING_BENEVOLES,
     VOLS,
+    prepare_paths,
 )
 
-# ----------------------------------------------------------------------
-# 🟩 INITIALISATION SESSION_STATE (OBLIGATOIRE)
-# ----------------------------------------------------------------------
+# Prépare les copies temporaires OneDrive dès le démarrage de l'UI
+prepare_paths(copy_sources=True)
+
+# Masquer les UserWarning openpyxl (Data Validation non supportée)
+warnings.filterwarnings(
+    "ignore",
+    category=UserWarning,
+    module="openpyxl"
+)
+
+DEFAULT_USE_MODERN_THEME = False  # Passe à True pour activer la refonte visuelle par défaut
+
+# ---------------------------------------
+# SESSION STATE INIT
+# ---------------------------------------
 def init_session_state():
-    """Initialise toutes les clés globales nécessaires aux onglets."""
     if "paths" not in st.session_state:
         st.session_state.paths = {
             "tdb": str(TABLEAU_DE_BORD),
@@ -30,89 +51,94 @@ def init_session_state():
             "vols": str(VOLS),
         }
 
-    if "planning_df" not in st.session_state:
-        st.session_state.planning_df = None
+    st.session_state.setdefault("dfs", {})
+    st.session_state.setdefault("planning_df", None)
+    st.session_state.setdefault("bilan_df", None)
+    st.session_state.setdefault("log_contents", "")
+    st.session_state.setdefault("use_modern_theme", DEFAULT_USE_MODERN_THEME)
 
-    if "bilan_df" not in st.session_state:
-        st.session_state.bilan_df = None
-
-    if "log_contents" not in st.session_state:
-        st.session_state.log_contents = ""
-
-
-# ----------------------------------------------------------------------
-# APPEL OBLIGATOIRE AVANT TOUTE UI
-# ----------------------------------------------------------------------
 init_session_state()
 
 
-# ----------------------------------------------------------------------
+# ---------------------------------------
 # STREAMLIT CONFIG
-# ----------------------------------------------------------------------
+# ---------------------------------------
 st.set_page_config(page_title="ASF — Planning automatisé", layout="wide")
 st.title("📦✈️ ASF — Générateur de Planning Automatisé")
-st.caption("Interface complète de gestion du planning ASF Messagerie Médicale")
+
+# ----------------------------------------------------
+# Choix de thème (haut de page)
+# ----------------------------------------------------
+top_left, top_right = st.columns([5, 1])
+with top_right:
+    theme_choice = st.selectbox(
+        "Thème",
+        options=["Classique", "Moderne"],
+        index=1 if st.session_state.get("use_modern_theme") else 0,
+    )
+    st.session_state.use_modern_theme = theme_choice == "Moderne"
+
+# ----------------------------------------------------
+# Styles globaux
+# ----------------------------------------------------
+apply_theme(st.session_state.get("use_modern_theme", DEFAULT_USE_MODERN_THEME))
 
 
-# ----------------------------------------------------------------------
-# ONGLET EN ORDRE DEMANDÉ
-# ----------------------------------------------------------------------
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+# ---------------------------------------
+# ONGLET LIST
+# ---------------------------------------
+tabs = st.tabs([
     "📁 Fichiers d’entrée",
+    "📊 Données Semaine",
+    "➕ Ajouts manuels",
     "⚙️ Paramètres",
     "📊 Planning",
+    "📣 Communication",
+    "🚚 Mise à Jour expéditions",
+    "📈 Statistiques",
     "📝 Logs",
-    "➕ Ajouts manuels",
-    "📣 Communication",            # ⬅️ NOUVEL ONGLET
+    "❓ FAQ / Instructions",
 ])
 
 
-with tab1:
+# ---------------------------------------
+# ONGLET 0 — FICHIERS D’ENTRÉE
+# ---------------------------------------
+with tabs[0]:
     render_tab_inputs()
 
-with tab2:
-    render_tab_params()
+# ONGLET 1 — DONNÉES SEMAINE
+with tabs[1]:
+    render_tab_week_data()
 
-with tab3:
-    render_tab_planning()
-
-with tab4:
-    render_tab_logs()
-
-with tab5:
+# ONGLET 2 — AJOUTS MANUELS
+with tabs[2]:
     render_tab_manual()
 
-with tab6:
-    render_tab_communication()     # ⬅️ NOUVEL APPEL
+# ONGLET 3 — PARAMÈTRES
+with tabs[3]:
+    render_tab_params()
 
+# ONGLET 4 — PLANNING
+with tabs[4]:
+    render_tab_planning()
 
-# ----------------------------------------------------------------------
-# 🔍 DEBUG : AFFICHAGE AUTOMATIQUE DES DATAFRAMES
-# ----------------------------------------------------------------------
-#import pandas as pd
-#
-#with st.sidebar.expander("🔍 Debug DataFrames / session_state"):
-#    st.write("### session_state keys")
-#    for key, value in st.session_state.items():
-#       st.write(f"**{key}** → {type(value)}")
-#      if isinstance(value, pd.DataFrame):
-#         st.write(value.head(5))
-#
-#    # Inspection spéciale de l'objet scheduler si présent
-#   if "scheduler" in st.session_state:
-#        scheduler = st.session_state.scheduler
-#        st.write("---")
-#        st.write("### Contenu de scheduler (attributs DataFrame)")
-#        for attr in dir(scheduler):
-#            if attr.startswith("_"):
-#                continue
-#            try:
-#                value = getattr(scheduler, attr)
-#            except:
-#                continue
-#
-#            if isinstance(value, pd.DataFrame):
-#                st.write(f"**scheduler.{attr}** → DataFrame")
-#                st.write(value.head(5))
-#            else:
-#                st.write(f"scheduler.{attr} → {type(value)}")
+# ONGLET 5 — COMMUNICATION
+with tabs[5]:
+    render_tab_communication()
+
+# ONGLET 6 — MISE À JOUR EXPÉDITIONS
+with tabs[6]:
+    render_tab_shipments_update()
+
+# ONGLET 7 — STATISTIQUES
+with tabs[7]:
+    render_tab_stats()
+
+# ONGLET 8 — LOGS
+with tabs[8]:
+    render_tab_logs()
+
+# ONGLET 9 — FAQ / Instructions
+with tabs[9]:
+    render_tab_faq()

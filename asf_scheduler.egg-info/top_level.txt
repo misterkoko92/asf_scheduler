@@ -1,3 +1,0 @@
-asf_app
-loaders
-scheduler

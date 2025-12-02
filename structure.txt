@@ -1,36 +1,55 @@
 .
 ├── __init__.py
 ├── __pycache__
+│   ├── __init__.cpython-311.pyc
 │   ├── __init__.cpython-313.pyc
 │   ├── airfrance_api.cpython-313.pyc
 │   ├── generate_all_vols_from_api.cpython-313.pyc
 │   ├── main.cpython-313.pyc
-│   └── scheduler.cpython-313.pyc
+│   ├── scheduler.cpython-313.pyc
+│   └── test_api_token.cpython-311-pytest-9.0.1.pyc
 ├── api
 │   ├── build_vols_from_api.py
 │   ├── generate_all_vols_from_api source.py
 │   └── generate_all_vols_from_api_AF_log.py
 ├── app.py
+├── apply_refactor_utils.py
 ├── asf_app
 │   ├── __init__.py
 │   ├── __pycache__
+│   │   ├── __init__.cpython-311.pyc
 │   │   ├── __init__.cpython-313.pyc
+│   │   ├── state.cpython-311.pyc
 │   │   ├── state.cpython-313.pyc
+│   │   ├── ui_communication.cpython-311.pyc
 │   │   ├── ui_communication.cpython-313.pyc
+│   │   ├── ui_inputs.cpython-311.pyc
 │   │   ├── ui_inputs.cpython-313.pyc
+│   │   ├── ui_logs.cpython-311.pyc
 │   │   ├── ui_logs.cpython-313.pyc
+│   │   ├── ui_manual.cpython-311.pyc
 │   │   ├── ui_manual.cpython-313.pyc
+│   │   ├── ui_params.cpython-311.pyc
 │   │   ├── ui_params.cpython-313.pyc
+│   │   ├── ui_planning.cpython-311.pyc
 │   │   ├── ui_planning.cpython-313.pyc
+│   │   ├── utils_clean_planning.cpython-311.pyc
 │   │   ├── utils_clean_planning.cpython-313.pyc
+│   │   ├── utils_export_planning.cpython-311.pyc
 │   │   ├── utils_export_planning.cpython-313.pyc
+│   │   ├── utils_mail_airfrance.cpython-311.pyc
 │   │   ├── utils_mail_airfrance.cpython-313.pyc
+│   │   ├── utils_mail_asf.cpython-311.pyc
 │   │   ├── utils_mail_asf.cpython-313.pyc
+│   │   ├── utils_mail_destinations.cpython-311.pyc
 │   │   ├── utils_mail_destinations.cpython-313.pyc
+│   │   ├── utils_mail_expediteurs.cpython-311.pyc
 │   │   ├── utils_mail_expediteurs.cpython-313.pyc
+│   │   ├── utils_outlook.cpython-311.pyc
 │   │   ├── utils_outlook.cpython-313.pyc
 │   │   ├── utils_pdf_planning.cpython-313.pyc
 │   │   ├── utils_planning_xlsx.cpython-313.pyc
+│   │   ├── utils_whatsapp.cpython-311.pyc
 │   │   └── utils_whatsapp.cpython-313.pyc
 │   ├── assets
 │   │   └── HORIZONTAL.jpg
@@ -40,6 +59,7 @@
 │   │   │   ├── __init__.cpython-313.pyc
 │   │   │   ├── paths.cpython-313.pyc
 │   │   │   └── settings.cpython-313.pyc
+│   │   ├── config_defaults copy.yml
 │   │   ├── config_defaults.yml
 │   │   ├── paths.py
 │   │   └── settings.py
@@ -56,103 +76,286 @@
 │   │   ├── params_service.py
 │   │   └── planning_service.py
 │   ├── state.py
-│   ├── ui_communication.py
-│   ├── ui_inputs.py
-│   ├── ui_logs.py
-│   ├── ui_manual.py
-│   ├── ui_params.py
-│   ├── ui_planning.py
-│   ├── utils_clean_planning.py
-│   ├── utils_export_planning.py
-│   ├── utils_mail_airfrance.py
-│   ├── utils_mail_asf.py
-│   ├── utils_mail_destinations.py
-│   ├── utils_mail_expediteurs.py
-│   ├── utils_outlook.py
-│   ├── utils_pdf_planning.py
-│   ├── utils_planning_xlsx
-│   │   ├── __init__.py
+│   ├── ui
 │   │   ├── __pycache__
-│   │   │   ├── __init__.cpython-313.pyc
-│   │   │   ├── block_render.cpython-313.pyc
-│   │   │   ├── borders.cpython-313.pyc
-│   │   │   ├── generate.cpython-313.pyc
-│   │   │   ├── helpers.cpython-313.pyc
-│   │   │   └── routing.cpython-313.pyc
-│   │   └── generate_from_template.py
-│   └── utils_whatsapp.py
+│   │   │   ├── state_planning.cpython-311.pyc
+│   │   │   ├── ui_communication.cpython-311.pyc
+│   │   │   ├── ui_historique.cpython-311.pyc
+│   │   │   ├── ui_inputs.cpython-311.pyc
+│   │   │   ├── ui_logs.cpython-311.pyc
+│   │   │   ├── ui_manual.cpython-311.pyc
+│   │   │   ├── ui_params.cpython-311.pyc
+│   │   │   ├── ui_planning.cpython-311.pyc
+│   │   │   ├── ui_update.cpython-311.pyc
+│   │   │   └── ui_week_data.cpython-311.pyc
+│   │   ├── state_planning.py
+│   │   ├── ui_inputs.py
+│   │   ├── ui_logs.py
+│   │   ├── ui_manual.py
+│   │   ├── ui_params.py
+│   │   ├── ui_planning
+│   │   │   ├── __pycache__
+│   │   │   ├── core_run.py
+│   │   │   ├── editor.py
+│   │   │   ├── exports.py
+│   │   │   ├── manual_add.py
+│   │   │   ├── modes.py
+│   │   │   └── ui_planning.py
+│   │   ├── ui_stats
+│   │   │   ├── __init__.py
+│   │   │   ├── __pycache__
+│   │   │   ├── stats_ai.py
+│   │   │   ├── stats_anomalies.py
+│   │   │   ├── stats_loader.py
+│   │   │   ├── stats_pdf.py
+│   │   │   ├── stats_plots.py
+│   │   │   ├── stats_processor.py
+│   │   │   └── ui_stats.py
+│   │   ├── ui_update.py
+│   │   └── ui_week_data.py
+│   ├── ui copy
+│   │   ├── __pycache__
+│   │   │   ├── ui_communication.cpython-311.pyc
+│   │   │   ├── ui_historique.cpython-311.pyc
+│   │   │   ├── ui_inputs.cpython-311.pyc
+│   │   │   ├── ui_logs.cpython-311.pyc
+│   │   │   ├── ui_manual.cpython-311.pyc
+│   │   │   ├── ui_params.cpython-311.pyc
+│   │   │   ├── ui_planning.cpython-311.pyc
+│   │   │   ├── ui_update.cpython-311.pyc
+│   │   │   └── ui_week_data.cpython-311.pyc
+│   │   ├── ui_communication.py
+│   │   ├── ui_inputs.py
+│   │   ├── ui_logs.py
+│   │   ├── ui_manual.py
+│   │   ├── ui_params.py
+│   │   ├── ui_planning
+│   │   │   ├── __pycache__
+│   │   │   ├── core_run.py
+│   │   │   ├── exports.py
+│   │   │   ├── manual_add.py
+│   │   │   ├── modes.py
+│   │   │   ├── ui_planning copy 2.py
+│   │   │   ├── ui_planning copy.py
+│   │   │   └── ui_planning.py
+│   │   ├── ui_stats
+│   │   │   ├── __init__.py
+│   │   │   ├── __pycache__
+│   │   │   ├── graphics.py
+│   │   │   ├── load_planning_xlsx.py
+│   │   │   ├── loader.py
+│   │   │   ├── paths.py
+│   │   │   ├── ui_stats copy 2.py
+│   │   │   ├── ui_stats copy.py
+│   │   │   └── ui_stats.py
+│   │   ├── ui_update.py
+│   │   └── ui_week_data.py
+│   ├── ui_communication
+│   │   ├── __init__.py
+│   │   ├── communication_state.py
+│   │   ├── email_airfrance_handler.py
+│   │   ├── email_airfrance_ui.py
+│   │   ├── email_asf_handler.py
+│   │   ├── email_asf_ui.py
+│   │   ├── email_destinations_handler.py
+│   │   ├── email_destinations_ui.py
+│   │   ├── email_expediteurs_handler.py
+│   │   ├── email_expediteurs_ui.py
+│   │   ├── enrichment.py
+│   │   ├── exports.py
+│   │   ├── loader.py
+│   │   ├── mails.py
+│   │   ├── ui_communication.py
+│   │   ├── whatsapp_handler.py
+│   │   └── whatsapp_ui.py
+│   └── utils
+│       ├── __pycache__
+│       │   ├── generate_from_template.cpython-311.pyc
+│       │   ├── utils_clean_planning.cpython-311.pyc
+│       │   ├── utils_export_planning.cpython-311.pyc
+│       │   ├── utils_mail_airfrance.cpython-311.pyc
+│       │   ├── utils_mail_asf.cpython-311.pyc
+│       │   ├── utils_mail_destinations.cpython-311.pyc
+│       │   ├── utils_mail_expediteurs.cpython-311.pyc
+│       │   ├── utils_outlook.cpython-311.pyc
+│       │   └── utils_whatsapp.cpython-311.pyc
+│       ├── generate_from_template.py
+│       ├── utils_clean_planning.py
+│       ├── utils_export_planning.py
+│       ├── utils_mail_airfrance.py
+│       ├── utils_mail_asf.py
+│       ├── utils_mail_destinations.py
+│       ├── utils_mail_expediteurs.py
+│       ├── utils_outlook.py
+│       ├── utils_pdf_planning.py
+│       ├── utils_planning_xlsx
+│       │   ├── __init__.py
+│       │   ├── __pycache__
+│       │   └── generate_from_template copy.py
+│       └── utils_whatsapp.py
+├── asf_scheduler.egg-info
+│   ├── dependency_links.txt
+│   ├── PKG-INFO
+│   ├── SOURCES.txt
+│   └── top_level.txt
 ├── asf_scheduler.log
+├── audit_dependances.py
+├── audit_utils_location.py
+├── Bilan.xlsx
 ├── build.sh
 ├── data
 │   ├── ASFmm - PLANNING SEMAINE N° 47 - 2025.xlsx
+│   ├── ASFmm - PLANNING SEMAINE N° 48 - 2025.xlsx
+│   ├── historique_pdf
 │   ├── ParamBE.xlsx
 │   ├── ParamBenev.xlsx
 │   ├── ParamDest.xlsx
 │   ├── Planning-maquette.xlsx
 │   └── Vols.xlsx
+├── data_test
+│   ├── Planning BENEVOLE 2025.xlsx
+│   ├── Planning_TEMPLATE.xlsx
+│   ├── TABLEAU DE BORD.xlsx
+│   └── Vols.xlsx
+├── engine_run_stats.json
 ├── launcher.py
 ├── loaders
 │   ├── __init__.py
 │   ├── __pycache__
+│   │   ├── __init__.cpython-311.pyc
 │   │   ├── __init__.cpython-313.pyc
 │   │   ├── load_be.cpython-313.pyc
+│   │   ├── load_benevoles.cpython-311.pyc
 │   │   ├── load_benevoles.cpython-313.pyc
+│   │   ├── load_shipments.cpython-311.pyc
 │   │   ├── load_shipments.cpython-313.pyc
-│   │   └── load_vols.cpython-313.pyc
+│   │   ├── load_vols.cpython-311.pyc
+│   │   ├── load_vols.cpython-313.pyc
+│   │   └── universal_loader.cpython-311.pyc
 │   ├── load_benevoles.py
 │   ├── load_shipments.py
-│   └── load_vols.py
+│   ├── load_vols.py
+│   └── universal_loader.py
+├── mag_central_debug.csv
 ├── main.py
+├── package-lock.json
+├── planning_debug_output.csv
+├── planning_debug.json
 ├── planning_resultats
 │   ├── archive
 │   │   ├── Planning-2025-11-14-19h04.csv
 │   │   └── Planning-2025-11-14-19h04.xlsx
-│   ├── asf_scheduler.log
 │   ├── ASFmm - PLANNING SEMAINE N° 47 - 2025.xlsx
 │   └── Planning_ASF.pdf
+├── Planning.xlsx
+├── README.md
+├── requirements_313.txt
 ├── scheduler
 │   ├── __init__.py
 │   ├── __pycache__
+│   │   ├── __init__.cpython-311.pyc
 │   │   ├── __init__.cpython-313.pyc
+│   │   ├── be_manager.cpython-311.pyc
 │   │   ├── be_manager.cpython-313.pyc
+│   │   ├── be_rules.cpython-311.pyc
+│   │   ├── capacity_manager.cpython-311.pyc
+│   │   ├── column_map.cpython-311.pyc
+│   │   ├── config_paths.cpython-311.pyc
 │   │   ├── config_paths.cpython-313.pyc
+│   │   ├── config.cpython-311.pyc
 │   │   ├── config.cpython-313.pyc
+│   │   ├── core_scheduler.cpython-311.pyc
 │   │   ├── core_scheduler.cpython-313.pyc
+│   │   ├── engine.cpython-311.pyc
+│   │   ├── flight_manager.cpython-311.pyc
 │   │   ├── flight_manager.cpython-313.pyc
+│   │   ├── format_rules.cpython-311.pyc
+│   │   ├── models.cpython-311.pyc
 │   │   ├── models.cpython-313.pyc
+│   │   ├── orchestrator.cpython-311.pyc
+│   │   ├── planning_loader.cpython-311.pyc
+│   │   ├── volunteer_manager.cpython-311.pyc
 │   │   └── volunteer_manager.cpython-313.pyc
 │   ├── be_manager.py
+│   ├── be_rules.py
+│   ├── capacity_manager.py
+│   ├── column_map.py
 │   ├── config_paths.py
 │   ├── config.py
-│   ├── core_scheduler copy.py
 │   ├── core_scheduler.py
+│   ├── engine.py
+│   ├── export_debug_json.py
 │   ├── flight_manager.py
+│   ├── format_rules.py
 │   ├── models.py
+│   ├── planning_loader.py
 │   └── volunteer_manager.py
+├── scripts
+│   ├── audit_cleanup.py
+│   └── audit_integrity.py
 ├── setup.py
 ├── structure.txt
 ├── test_api_token.py
+├── test_engine_cases.py
+├── test_mag_central.py
+├── test_planning_loader_debug.py
+├── tests
+│   ├── __init__.py
+│   ├── __pycache__
+│   │   ├── __init__.cpython-311.pyc
+│   │   ├── conftest.cpython-311-pytest-9.0.1.pyc
+│   │   ├── test_be_rules.cpython-311-pytest-9.0.1.pyc
+│   │   ├── test_full_pipeline.cpython-311-pytest-9.0.1.pyc
+│   │   ├── test_load_shipments.cpython-311-pytest-9.0.1.pyc
+│   │   ├── test_load_vols.cpython-311-pytest-9.0.1.pyc
+│   │   ├── test_load_volunteers.cpython-311-pytest-9.0.1.pyc
+│   │   ├── test_vol_rules.cpython-311-pytest-9.0.1.pyc
+│   │   └── test_volunteer_rules.cpython-311-pytest-9.0.1.pyc
+│   ├── conftest.py
+│   ├── test_be_rules.py
+│   ├── test_full_pipeline.py
+│   ├── test_load_shipments.py
+│   ├── test_load_vols.py
+│   ├── test_load_volunteers.py
+│   ├── test_paths_usage.py
+│   ├── test_vol_rules.py
+│   └── test_volunteer_rules.py
+├── tools
+├── utils
 └── venv
     ├── bin
     │   ├── __pycache__
-    │   │   └── vba_extract.cpython-313.pyc
+    │   │   ├── dumppdf.cpython-311.pyc
+    │   │   ├── jp.cpython-311.pyc
+    │   │   ├── pdf2txt.cpython-311.pyc
+    │   │   └── vba_extract.cpython-311.pyc
     │   ├── activate
     │   ├── activate.csh
     │   ├── activate.fish
     │   ├── Activate.ps1
     │   ├── dotenv
+    │   ├── dumppdf.py
     │   ├── f2py
+    │   ├── faker
     │   ├── flask
+    │   ├── fonttools
+    │   ├── jp.py
     │   ├── jsonschema
     │   ├── macho_dump
     │   ├── macho_find
     │   ├── macho_standalone
+    │   ├── markdown_py
     │   ├── normalizer
     │   ├── numpy-config
+    │   ├── pdf2txt.py
+    │   ├── pdfplumber
     │   ├── pip
     │   ├── pip3
-    │   ├── pip3.13
+    │   ├── pip3.11
+    │   ├── plotly_get_chrome
     │   ├── py.test
+    │   ├── pyftmerge
+    │   ├── pyftsubset
     │   ├── pygmentize
     │   ├── pyi-archive_viewer
     │   ├── pyi-bindepend
@@ -160,26 +363,36 @@
     │   ├── pyi-makespec
     │   ├── pyi-set_version
     │   ├── pyinstaller
+    │   ├── pypdfium2
     │   ├── pytest
-    │   ├── python -> python3.13
-    │   ├── python3 -> python3.13
-    │   ├── python3.13 -> /Library/Frameworks/Python.framework/Versions/3.13/bin/python3.13
+    │   ├── python -> python3.11
+    │   ├── python3 -> python3.11
+    │   ├── python3.11 -> /usr/local/opt/python@3.11/bin/python3.11
+    │   ├── snowflake-dump-certs
+    │   ├── snowflake-dump-ocsp-response
+    │   ├── snowflake-dump-ocsp-response-cache
+    │   ├── st-theme
     │   ├── streamlit
     │   ├── streamlit.cmd
     │   ├── tree-cli
+    │   ├── ttx
     │   ├── vba_extract.py
-    │   └── watchmedo
+    │   ├── watchmedo
+    │   └── wheel
     ├── etc
     │   └── jupyter
     │       └── nbconfig
     ├── include
-    │   └── python3.13
+    │   └── python3.11
     ├── lib
-    │   └── python3.13
+    │   └── python3.11
     │       └── site-packages
     ├── pyvenv.cfg
     └── share
-        └── jupyter
-            └── nbextensions
+        ├── jupyter
+        │   ├── labextensions
+        │   └── nbextensions
+        └── man
+            └── man1
 
-33 directories, 150 files
+59 directories, 339 files
