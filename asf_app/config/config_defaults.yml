@@ -1,0 +1,31 @@
+# ======================================================================
+# CONFIG PAR DÉFAUT DU MOTEUR ASF (YAML)
+# ======================================================================
+# Ces valeurs sont chargées au démarrage de l'application
+# puis injectées dans scheduler.config via Settings.
+# ======================================================================
+
+# ------------------------------------------------------
+# BE / RÈGLES DE CAPACITÉ
+# ------------------------------------------------------
+MAX_BE_PER_FLIGHT: 5            # Maximum de BE par vol
+MAX_EQUIV_PER_VOLUNTEER: 22     # Nombre total "équivalent" max par bénévole
+
+# ------------------------------------------------------
+# TEMPS & PLANNING
+# ------------------------------------------------------
+DUREE_MISSION_HEURES: 3         # Nombre d'heures avant vol pour mission bénévole
+
+# Limite max de bénévoles assignés par vol
+#   - Aucun nombre (null) = illimité
+MAX_BENEV_PER_VOL: null
+
+# Heure par défaut d’un vol quand l’horaire n’est pas fourni
+DEFAULT_FLIGHT_TIME: "00:00"
+
+# ------------------------------------------------------
+# CAPACITÉ / VÉRIFICATIONS
+# ------------------------------------------------------
+# Capacité physique max d’un vol (optionnelle)
+#   - null = désactivé
+MAX_CAPACITE_PAR_VOL: null
