@@ -10,6 +10,9 @@ on:
 permissions:
   contents: write
 
+defaults:
+  run:
+    shell: bash
 jobs:
   build:
     runs-on: ${{ matrix.os }}
@@ -31,9 +34,8 @@ jobs:
           pip install pyinstaller
 
       - name: Build
-        shell: bash
         run: |
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
+          if [ "$RUNNER_OS" = "Windows" ]; then
             SEP=";"
           else
             SEP=":"
