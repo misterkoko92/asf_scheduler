@@ -32,6 +32,7 @@ Pygments==2.19.2
 pyinstaller==6.16.0
 pyinstaller-hooks-contrib==2025.9
 pytest==9.0.1
+plotly==5.24.1
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.1
 pytz==2025.2
