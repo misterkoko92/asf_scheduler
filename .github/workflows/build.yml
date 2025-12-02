@@ -27,10 +27,10 @@ jobs:
 
       - name: Build
         shell: bash
-        run: >
-          pyinstaller app.py --onefile --name ASF-Scheduler
-          --copy-metadata streamlit --copy-metadata pandas --copy-metadata altair --copy-metadata click
-          --collect-submodules asf_app --collect-data asf_app --collect-data scheduler
+        run: |
+          pyinstaller app.py --onefile --name ASF-Scheduler --paths . \
+            --copy-metadata streamlit --copy-metadata pandas --copy-metadata altair --copy-metadata click \
+            --collect-all asf_app --collect-all scheduler
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
