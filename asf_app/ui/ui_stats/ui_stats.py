@@ -1125,12 +1125,22 @@ def render_tab_stats():
         )
         if st.button("✅ Utiliser ce dossier", key="btn_stats_set_dir"):
             st.session_state["stats_planning_dir"] = selected_dir.strip()
+            st.session_state.pop("stats_should_load", None)
             st.rerun()
 
     planning_dir = Path(st.session_state.get("stats_planning_dir", default_dir))
     st.caption(f"Dossier plannings : `{planning_dir}`")
 
-    df_all = _load_all_plannings(base_override=planning_dir)
+    if st.button("📥 Charger / actualiser les données", key="btn_stats_load"):
+        st.session_state["stats_should_load"] = True
+
+    if not st.session_state.get("stats_should_load"):
+        st.info("Clique sur « Charger / actualiser les données » pour afficher les statistiques.")
+        return
+
+    with st.spinner("Chargement des plannings et préparation des statistiques…"):
+        df_all = _load_all_plannings(base_override=planning_dir)
+
     if df_all.empty:
         st.info("Aucun planning ASFmm détecté ou DataFrame vide.")
         return

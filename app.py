@@ -88,8 +88,7 @@ apply_theme(st.session_state.get("use_modern_theme", DEFAULT_USE_MODERN_THEME))
 # ONGLET LIST
 # ---------------------------------------
 tabs = st.tabs([
-    "📁 Fichiers d’entrée",
-    "📊 Données Semaine",
+    "📁 Données semaine",
     "➕ Ajouts manuels",
     "⚙️ Paramètres",
     "📊 Planning",
@@ -106,39 +105,37 @@ tabs = st.tabs([
 # ---------------------------------------
 with tabs[0]:
     render_tab_inputs()
-
-# ONGLET 1 — DONNÉES SEMAINE
-with tabs[1]:
+    st.divider()
     render_tab_week_data()
 
 # ONGLET 2 — AJOUTS MANUELS
-with tabs[2]:
+with tabs[1]:
     render_tab_manual()
 
 # ONGLET 3 — PARAMÈTRES
-with tabs[3]:
+with tabs[2]:
     render_tab_params()
 
 # ONGLET 4 — PLANNING
-with tabs[4]:
+with tabs[3]:
     render_tab_planning()
 
 # ONGLET 5 — COMMUNICATION
-with tabs[5]:
+with tabs[4]:
     render_tab_communication()
 
 # ONGLET 6 — MISE À JOUR EXPÉDITIONS
-with tabs[6]:
+with tabs[5]:
     render_tab_shipments_update()
 
 # ONGLET 7 — STATISTIQUES
-with tabs[7]:
+with tabs[6]:
     render_tab_stats()
 
 # ONGLET 8 — LOGS
-with tabs[8]:
+with tabs[7]:
     render_tab_logs()
 
 # ONGLET 9 — FAQ / Instructions
-with tabs[9]:
+with tabs[8]:
     render_tab_faq()
