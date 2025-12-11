@@ -35,6 +35,7 @@ from scheduler.config import (
     MAX_EQUIV_PER_VOLUNTEER,
     MIN_HOURS_BETWEEN_FLIGHTS,
 )
+from utils.logging_utils import get_logger
 
 
 # =====================================================================
@@ -46,6 +47,7 @@ def solve_planning_ortools_simulation(
     planifiables_only: bool = True,
     timeout_seconds: int = 180,
     verbose: bool = False,
+    dry_run: bool = False,
 ) -> Dict[str, Any]:
     """
     Exécute le solveur OR-Tools et retourne un planning/bilan simulés.
@@ -53,19 +55,7 @@ def solve_planning_ortools_simulation(
     """
 
     # Logger (console + fichier)
-    logger = logging.getLogger("ortools_sim")
-    logger.setLevel(logging.INFO)
-    log_path = cp.TMP_DIR / "asf_scheduler.log"
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    has_file_handler = any(
-        isinstance(h, logging.FileHandler) and Path(getattr(h, "baseFilename", "")) == log_path
-        for h in logger.handlers
-    )
-    if not has_file_handler:
-        fh = logging.FileHandler(log_path, mode="a", encoding="utf-8")
-        fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
-        logger.addHandler(fh)
-        logger.propagate = False
+    logger = get_logger("ortools_sim", console=verbose)
     def _log(msg: str):
         if verbose:
             print(msg)
@@ -95,6 +85,13 @@ def solve_planning_ortools_simulation(
         _log(f"[ORTOOLS] Erreur chargement : {exc}")
         return _empty_result("ERREUR_CHARGEMENT")
 
+    # Validation précoce
+    errs = _validate_inputs(df_be, df_vols_raw, df_benev_raw)
+    if errs:
+        for e in errs:
+            _log(f"[ORTOOLS] Validation input : {e}")
+        return _empty_result("ERREUR_DONNEES")
+
     # -----------------------------------------------------------------
     # 2) Prétraitements / parsing
     # -----------------------------------------------------------------
@@ -104,9 +101,25 @@ def solve_planning_ortools_simulation(
     df_benev = _parse_benevoles(df_benev_raw, df_param_benev)
 
     if df_vols.empty:
+        _log("[ORTOOLS] Aucun vol valide après parsing.")
         return _empty_result("AUCUN_VOL_VALIDE")
     if df_benev.empty:
+        _log("[ORTOOLS] Aucune disponibilité bénévole valide après parsing.")
         return _empty_result("AUCUN_BENEVOLE_VALIDE")
+
+    if dry_run:
+        _log(f"[ORTOOLS][DRY RUN] BE={len(be_groups)}, vols={len(df_vols)}, benevoles={len(df_benev)}")
+        return {
+            "statistiques": {
+                "status": "DRY_RUN",
+                "nb_be": len(be_groups),
+                "nb_vols": len(df_vols),
+                "nb_benevoles": len(df_benev),
+            },
+            "status": "DRY_RUN",
+            "planning_df": pd.DataFrame(),
+            "bilan_df": pd.DataFrame(),
+        }
 
     # Dictionnaires utilitaires
     priority_map = dict(zip(df_param_be["Type"], df_param_be["Priorite_Type"]))
@@ -294,6 +307,27 @@ def _empty_result(status: str) -> Dict[str, Any]:
         "bilan_df": pd.DataFrame(),
         "dest_stats": pd.DataFrame(),
     }
+
+
+def _validate_inputs(df_be: pd.DataFrame, df_vols: pd.DataFrame, df_benev: pd.DataFrame) -> List[str]:
+    """Validation minimale des colonnes requises avant modélisation."""
+    errors: List[str] = []
+    if df_be is None or df_be.empty:
+        errors.append("Aucun BE planifiable.")
+    if df_vols is None or df_vols.empty:
+        errors.append("Aucun vol.")
+    else:
+        required_vol_cols = ["Date_Vol", "Heure_Vol", "IATA"]
+        missing = [c for c in required_vol_cols if c not in df_vols.columns]
+        if missing:
+            errors.append(f"Vols : colonnes manquantes {missing}")
+    if df_benev is None or df_benev.empty:
+        errors.append("Aucune disponibilité bénévole.")
+    else:
+        missing_b = [c for c in ["Date", "Heure_Arrivee_time", "Heure_Depart_time"] if c not in df_benev.columns]
+        if missing_b:
+            errors.append(f"Bénévoles : colonnes manquantes {missing_b}")
+    return errors
 
 
 def _build_dest_info(df_param_dest: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
