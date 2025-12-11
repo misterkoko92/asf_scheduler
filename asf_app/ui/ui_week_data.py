@@ -9,6 +9,8 @@ from asf_app.state import get_state
 
 from scheduler.be_manager import filter_shipments, sort_shipments
 from loaders.load_shipments import load_shipments
+from utils.ui_helpers import build_iata_city_maps, format_be_label, format_vol_label
+from utils.datetime_utils import parse_date_series, parse_time_series, normalize_hour_str, hour_min_from_series
 
 
 # ======================================================================
@@ -20,7 +22,7 @@ def detect_week(state):
         return None
     if "Date_Vol" not in df_vols.columns:
         return None
-    dates = pd.to_datetime(df_vols["Date_Vol"], errors="coerce", dayfirst=True, format="%d/%m/%y").dropna()
+    dates = parse_date_series(df_vols["Date_Vol"]).dropna()
     if dates.empty:
         return None
     return int(dates.min().isocalendar().week)
@@ -31,9 +33,9 @@ def detect_week(state):
 # ======================================================================
 def robust_to_datetime(series):
     try:
-        return pd.to_datetime(series, errors="coerce", dayfirst=True, format="%d/%m/%y")
+        return parse_date_series(series)
     except Exception:
-        return pd.to_datetime(series.astype(str), errors="coerce", dayfirst=True, format="%d/%m/%y")
+        return parse_date_series(series.astype(str))
 
 
 # ======================================================================
@@ -118,19 +120,7 @@ def render_tab_week_data():
     col1, col2, col3 = st.columns(3, gap="medium")
 
     # Mapping ParamDest pour affichages (ville <-> IATA)
-    iata_to_city = {}
-    city_to_iata = {}
-    try:
-        if state.df_param_dest is not None and not state.df_param_dest.empty:
-            for _, r in state.df_param_dest.iterrows():
-                iata = str(r.get("Dest_IATA", "")).upper()
-                city = str(r.get("Dest_Ville", "")).upper()
-                if iata:
-                    iata_to_city[iata] = city or iata
-                if city:
-                    city_to_iata[city] = iata or city
-    except Exception:
-        pass
+    iata_to_city, city_to_iata = build_iata_city_maps(state.df_param_dest)
 
     # ==========================================================================
     # BE PLANIFIABLES
@@ -146,6 +136,17 @@ def render_tab_week_data():
                 lambda r: iata_to_city.get(str(r.get("IATA", "")).upper(), str(r.get("Destination", ""))),
                 axis=1
             )
+        # Label standard
+        def _label_be(row):
+            return format_be_label(
+                dest=str(row.get("IATA", row.get("Destination", ""))),
+                be_num=str(row.get("BE_Numero", "")),
+                nb_colis=row.get("Nb_Colis", row.get("BE_Nb_Colis", "")),
+                be_type=row.get("Type", ""),
+                status="moteur",
+                date_str=row.get("Date_Vol", ""),
+            )
+        df_be["Label"] = df_be.apply(_label_be, axis=1)
 
     with col1:
         bloc_with_sort(
@@ -300,8 +301,8 @@ def render_tab_week_data():
 
         # Période choisie
         if state.api_start_date and state.api_end_date:
-            start_dt = pd.to_datetime(state.api_start_date)
-            end_dt = pd.to_datetime(state.api_end_date)
+            start_dt = _parse_date_series(pd.Series([state.api_start_date])).iloc[0]
+            end_dt = _parse_date_series(pd.Series([state.api_end_date])).iloc[0]
             vols_df = vols_df[(vols_df["Date_dt"] >= start_dt) & (vols_df["Date_dt"] <= end_dt)]
         elif week:
             vols_df = vols_df[vols_df["Date_dt"].dt.isocalendar().week == week]
@@ -340,7 +341,6 @@ def render_tab_week_data():
             dtdt = r.get("Date_dt")
             if pd.isna(dtdt):
                 continue
-            date_str = dtdt.strftime("%d/%m/%y")
             heure_str = fmt_hour(r.get("Heure_Vol", ""))
             if not heure_str:
                 continue
@@ -359,14 +359,16 @@ def render_tab_week_data():
                     continue
                 # Affiche toujours le routing complet (sans retour CDG), même si la destination est un stop intermédiaire
                 sub_route = "-".join(parts)
+                label = format_vol_label(dtdt, dest_iata, r.get("Numero_Vol", ""), heure_str, sub_route, r.get("Source", "excel"))
                 rows.append({
                     "Destination": dest_city,
-                    "Date": date_str,
+                    "Date": dtdt.strftime("%d/%m/%y"),
                     "Heure": heure_str,
                     "Routing": sub_route,
                     "Numero_Vol": r.get("Numero_Vol", ""),
                     "IATA": dest_iata,
                     "Source": r.get("Source", "excel"),
+                    "Label": label,
                 })
 
         df_flights = pd.DataFrame(rows)

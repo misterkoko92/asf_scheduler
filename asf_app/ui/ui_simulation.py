@@ -4,7 +4,7 @@ import pandas as pd
 from asf_app.services.simulation_runner import run_ortools_simulation
 from asf_app.state import get_state
 from utils.datetime_utils import parse_date_series, parse_time_series, normalize_hour_str
-from utils.ui_helpers import build_iata_city_maps, sort_planning_df
+from utils.ui_helpers import build_iata_city_maps, sort_planning_df, format_be_label, format_vol_label
 
 
 def render_tab_simulation():
@@ -536,7 +536,8 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
         nb_colis = int(nb_colis) if pd.notna(nb_colis) else ""
         type_colis = str(row.get("BE_Type", "")).upper()
         status = "déjà au planning" if be_num in planned_set else "non planifié"
-        return f"{dest or '(?)'} — {be_num} — {nb_colis} colis — {type_colis or '?'} — {status}"
+        date_str = str(row.get("Date_Vol", "") or "")
+        return format_be_label(dest, be_num, nb_colis, type_colis, status, date_str)
 
     def _time_from_str(val):
         import datetime as dt
@@ -604,15 +605,13 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
             & (plan_df.get("Date_Vol", "").astype(str) == str(date_raw))
         ).any()
         status = "déjà utilisé" if already else "disponible"
+        date_dt = None
         try:
-            date_dt = _parse_date_series(pd.Series([date_raw])).iloc[0]
-            jours_fr = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
-            jour_label = jours_fr[date_dt.weekday()] if pd.notna(date_dt) else ""
-            date_fmt = f"{jour_label} {date_dt.strftime('%d/%m/%y')}" if pd.notna(date_dt) else str(date_raw)
+            date_dt = parse_date_series(pd.Series([date_raw])).iloc[0]
         except Exception:
-            date_fmt = str(date_raw)
+            pass
         routing_lbl = str(r.get("Routing", "")) or ""
-        label = f"{date_fmt} — {str(r.get('IATA','')).upper()} — {vol_num} — {heure_raw} — {routing_lbl} — {status}"
+        label = format_vol_label(date_dt if date_dt is not None else date_raw, str(r.get("IATA", "")).upper(), vol_num, heure_raw, routing_lbl, status)
         vol_options.append((label, (date_raw, vol_num, heure_raw)))
     if not vol_options:
         vol_options = [("Aucun vol pour cette destination", ("", "", ""))]
