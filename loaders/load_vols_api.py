@@ -20,6 +20,7 @@ from scheduler.column_map import column_map_param_dest
 from scheduler.config_paths import TABLEAU_DE_BORD, SHEET_PARAM_DEST, VOLS_SRC, VOLS
 from loaders.universal_loader import load_and_normalize
 from loaders.load_shipments import load_shipments_df
+from utils.datetime_utils import parse_date_series, parse_time_series, normalize_hour_str, hour_min_from_series
 
 
 def _fmt_date(dt) -> str:
@@ -113,8 +114,11 @@ def load_vols_api(start_date: date, end_date: date) -> pd.DataFrame:
     df = pd.DataFrame(rows)
     if not df.empty:
         df["Max_Colis"] = pd.to_numeric(df["Max_Colis"], errors="coerce").astype("Int64")
-        df["Date_Vol"] = df["Date_Vol"].apply(_fmt_date)
-        df["Heure_Vol"] = df["Heure_Vol"].fillna("")
+        df["Date_dt"] = parse_date_series(df["Date_Vol"])
+        df["Date_Vol"] = df["Date_dt"].dt.strftime("%d/%m/%y")
+        df["Heure_Vol_dt"] = parse_time_series(df["Heure_Vol"])
+        df["Heure_Vol"] = normalize_hour_str(df["Heure_Vol"]).fillna("")
+        df["HEURE_MIN"] = hour_min_from_series(df["Heure_Vol"])
         df = df.drop_duplicates(subset=["Date_Vol", "Numero_Vol", "Destination"]).reset_index(drop=True)
 
     # Debug console

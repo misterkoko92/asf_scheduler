@@ -276,9 +276,27 @@ def render_tab_week_data():
         except Exception:
             state.df_vols = None
 
+    def _parse_date_series(series):
+        ser = pd.to_datetime(series, format="%d/%m/%y", errors="coerce")
+        mask = ser.isna()
+        if mask.any():
+            ser.loc[mask] = pd.to_datetime(series.loc[mask], errors="coerce", dayfirst=True)
+        return ser
+
+    def _parse_time_val(val):
+        if val is None or val == "" or pd.isna(val):
+            return ""
+        sval = str(val).replace("h", ":")
+        t = pd.to_datetime(sval, format="%H:%M", errors="coerce")
+        if pd.isna(t):
+            t = pd.to_datetime(sval, errors="coerce")
+        if pd.isna(t):
+            return ""
+        return t.strftime("%Hh%M")
+
     if state.df_vols is not None and not state.df_vols.empty:
         vols_df = state.df_vols.copy()
-        vols_df["Date_dt"] = pd.to_datetime(vols_df["Date_Vol"], errors="coerce", dayfirst=True)
+        vols_df["Date_dt"] = _parse_date_series(vols_df["Date_Vol"])
 
         # Période choisie
         if state.api_start_date and state.api_end_date:
@@ -289,14 +307,7 @@ def render_tab_week_data():
             vols_df = vols_df[vols_df["Date_dt"].dt.isocalendar().week == week]
 
         def fmt_hour(v):
-            if v is None or v == "" or pd.isna(v):
-                return ""
-            if hasattr(v, "strftime"):
-                return v.strftime("%Hh%M")
-            parsed = pd.to_datetime(v, errors="coerce", dayfirst=True)
-            if pd.isna(parsed):
-                return ""
-            return parsed.strftime("%Hh%M")
+            return _parse_time_val(v)
 
         # Destinations éligibles (BE statut D) — matching sur IATA
         iata_set = set()
@@ -330,7 +341,7 @@ def render_tab_week_data():
             if pd.isna(dtdt):
                 continue
             date_str = dtdt.strftime("%d/%m/%y")
-            heure_str = str(r.get("Heure_Vol", "")).strip()
+            heure_str = fmt_hour(r.get("Heure_Vol", ""))
             if not heure_str:
                 continue
             routing_raw = str(r.get("Routing", "")) or ""
@@ -362,6 +373,8 @@ def render_tab_week_data():
 
         if not df_flights.empty:
             df_flights = df_flights.sort_values(["Destination", "Date", "Heure", "Numero_Vol"], kind="mergesort").reset_index(drop=True)
+            if "HEURE_MIN" in df_flights.columns:
+                df_flights["HEURE_MIN"] = pd.to_numeric(df_flights["HEURE_MIN"], errors="coerce")
         try:
             print("[Vols dispo] Lignes retenues:", len(df_flights))
             if not df_flights.empty:

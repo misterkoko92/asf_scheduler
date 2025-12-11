@@ -19,6 +19,12 @@ from scheduler.column_map import (
     column_map_vols,
 )
 from loaders.load_params import get_param_dest
+from utils.datetime_utils import (
+    parse_date_series,
+    parse_time_series,
+    normalize_hour_str,
+    hour_min_from_series,
+)
 
 # =====================================================================
 # PARSING UNIFIÉ : DATES, HEURES, ROUTING
@@ -340,15 +346,14 @@ def load_vols_df() -> pd.DataFrame:
     if not df.empty:
         df["Max_Colis"] = pd.to_numeric(df["Max_Colis"], errors="coerce").astype("Int64")
         df = df.drop_duplicates(subset=["Date_Vol", "Numero_Vol", "Destination"]).reset_index(drop=True)
-        # Formattage heures / dates
-        if "Heure_Vol" in df.columns:
-            df["Heure_Vol_time"] = df["Heure_Vol"].apply(
-                lambda t: t if isinstance(t, time) else pd.to_datetime(t, errors="coerce").time()
-            )
-            df["Heure_Vol"] = df["Heure_Vol_time"].apply(lambda t: t.strftime("%Hh%M") if isinstance(t, time) else "")
+        # Formattage heures / dates via helpers
         if "Date_Vol" in df.columns:
-            df["Date_Vol_dt"] = pd.to_datetime(df["Date_Vol"], errors="coerce", dayfirst=True)
-            df["Date_Vol"] = df["Date_Vol_dt"].apply(lambda d: d.strftime("%d/%m/%y") if pd.notna(d) else "")
+            df["Date_Vol_dt"] = parse_date_series(df["Date_Vol"])
+            df["Date_Vol"] = df["Date_Vol_dt"].dt.strftime("%d/%m/%y")
+        if "Heure_Vol" in df.columns:
+            df["Heure_Vol_dt"] = parse_time_series(df["Heure_Vol"])
+            df["Heure_Vol"] = normalize_hour_str(df["Heure_Vol"]).fillna("")
+            df["HEURE_MIN"] = hour_min_from_series(df["Heure_Vol"])
     return df
 
 

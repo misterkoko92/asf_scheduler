@@ -6,6 +6,7 @@ from datetime import datetime, time
 from scheduler.config_paths import PLANNING_BENEVOLES, SHEET_BENEV_DISPO
 from loaders.universal_loader import load_and_normalize
 from scheduler.column_map import column_map_benev_dispo
+from utils.datetime_utils import parse_date_series, normalize_hour_str, parse_time_series
 
 def _parse_excel_time(v) -> time | None:
     if v is None or str(v).strip() == "":
@@ -56,7 +57,7 @@ def load_benevoles() -> pd.DataFrame:
 
     # 2) Colonne Date → datetime puis format JJ/MM/AA
     if "Date" in df.columns:
-        df["Date_dt"] = pd.to_datetime(df["Date"], dayfirst=True, errors="coerce")
+        df["Date_dt"] = parse_date_series(df["Date"])
         df["Date"] = df["Date_dt"].dt.strftime("%d/%m/%y")
 
     # 3) Normalisation : ID/quotas en int, reste en string
@@ -70,9 +71,9 @@ def load_benevoles() -> pd.DataFrame:
 
     # 4) Formattage heures HHhMM et filtrage des dispos incomplètes
     for col in hour_cols:
-        parsed = df[col].apply(_parse_excel_time)
-        df[f"{col}_time"] = parsed
-        df[col] = parsed.apply(lambda t: t.strftime("%Hh%M") if isinstance(t, time) else "")
+        parsed = parse_time_series(df[col])
+        df[f"{col}_time"] = parsed.dt.time
+        df[col] = normalize_hour_str(df[col])
 
     if {"Heure_Arrivee", "Heure_Depart"}.issubset(df.columns):
         df = df[(df["Heure_Arrivee"] != "") & (df["Heure_Depart"] != "")]
