@@ -6,7 +6,8 @@ de préparer les brouillons Outlook associés.
 """
 
 import re
-from typing import Optional, Tuple
+import datetime as dt
+from typing import Optional, Tuple, List
 from pathlib import Path
 
 import pandas as pd
@@ -17,12 +18,13 @@ from asf_app.ui.state_planning import get_planning_state
 from asf_app.ui.ui_communication.email_destinations_handler import _get_emails_for_destination
 from asf_app.ui.ui_communication.email_expediteurs_handler import _get_emails_for_expediteur
 from asf_app.ui.ui_communication.outlook import create_outlook_draft
-from loaders.load_benevoles import load_benevoles
-from loaders.load_vols import load_vols_df
+from loaders.load_benevoles import get_benevoles_cached
+from loaders.load_vols import get_vols_df_cached
 from loaders.universal_loader import load_and_normalize
 from scheduler.column_map import column_map_mag_central
 from scheduler.config_paths import SHEET_MAG_CENTRAL, TABLEAU_DE_BORD
 import scheduler.config_paths as cp
+from utils.export_pdf import export_first_sheet_to_pdf
 
 
 # ---------------------------------------------------------------------------
@@ -143,29 +145,42 @@ def _load_planning_preview(week: int, year: int) -> tuple[pd.DataFrame | None, s
     Charge un aperçu du planning validé (fichier exporté) pour la semaine choisie.
     Retourne (df, message, path).
     """
+    return _load_planning_preview_with_path(week, year, None)
+
+
+def _load_planning_preview_with_path(
+    week: int, year: int, path_override: Optional[Path]
+) -> tuple[pd.DataFrame | None, str, Path | None]:
+    """
+    Variante : accepte un chemin explicite si déjà sélectionné.
+    """
     base_dir = cp.ASF_ONEDRIVE / "Planning MAB" / f"ASFmm PLANNING {year}"
-    filename = f"ASFmm - PLANNING SEMAINE N° {week:02d} - {year}.xlsx"
-    path = base_dir / filename
-    if not path.exists():
-        # tolérance sur nom : espaces, tirets, xlsm/xlsx
-        patterns = [
-            f"ASFmm*{week:02d}*{year}.xls*",
-            f"*PLANNING*{week:02d}*{year}.xls*",
-        ]
-        candidates = []
-        for pat in patterns:
-            candidates.extend(base_dir.glob(pat))
-        if candidates:
-            # garder ceux qui contiennent la semaine précise
-            def _score(p):
-                name_up = p.name.upper()
-                return int(f"{name_up.count(str(week).zfill(2))}{name_up.count(str(year))}")
-            path = sorted(candidates, key=_score, reverse=True)[0]
-            msg_missing = f"Fichier exact introuvable, utilisation de : {path.name}"
-        else:
-            return None, f"Fichier introuvable : {path}", None
+    msg_missing = None
+    if path_override:
+        path = Path(path_override)
     else:
-        msg_missing = None
+        filename = f"ASFmm - PLANNING SEMAINE N° {week:02d} - {year}.xlsx"
+        path = base_dir / filename
+        if not path.exists():
+            # tolérance sur nom : espaces, tirets, xlsm/xlsx
+            patterns = [
+                f"ASFmm*{week:02d}*{year}.xls*",
+                f"*PLANNING*{week:02d}*{year}.xls*",
+            ]
+            candidates = []
+            for pat in patterns:
+                candidates.extend(base_dir.glob(pat))
+            if candidates:
+                # garder ceux qui contiennent la semaine précise
+                def _score(p):
+                    name_up = p.name.upper()
+                    return int(f"{name_up.count(str(week).zfill(2))}{name_up.count(str(year))}")
+                path = sorted(candidates, key=_score, reverse=True)[0]
+                msg_missing = f"Fichier exact introuvable, utilisation de : {path.name}"
+            else:
+                return None, f"Fichier introuvable : {path}", None
+        else:
+            msg_missing = None
 
     sheet_candidates = [f"Planning S{week:02d}", "Export planning"]
     for sh in sheet_candidates:
@@ -212,6 +227,46 @@ def _available_weeks_from_exports() -> set[tuple[int, int]]:
             except Exception:
                 continue
     return weeks
+
+
+def _parse_version_from_name(path: Path) -> tuple[int, int]:
+    """
+    Extrait vXX[-YY] du nom de fichier. Par défaut retourne (1,0).
+    """
+    stem = path.stem.upper()
+    m = re.search(r"V(\d+)(?:-(\d+))?", stem)
+    if m:
+        try:
+            major = int(m.group(1))
+            minor = int(m.group(2) or 0)
+            return major, minor
+        except Exception:
+            pass
+    return 1, 0
+
+
+def _find_planning_files_for_week(week: int, year: int) -> List[Path]:
+    """
+    Liste les fichiers de planning correspondant à la semaine/année,
+    triés par version décroissante (vXX[-YY]) puis date de modif.
+    """
+    base_dir = cp.ASF_ONEDRIVE / "Planning MAB" / f"ASFmm PLANNING {year}"
+    if not base_dir.exists():
+        return []
+    pattern = f"ASFmm - PLANNING SEMAINE N° {week:02d} - {year}*.xls*"
+    files = list(base_dir.glob(pattern))
+    files = [p for p in files if p.is_file()]
+
+    def _sort_key(p: Path):
+        major, minor = _parse_version_from_name(p)
+        try:
+            mtime = p.stat().st_mtime
+        except Exception:
+            mtime = 0
+        return (major, minor, mtime)
+
+    files.sort(key=_sort_key, reverse=True)
+    return files
 
 
 # ---------------------------------------------------------------------------
@@ -314,15 +369,42 @@ def _build_vol_options(dest_iata: str, df_vols: pd.DataFrame, df_planning: pd.Da
 # ---------------------------------------------------------------------------
 def _prepare_dispo(df_dispos: pd.DataFrame) -> pd.DataFrame:
     df = df_dispos.copy()
-    df["Date"] = pd.to_datetime(df.get("Date"), errors="coerce").dt.date
+    # Parsing sans warnings : détecte déjà datetime
+    def _parse_date_safe(x):
+        if isinstance(x, (dt.date, dt.datetime, pd.Timestamp)):
+            return pd.to_datetime(x).date()
+        return pd.to_datetime(str(x), errors="coerce", dayfirst=True).date()
+
+    df["Date"] = df.get("Date").apply(_parse_date_safe)
 
     def _time_only(val):
+        # heures en HHhMM / HH:MM / HH:MM:SS
+        for fmt in ("%Hh%M", "%H:%M:%S", "%H:%M"):
+            try:
+                return pd.to_datetime(str(val), format=fmt, errors="raise").time()
+            except Exception:
+                continue
         t = pd.to_datetime(str(val), errors="coerce")
         return t.time() if pd.notna(t) else None
 
     df["Arr"] = df.get("Heure_Arrivee", "").apply(_time_only)
     df["Dep"] = df.get("Heure_Depart", "").apply(_time_only)
     return df
+
+
+def _coerce_display_types(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Force certains champs à être affichés comme texte (téléphones, etc.)
+    pour éviter les erreurs Arrow lors de l'aperçu.
+    """
+    if df is None or df.empty:
+        return df
+    out = df.copy()
+    for col in out.columns:
+        col_l = str(col).lower()
+        if "telephone" in col_l or "phone" in col_l:
+            out[col] = out[col].astype(str)
+    return out
 
 
 def _bene_status(df_dispo: pd.DataFrame, df_planning: pd.DataFrame, name: str, date_str: str, heure_str: str, vol_str: Optional[str] = None) -> str:
@@ -413,7 +495,12 @@ def _collect_be_from_planning(df_prev: pd.DataFrame, week: int, year: int) -> pd
         if cand in df.columns:
             date_col = cand
             break
-    df_out["Date_Vol"] = pd.to_datetime(df.get(date_col, ""), errors="coerce")
+    df_out["Date_Vol"] = pd.to_datetime(
+        df.get(date_col, ""),
+        errors="coerce",
+        dayfirst=True,
+        format="%d/%m/%y",
+    )
     iso = df_out["Date_Vol"].dt.isocalendar()
     df_out["Week"] = iso.week.astype("Int64")
     df_out["Year"] = iso.year.astype("Int64")
@@ -480,6 +567,7 @@ def _apply_planning_update(
 ):
     from openpyxl import load_workbook
     from openpyxl.styles import PatternFill
+    import datetime as _dt
 
     wb = load_workbook(path)
 
@@ -531,7 +619,7 @@ def _apply_planning_update(
                 cell.fill = color_fill
         return target_rows
 
-    def _highlight_plan(color_fill):
+    def _highlight_plan(color_fill, clear_colis: bool = False):
         target_rows = []
         be_col_plan = 11  # K
         for r in ws_plan.iter_rows(min_row=2):
@@ -540,20 +628,23 @@ def _apply_planning_update(
             if _norm_be_cell(r[be_col_plan - 1].value) == _norm_be_cell(be_num):
                 target_rows.append(r)
         for row in target_rows:
-            for cell in row:
-                cell.fill = color_fill
+            for idx, cell in enumerate(row, start=1):
+                if 4 <= idx <= 17:  # D à Q
+                    cell.fill = color_fill
+            if clear_colis and len(row) >= 12:
+                row[11].value = None  # colonne L (index 12 -> position 11)
         return target_rows
 
     # Annulation -> surligner lignes existantes
     if action == "Annulation":
         _highlight_export(fill_red)
-        _highlight_plan(fill_red)
+        _highlight_plan(fill_red, clear_colis=True)
         wb.save(path)
         return
 
     # Ajout ou changement -> surligner ancien en rouge si présent
     export_rows_red = _highlight_export(fill_red)
-    plan_rows_red = _highlight_plan(fill_red)
+    plan_rows_red = _highlight_plan(fill_red, clear_colis=True)
 
     # Ajout nouvelle ligne export
     headers = [c.value for c in ws_export[1]]
@@ -570,18 +661,27 @@ def _apply_planning_update(
     if bene_changed and bene_meta:
         merged.update(bene_meta)
     merged_lower = {str(k).lower(): v for k, v in merged.items()}
-    def _get_val(*keys):
+    def _get_val(*keys, fallback=""):
         for k in keys:
             if k is None:
                 continue
-            if k in merged:
-                return merged.get(k, "")
-            if k.upper() in merged:
-                return merged.get(k.upper(), "")
             k_low = str(k).lower()
+            for source in (be_info_dict, plan_info_dict, plan_full_dict, merged):
+                if source is None:
+                    continue
+                if k in source and not _is_empty(source.get(k)):
+                    return source.get(k)
+                if k.upper() in source and not _is_empty(source.get(k.upper())):
+                    return source.get(k.upper())
+                if hasattr(source, "keys") and k_low in source.keys():
+                    v = source.get(k_low, None) if hasattr(source, "get") else None
+                    if not _is_empty(v):
+                        return v
             if k_low in merged_lower:
-                return merged_lower[k_low]
-        return ""
+                v = merged_lower[k_low]
+                if not _is_empty(v):
+                    return v
+        return fallback
     def _normalize_date(val):
         try:
             d = pd.to_datetime(val)
@@ -590,36 +690,199 @@ def _apply_planning_update(
             return d.date()
         except Exception:
             return val
+    def _is_empty(val) -> bool:
+        try:
+            import pandas as pd  # local import
+            if val is None:
+                return True
+            if isinstance(val, str) and val.strip() == "":
+                return True
+            if pd.isna(val):
+                return True
+        except Exception:
+            if val in (None, ""):
+                return True
+        return False
+
+    def _if_empty(val, fallback):
+        try:
+            if _is_empty(val):
+                return fallback
+        except Exception:
+            if val in (None, ""):
+                return fallback
+        return val
+
+    # Vols : récupérer infos routing/IATA/heure si dispo
+    def _norm_vol(val: str) -> str:
+        s = str(val or "").upper().strip()
+        s = s.replace("  ", " ")
+        s = s.replace("AF ", "AF")
+        if s.startswith("AF") and len(s) > 2:
+            s = s[:2] + " " + s[2:]
+        return s.strip()
+
+    def _parse_time(val):
+        try:
+            if isinstance(val, _dt.time):
+                return val
+            sval = str(val).replace("h", ":")
+            t = pd.to_datetime(sval, errors="coerce").time()
+            return t
+        except Exception:
+            return None
+
+    def _combine_dt(d, t):
+        try:
+            if isinstance(d, _dt.date) and isinstance(t, _dt.time):
+                return _dt.datetime.combine(d, t)
+        except Exception:
+            pass
+        return None
+    date_new_norm = _normalize_date(date_new)
+    time_new_parsed = _parse_time(heure_new)
+
+    vol_info = {}
+    try:
+        df_vols_cache = get_vols_df_cached()
+        if df_vols_cache is not None and not df_vols_cache.empty:
+            date_target = _normalize_date(date_new)
+            vol_target = _norm_vol(vol_new)
+            df_tmp = df_vols_cache.copy()
+            df_tmp["Date_dt"] = pd.to_datetime(df_tmp.get("Date_Vol", df_tmp.get("Date", "")), errors="coerce", dayfirst=True).dt.date
+            df_tmp["Vol_norm"] = df_tmp.get("Numero_Vol", df_tmp.get("Vol", "")).apply(_norm_vol)
+            match = df_tmp[(df_tmp["Date_dt"] == date_target) & (df_tmp["Vol_norm"] == vol_target)]
+            if not match.empty:
+                row_v = match.iloc[0]
+                vol_info = {
+                    "Routing": row_v.get("Routing", ""),
+                    "IATA": str(row_v.get("IATA", row_v.get("Dest_IATA", ""))).strip().upper(),
+                    "Destination": row_v.get("Destination", ""),
+                    "Heure_Vol": row_v.get("Heure_Vol", ""),
+                }
+                t_parsed = _parse_time(vol_info.get("Heure_Vol"))
+                vol_info["Heure_dt"] = t_parsed
+    except Exception:
+        vol_info = {}
+    bene_short_val = bene_choice or be_info_dict.get("Benevole") or plan_info_dict.get("Benevole") or ""
+    be_colis_new = _get_val("BE_Nb_Colis", "Nb_Colis", "BE_Nb_Colis_MAG", fallback="")
+    be_equiv_new = _get_val("BE_Nb_Equiv", "Equiv_Colis", fallback="")
+    bene_id_new = _if_empty(_get_val("ID", "ID_BENEVOLE", "ID_BEN_ID"), bene_meta.get("ID") if bene_meta else "")
+    bene_tel_new = _if_empty(_get_val("Telephone", "Telephone_BEN_ID"), bene_meta.get("Telephone") if bene_meta else "")
+    routing_new = _if_empty(vol_info.get("Routing", ""), _get_val("Routing", "Routing_VOL", "Routing_Str"))
+    iata_new = dest_iata or vol_info.get("IATA", _get_val("Dest_IATA", "IATA"))
+    dest_ville_new = _get_val("Dest_Ville", "Ville", fallback=dest_iata)
+    destination_vol_new = vol_info.get("Destination", dest_iata)
+    heure_dt_new = _combine_dt(date_new_norm, time_new_parsed or vol_info.get("Heure_dt"))
+    heure_time_new = time_new_parsed or vol_info.get("Heure_dt") or _parse_time(heure_new)
+    heure_str_new = _fmt_time(heure_time_new or heure_new)
+    heure_min_new = None
+    if isinstance(heure_time_new, _dt.time):
+        heure_min_new = heure_time_new.hour * 60 + heure_time_new.minute
+    vol_norm_new = _norm_vol(vol_new)
+
+    override_map = {
+        "Date_Vol": date_new_norm,
+        "DATE": date_new_norm,
+        "Date_key": date_new_norm,
+        "Heure_Vol": heure_time_new or heure_new,
+        "HEURE_VOL": heure_time_new or heure_new,
+        "HEURE_VOL_DT": heure_dt_new,
+        "HEURE_MIN": heure_min_new,
+        "Vol": vol_new,
+        "Numero_Vol": vol_new,
+        "VOL_AFF": _fmt_vol(vol_new),
+        "Vol_key": vol_norm_new,
+        "Routing": routing_new,
+        "Routing_VOL": routing_new,
+        "Routing_Str": routing_new,
+        "IATA": iata_new,
+        "Dest_IATA": iata_new,
+        "Destination": dest_iata or _get_val("Destination", "Dest_IATA", "Dest_Ville"),
+        "Destination_VOL": destination_vol_new,
+        "Dest_Ville": dest_ville_new,
+        "Ville": dest_ville_new,
+        "Benevole": bene_choice or (bene_meta.get("Benevole") if bene_meta else bene_choice),
+        "BENEVOLE_DISP": bene_short_val,
+        "BE_Numero": be_num,
+        "BE_NUM": be_num,
+        "BE_Key": _norm_be(be_num),
+        "BE_Nb_Colis": be_colis_new,
+        "BE_COLIS": be_colis_new,
+        "BE_Nb_Equiv": be_equiv_new,
+        "BE_Type": _get_val("BE_Type", "BE_Type_MAG", fallback=""),
+        "BE_Expediteur": _get_val("BE_Expediteur", "BE_Expediteur_MAG", "Expediteur_Nom"),
+        "BE_Destinataire": _get_val("BE_Destinataire"),
+        "ID": bene_id_new,
+        "Telephone": bene_tel_new,
+        "_STATUS": "new",
+    }
+    override_map_lower = {k.lower(): v for k, v in override_map.items()}
+
     new_row = []
     for h in headers:
         h_low = str(h or "").lower()
-        base_val = plan_full_dict.get(h, merged.get(h, merged_lower.get(h_low, "")))
-        if "destination" in h_low and "exp" not in h_low:
+        if h in override_map:
+            base_val = override_map[h]
+        elif h_low in override_map_lower:
+            base_val = override_map_lower[h_low]
+        else:
+            base_val = plan_full_dict.get(h, merged.get(h, merged_lower.get(h_low, "")))
+        if "destination_vol" in h_low:
+            base_val = _if_empty(base_val, vol_info.get("Destination", ""))
+        elif "destination" in h_low and "exp" not in h_low:
             base_val = dest_iata or _get_val("Destination", "Dest_IATA", "Dest_Ville")
-        elif "date" in h_low and "maj" not in h_low:
-            base_val = _normalize_date(date_new)
-        elif "heure" in h_low and "maj" not in h_low:
-            base_val = heure_new
-        elif "vol" in h_low and "date" not in h_low and "heure" not in h_low:
+        elif h_low in ("date_key", "date_vol") or ("date" in h_low and "maj" not in h_low):
+            base_val = date_new_norm
+        elif "heure_vol_dt" in h_low:
+            base_val = _combine_dt(date_new_norm, time_new_parsed or vol_info.get("Heure_dt"))
+        elif h_low in ("heure_vol", "heure"):
+            base_val = _fmt_time(time_new_parsed or vol_info.get("Heure_dt") or heure_new)
+        elif "heure_min" in h_low:
+            t_ref = time_new_parsed or vol_info.get("Heure_dt")
+            base_val = t_ref.hour * 60 + t_ref.minute if isinstance(t_ref, _dt.time) else base_val
+        elif "vol_key" in h_low:
+            base_val = _norm_vol(vol_new)
+        elif "routing_vol" in h_low:
+            base_val = _if_empty(base_val, vol_info.get("Routing", ""))
+        elif "routing" in h_low:
+            base_val = _if_empty(base_val, vol_info.get("Routing", ""))
+        elif "vol" in h_low and "date" not in h_low and "heure" not in h_low and "bene" not in h_low:
             base_val = vol_new
+        elif "benevole_disp" in h_low:
+            base_val = bene_short_val
         elif "bene" in h_low and "up" not in h_low and "id" not in h_low:
             base_val = (bene_meta.get(h, bene_choice) if bene_changed and bene_meta else (bene_choice or base_val))
-        elif ("be" in h_low and "nb" not in h_low) or ("numero be" in h_low):
-            base_val = be_num
-        elif "nb" in h_low and "colis" in h_low:
+        elif "colis" in h_low:
             base_val = _get_val("BE_Nb_Colis", "Nb_Colis", "BE_Nb_Colis_MAG")
         elif "equiv" in h_low:
             base_val = _get_val("BE_Nb_Equiv", "Equiv_Colis")
         elif "type" in h_low and "bene" not in h_low:
-            base_val = _get_val("BE_Type", "BE_Type_MAG")
+            base_val = _get_val("BE_Type", "BE_Type_MAG") or base_val
         elif "expediteur" in h_low:
-            base_val = _get_val("BE_Expediteur", "BE_Expediteur_MAG", "Expediteur_Nom")
+            base_val = _if_empty(base_val, _get_val("BE_Expediteur", "BE_Expediteur_MAG", "Expediteur_Nom"))
         elif "destinataire" in h_low:
-            base_val = _get_val("BE_Destinataire")
+            base_val = _if_empty(base_val, _get_val("BE_Destinataire"))
         elif "telephone" in h_low:
-            base_val = _get_val("Telephone", "Telephone_BEN_ID")
+            base_val = _if_empty(base_val, _get_val("Telephone", "Telephone_BEN_ID"))
             if bene_changed and bene_meta:
                 base_val = bene_meta.get("Telephone", bene_meta.get("Telephone_BEN_ID", base_val))
+        elif "iata" == h_low.strip():
+            base_val = dest_iata or _if_empty(base_val, vol_info.get("IATA", _get_val("Dest_IATA", "IATA")))
+        elif h_low in ("dest_ville", "ville"):
+            base_val = _if_empty(base_val, _get_val("Dest_Ville", "Ville", fallback=dest_iata))
+        elif "be_dest" in h_low or "destinataire" in h_low:
+            base_val = _if_empty(base_val, _get_val("BE_Destinataire"))
+        elif "be_exp" in h_low or "expediteur" in h_low:
+            base_val = _if_empty(base_val, _get_val("BE_Expediteur", "Expediteur_Nom"))
+        elif h_low in ("id", "id_benevole", "id_ben_id"):
+            base_val = _if_empty(base_val, _get_val("ID", "ID_BENEVOLE", "ID_BEN_ID"))
+        elif "be_key" in h_low:
+            base_val = _norm_be(be_num)
+        elif h_low.strip() in ("_status", "status"):
+            base_val = "new"
+        elif ("numero be" in h_low) or (h_low.startswith("be_") and "nb" not in h_low and "exp" not in h_low and "dest" not in h_low and "type" not in h_low and "bene" not in h_low and "colis" not in h_low):
+            base_val = be_num
         new_row.append(base_val)
     ws_export.append(new_row)
     last_row_idx = ws_export.max_row
@@ -638,11 +901,12 @@ def _apply_planning_update(
     ws_plan.cell(row=target_row, column=9).value = _fmt_vol(vol_new) or (base_plan_vals[8] if len(base_plan_vals) >= 9 else None)  # I
     ws_plan.cell(row=target_row, column=10).value = _fmt_time(heure_new) or (base_plan_vals[9] if len(base_plan_vals) >= 10 else None)  # J
     ws_plan.cell(row=target_row, column=11).value = be_num or (base_plan_vals[10] if len(base_plan_vals) >= 11 else None)      # K
-    ws_plan.cell(row=target_row, column=12).value = _get_val("BE_Nb_Colis", "Nb_Colis", "BE_Nb_Colis_MAG") or (base_plan_vals[11] if len(base_plan_vals) >= 12 else None)
-    ws_plan.cell(row=target_row, column=13).value = _get_val("BE_Type", "BE_Type_MAG") or (base_plan_vals[12] if len(base_plan_vals) >= 13 else None)
+    be_colis_new = _get_val("BE_Nb_Colis", "Nb_Colis", "BE_Nb_Colis_MAG", fallback="")
+    ws_plan.cell(row=target_row, column=12).value = be_colis_new or (base_plan_vals[11] if len(base_plan_vals) >= 12 else None)
+    ws_plan.cell(row=target_row, column=13).value = _get_val("BE_Type", "BE_Type_MAG", fallback="") or (base_plan_vals[12] if len(base_plan_vals) >= 13 else None)
     ws_plan.cell(row=target_row, column=16).value = _get_val("BE_Expediteur", "BE_Expediteur_MAG") or (base_plan_vals[15] if len(base_plan_vals) >= 16 else None)
     ws_plan.cell(row=target_row, column=17).value = _get_val("BE_Destinataire") or (base_plan_vals[16] if len(base_plan_vals) >= 17 else None)
-    for c in range(1, ws_plan.max_column + 1):
+    for c in range(4, 18):  # D à Q uniquement
         ws_plan.cell(row=target_row, column=c).fill = fill_blue
 
     wb.save(path)
@@ -659,8 +923,8 @@ def render_tab_shipments_update():
 
     with st.spinner("Chargement des paramètres…"):
         df_paramdest, df_paramexpediteur, df_parambenev, _ = load_parameters()
-    df_vols = load_vols_df()
-    df_dispos_raw = load_benevoles()
+    df_vols = get_vols_df_cached()
+    df_dispos_raw = get_benevoles_cached()
     df_dispos = _prepare_dispo(df_dispos_raw)
 
     # Sélecteur semaine (tri décroissant)
@@ -686,11 +950,48 @@ def render_tab_shipments_update():
     choice_week_label = st.selectbox("Choisir la semaine", week_labels, index=0)
     selected_week, selected_year = week_map.get(choice_week_label, weeks[0])
 
+    # Sélection de la version du planning (recherche fichiers vX)
+    planning_candidates = _find_planning_files_for_week(selected_week, selected_year)
+    chosen_path = None
+    if planning_candidates:
+        labels = []
+        path_map = {}
+        for p in planning_candidates:
+            major, minor = _parse_version_from_name(p)
+            ver_label = f"v{major}" + (f"-{minor}" if minor else "")
+            label = f"{ver_label} — {p.name}"
+            labels.append(label)
+            path_map[label] = p
+        # ordre déjà décroissant, on garde index 0
+        choice_label = st.selectbox("Choisir la version du planning", labels, index=0)
+        chosen_path = path_map.get(choice_label)
+    else:
+        st.info("Aucune version de planning trouvée pour cette semaine, recherche par défaut.")
+
     # Aperçu du planning validé (OneDrive)
-    df_preview, msg_preview, preview_path = _load_planning_preview(selected_week, selected_year)
+    df_preview, msg_preview, preview_path = _load_planning_preview_with_path(selected_week, selected_year, chosen_path)
     with st.expander("Aperçu du planning sélectionné", expanded=False):
         st.caption(msg_preview)
         if df_preview is not None and not df_preview.empty:
+            df_preview = _coerce_display_types(df_preview)
+            # Harmonise dates/heures pour éviter les erreurs Arrow
+            for col in df_preview.columns:
+                if "Date" in col:
+                    df_preview[col] = pd.to_datetime(df_preview[col], errors="coerce", dayfirst=True)
+                    df_preview[col] = df_preview[col].dt.strftime("%d/%m/%y")
+                if "Heure" in col:
+                    df_preview[col] = df_preview[col].apply(
+                        lambda t: t.strftime("%Hh%M") if isinstance(t, (dt.time, pd.Timestamp)) else str(t)
+                    )
+            # Catch-all : toute valeur datetime/time restante -> str
+            def _fmt_cell(v):
+                if isinstance(v, (dt.datetime, dt.date, pd.Timestamp)):
+                    return v.strftime("%d/%m/%y") if pd.notna(v) else ""
+                if isinstance(v, dt.time):
+                    return v.strftime("%Hh%M")
+                return v
+
+            df_preview = df_preview.apply(lambda col: col.map(_fmt_cell))
             st.dataframe(df_preview.head(100), height=360, hide_index=True, width="stretch")
         else:
             st.warning("Aucun aperçu disponible pour cette semaine.")
@@ -714,20 +1015,39 @@ def render_tab_shipments_update():
     if df_be_all.empty:
         st.info("Aucun BE identifié (numéro manquant).")
         return
-    df_be_all = df_be_all.sort_values(by=["Destination", "BE_Numero_Str"])
-    be_lookup = df_be_all.drop_duplicates(subset=["BE_Numero_Str"]).set_index("BE_Numero_Str")
+    # Mapping IATA pour l'affichage
+    def _dest_iata(val):
+        return _dest_to_iata(val, df_paramdest)
+    df_be_all["Dest_IATA_Label"] = df_be_all.get("Destination", "").apply(_dest_iata)
+    # Normalisation BE : clé unique sur 6 chiffres, priorité aux lignes issues du planning et aux clés non "00xxxx"
+    df_be_all["BE_Key"] = df_be_all["BE_Numero_Str"].apply(_norm_be).str.zfill(6)
+    df_be_all["BE_Num_Display"] = df_be_all["BE_Key"]  # pour affichage unique
+    df_be_all["Source_rank"] = df_be_all.get("Source", "").astype(str).str.lower().eq("planning").astype(int)
+    df_be_all["Prefix_rank"] = (~df_be_all["BE_Key"].str.startswith("00")).astype(int)
+    df_be_all["TAIL4"] = df_be_all["BE_Key"].str[-4:]
+    # Si une clé commence par 00 mais qu'une clé non-00 existe avec les mêmes 4 derniers digits, on retire la clé 00
+    has_non_zero_tail = df_be_all.groupby("TAIL4")["Prefix_rank"].transform(lambda s: (s == 1).any())
+    mask_drop = (df_be_all["BE_Key"].str.startswith("00")) & has_non_zero_tail
+    df_be_all = df_be_all[~mask_drop]
+    df_be_all = df_be_all.sort_values(
+        by=["Dest_IATA_Label", "TAIL4", "Prefix_rank", "Source_rank", "BE_Key"],
+        ascending=[True, True, False, False, True],
+    )
+    # Suppression stricte des doublons de clés (conserver la 1ère occurrence déjà triée)
+    df_be_all = df_be_all[~df_be_all["BE_Key"].duplicated(keep="first")]
+    be_lookup = df_be_all.set_index("BE_Key")
 
     def _format_be_option(num_str: str) -> str:
         if num_str in be_lookup.index:
             r = be_lookup.loc[num_str]
-            dest = r.get("Destination", "")
+            dest = str(r.get("Dest_IATA_Label", r.get("Destination", "")) or "").upper()
             nb = pd.to_numeric(r.get("BE_Nb_Colis", 0), errors="coerce")
-            nb_int = int(nb) if pd.notna(nb) else r.get("BE_Nb_Colis", "")
-            be_type = r.get("BE_Type", "")
+            nb_int = int(nb) if pd.notna(nb) else (r.get("BE_Nb_Colis", "") or "")
+            be_type = str(r.get("BE_Type", "") or "").upper()
             date_disp = _fmt_date_long(r.get("Date_Vol", ""))
-            src = str(r.get("Source", "")).lower()
-            date_part = date_disp if (src == "planning" and date_disp) else "A planifier"
-            return f"{dest} | BE {num_str} — {nb_int} colis — {be_type} — {date_part}"
+            date_part = date_disp if date_disp not in (None, "", "NaT") else "A planifier"
+            be_disp = str(r.get("BE_Num_Display", num_str)).zfill(6)
+            return f"{dest} - BE {be_disp} - {nb_int} colis - {be_type} - {date_part}"
         return str(num_str)
 
     selected_be = st.selectbox(
@@ -740,7 +1060,7 @@ def render_tab_shipments_update():
         return
 
     be_row = be_lookup.loc[selected_be]
-    dest_raw = be_row.get("Destination", "")
+    dest_raw = be_row.get("Destination", be_row.get("Dest_IATA_Label", ""))
     dest_iata = _dest_to_iata(dest_raw, df_paramdest)
     date_initial = be_row.get("Date_Vol", "")
     date_initial_long = _fmt_date_long(date_initial)
@@ -865,6 +1185,20 @@ def render_tab_shipments_update():
     st.markdown(f"**Action prévue :** {action_sentence}")
     btn_disabled = action_requires_assignment and (not date_new_long or not vol_new or not bene_choice)
 
+    def _open_file(path_obj: Path | None):
+        if not path_obj:
+            return
+        try:
+            import platform, subprocess, os
+            if platform.system() == "Darwin":
+                subprocess.Popen(["open", str(path_obj)])
+            elif platform.system() == "Windows":
+                os.startfile(str(path_obj))  # type: ignore[attr-defined]
+            else:
+                subprocess.Popen(["xdg-open", str(path_obj)])
+        except Exception:
+            pass
+
     payload = {
         "week": selected_week,
         "year": selected_year,
@@ -883,7 +1217,7 @@ def render_tab_shipments_update():
         "be_info": be_row.to_dict(),
     }
 
-    if st.button("Valider la mise à jour", type="primary", disabled=btn_disabled):
+    if st.button("Valider le planning et exporter en Excel + PDF", type="primary", disabled=btn_disabled):
         if not preview_path or not Path(preview_path).exists():
             st.error("Impossible de trouver le fichier planning à mettre à jour.")
             return
@@ -905,6 +1239,29 @@ def render_tab_shipments_update():
                 bene_changed=bene_changed,
             )
             st.success("Planning Excel mis à jour.")
+            try:
+                from openpyxl import load_workbook
+                wb_ver = load_workbook(Path(preview_path))
+                ws_ver = wb_ver.worksheets[0]
+                try:
+                    cur_ver = ws_ver["Q1"].value
+                except Exception:
+                    cur_ver = None
+                try:
+                    cur_int = int(cur_ver) if cur_ver not in (None, "") else 0
+                except Exception:
+                    cur_int = 0
+                ws_ver["Q1"].value = cur_int + 1
+                wb_ver.save(Path(preview_path))
+            except Exception as e_ver:
+                st.warning(f"Version non incrémentée : {e_ver}")
+            try:
+                pdf_path = export_first_sheet_to_pdf(Path(preview_path))
+                st.success(f"PDF généré : {pdf_path.name}")
+                _open_file(Path(preview_path))
+                _open_file(pdf_path)
+            except Exception as e_pdf:
+                st.warning(f"PDF non généré automatiquement : {e_pdf}")
         except Exception as e:
             st.error(f"Erreur lors de la mise à jour du planning : {e}")
             return

@@ -2,9 +2,9 @@
   "mode": "real",
   "simulation_id": null,
   "rarity_mode": 1,
-  "total_be": 12,
-  "be_planned": 7,
-  "be_unplanned": 5,
-  "vols_with_be": 4,
-  "benevoles_used": 3
+  "total_be": 16,
+  "be_planned": 13,
+  "be_unplanned": 3,
+  "vols_with_be": 7,
+  "benevoles_used": 6
 }

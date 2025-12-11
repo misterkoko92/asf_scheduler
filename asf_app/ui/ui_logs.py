@@ -180,6 +180,14 @@ def render_tab_logs():
         key="log_content_display"
     )
 
+    # Bouton pour afficher le contenu brut (diagnostic)
+    with st.expander("Afficher le contenu brut (diagnostic)"):
+        try:
+            raw = LOG_FILE.read_bytes()
+            st.code(raw.decode("utf-8", errors="replace"))
+        except Exception as e:
+            st.error(f"Erreur lecture brut : {e}")
+
     # ----------------------------------------------------------------------
     # Téléchargement
     # ----------------------------------------------------------------------
@@ -195,7 +203,14 @@ def render_tab_logs():
     # Reload
     # ----------------------------------------------------------------------
     if reload_now:
-        st.experimental_rerun()
+        # Compat Streamlit >=1.30 (st.rerun) et anciens (experimental_rerun)
+        try:
+            if hasattr(st, "rerun"):
+                st.rerun()
+            else:
+                st.experimental_rerun()
+        except Exception:
+            pass
 
     st.markdown("---")
 

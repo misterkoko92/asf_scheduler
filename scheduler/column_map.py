@@ -25,6 +25,16 @@ column_map_mag_central = {
     "DELAI AU DEPART/PN1":   "BE_Delai_Depart",
     "Statut BE":               "BE_Statut",
     "Plannification Spéciale": "BE_Special",
+    "Commentaires / Historique": "Commentaires",
+    "Controle Planning OK / Litige / Résolu": "Controle_Planning",
+    "Controle Expédition OK / Litige / Résolu2": "Controle_Expedition",
+    "Controle Réception OK / Litige / Résolu": "Controle_Reception",
+    "N° Facture":            "Numero_Facture",
+    "Facture Envoyée":       "Facture_Envoyee",
+    "Facture payée (vérif avec Compta)": "Facture_Payee",
+    # Colonnes vides/techniques à ignorer
+    "Unnamed: 22": "_IGNORE_22",
+    "Unnamed: 23": "_IGNORE_23",
 }
 
 # =============================================================================
@@ -86,6 +96,8 @@ column_map_vols = {
     "base num vol":        "NumVol_Base",
     "base heure vol":      "Heure_Base",
     "base routing":        "Routing",
+    # Colonnes techniques à ignorer
+    "Unnamed: 11":         "_IGNORE_11",
 }
 
 # =============================================================================
@@ -117,24 +129,4 @@ column_map_benev_dispo = {
     "DATE":          "Date",
     "HEURE_ARRIVEE": "Heure_Arrivee",
     "HEURE_DEPART":  "Heure_Depart",
-}
-
-# =============================================================================
-# PLANNING EXCEL
-# =============================================================================
-column_map_planning = {
-    "D": "nom",
-    "F": "destination_nom",
-    "G": "destination_iata",
-    "H": "routing",
-    "I": "vol_info",
-    "J": "heure",
-    "K": "be",
-    "L": "nb_colis",
-    "M": "type",
-    "O": "date_transfert",
-    "P": "expediteur",
-    "Q": "destinataire",
-    "HEURE DE VOL" : "heure",
-    "HEURE": "heure",
 }

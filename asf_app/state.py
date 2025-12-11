@@ -64,6 +64,9 @@ class AppState:
     # ---------------------------
     current_week: Optional[int] = None
     current_year: Optional[int] = None
+    api_start_date: Optional[Any] = None
+    api_end_date: Optional[Any] = None
+    vols_source: str = "excel"  # excel | api
 
     # ---------------------------
     # PLANNING GÉNÉRÉ

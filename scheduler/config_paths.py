@@ -8,6 +8,15 @@ import unicodedata
 import glob
 from datetime import datetime
 
+IS_STREAMLIT_CLOUD = bool(
+    os.getenv("STREAMLIT_RUNTIME")
+    or os.getenv("STREAMLIT_SERVER_ENABLED")
+    or os.getenv("STREAMLIT_BROWSER_GAP_DETECTION")
+)
+CLOUD_MESSAGE = (
+    "Pas de chargement automatique sur Streamlit Cloud — "
+    "merci de sélectionner manuellement TABLEAU DE BORD, PLANNING BENEVOLE et VOLS."
+)
 # =============================================================================
 # NORMALISATION & BASES
 # =============================================================================
@@ -229,7 +238,9 @@ def prepare_paths(copy_sources: bool = True) -> None:
     TMP_DIR.mkdir(parents=True, exist_ok=True)
     OUTPUT_PLANNING_DIR.mkdir(parents=True, exist_ok=True)
 
-    if copy_sources:
+    effective_copy = copy_sources and not IS_STREAMLIT_CLOUD
+
+    if effective_copy:
         bene_src = PLANNING_BENEVOLES_SRC if PLANNING_BENEVOLES_SRC.exists() else PLANNING_BENEVOLES_SRC_LEGACY
         TABLEAU_DE_BORD = _copy_to_tmp(TABLEAU_DE_BORD_SRC, "TABLEAU_DE_BORD.xlsx")
         PLANNING_BENEVOLES = _copy_to_tmp(bene_src, "PLANNING_BENEVOLES.xlsx")

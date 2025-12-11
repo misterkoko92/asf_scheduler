@@ -9,6 +9,14 @@ import platform
 import subprocess
 import pandas as pd
 import re
+import os
+import streamlit as st
+
+IS_STREAMLIT_CLOUD = bool(
+    os.getenv("STREAMLIT_RUNTIME")
+    or os.getenv("STREAMLIT_SERVER_ENABLED")
+    or os.getenv("STREAMLIT_BROWSER_GAP_DETECTION")
+)
 
 def _encode_for_whatsapp(text: str) -> str:
     """Encode proprement un texte en UTF-8 + URL encoding."""
@@ -19,6 +27,10 @@ def _encode_for_whatsapp(text: str) -> str:
 
 def _open_whatsapp(url: str):
     """Ouvre WhatsApp sans envoyer le message (Mac/Windows)."""
+    if IS_STREAMLIT_CLOUD:
+        st.info("Ouverture WhatsApp désactivée sur Streamlit Cloud. Copiez/collez le lien ci-dessous.")
+        st.code(url)
+        return
     system = platform.system().lower()
     if "darwin" in system:          # macOS
         subprocess.Popen(["open", url])

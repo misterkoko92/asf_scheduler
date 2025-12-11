@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import os
-from datetime import datetime
+from datetime import datetime, date, timedelta
 import pandas as pd
 import streamlit as st
 from pathlib import Path
@@ -26,11 +26,14 @@ from scheduler.config_paths import (
     PLANNING_BENEVOLES_SRC,
     VOLS_SRC,
     prepare_paths,
+    IS_STREAMLIT_CLOUD,
+    CLOUD_MESSAGE,
 )
 
 # Loaders normalisés
 from loaders.universal_loader import load_and_normalize
 from loaders.load_shipments import load_shipments
+from loaders.load_vols_api import load_vols_api, store_vols_api_sheet
 from scheduler.column_map import (
     column_map_mag_central,
     column_map_param_be,
@@ -67,6 +70,31 @@ def ensure_tmp_file(src_path: Path, filename: str) -> Path:
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src_path, dst)
     return dst
+
+
+def pick_planning_dates(state):
+    """
+    Sélecteur de période de planning (début/fin) stocké dans le state.
+    """
+    today = date.today()
+    next_monday = today + timedelta(days=(7 - today.weekday()))
+    default_start = state.api_start_date or next_monday
+    default_end = state.api_end_date or (default_start + timedelta(days=6))
+
+    st.subheader("🗓️ Période du planning")
+    col_s1, col_s2 = st.columns(2)
+    with col_s1:
+        start = st.date_input("Date de début", value=default_start, key="plan_start")
+    with col_s2:
+        # La date de fin suit automatiquement la date de début (+6)
+        auto_end = start + timedelta(days=6)
+        st.write(f"Date de fin (auto) : **{auto_end:%d/%m/%Y}**")
+        end = auto_end
+
+    if end < start:
+        st.error("La date de fin doit être après la date de début.")
+    state.api_start_date = start
+    state.api_end_date = end
 
 
 def benev_last_message(path: Path) -> str:
@@ -152,12 +180,17 @@ def load_vols_file(state, force=False):
         return
 
     try:
-        df_vols = load_and_normalize(state.vols_tmp, SHEET_VOLS,
-                                     column_map_vols, header=0)
-        state.df_vols = df_vols
-
-    except Exception as e:
-        st.error(f"❌ Erreur chargement Vols : {e}")
+        # Préférence : charger via loader complet (inclut onglets API + normalisation)
+        from loaders.load_vols import load_vols_df
+        state.df_vols = load_vols_df()
+    except Exception:
+        # Fallback minimal : onglet Vols normalisé
+        try:
+            df_vols = load_and_normalize(state.vols_tmp, SHEET_VOLS,
+                                         column_map_vols, header=0)
+            state.df_vols = df_vols
+        except Exception as e:
+            st.error(f"❌ Erreur chargement Vols : {e}")
 
 
 # -------------------------------------------------------------------------
@@ -243,6 +276,10 @@ def render_tab_inputs():
     st.header("📁 Fichiers d’entrée — OneDrive + TMP")
     state = get_state()
 
+    cloud_mode = IS_STREAMLIT_CLOUD
+    if cloud_mode:
+        st.warning(CLOUD_MESSAGE)
+
     # Initialisation TMP si besoin (copies déjà préparées côté moteur)
     if state.tdb_tmp is None:
         state.tdb_tmp = TABLEAU_DE_BORD
@@ -251,14 +288,20 @@ def render_tab_inputs():
     if state.vols_tmp is None:
         state.vols_tmp = VOLS
 
-    # Chargements
-    load_tdb_file(state)
-    load_benev_file(state)
-    load_vols_file(state)
+    # Chargements (évite d'afficher des erreurs sur Cloud si fichiers vides)
+    if not cloud_mode or state.tdb_tmp.stat().st_size > 0:
+        load_tdb_file(state)
+    if not cloud_mode or state.benev_tmp.stat().st_size > 0:
+        load_benev_file(state)
+    if not cloud_mode or state.vols_tmp.stat().st_size > 0:
+        load_vols_file(state)
 
     # ----- bouton refresh global ----
-    if st.button("🔄 Recharger TOUS les fichiers depuis OneDrive"):
+    if not cloud_mode and st.button("🔄 Recharger TOUS les fichiers depuis OneDrive"):
         refresh_all(state)
+
+    # Sélecteur de période
+    pick_planning_dates(state)
 
     col_tdb, col_benev, col_vols = st.columns(3)
 
@@ -288,7 +331,7 @@ def render_tab_inputs():
         except Exception as e:
             st.error(f"❌ Erreur BE : {e}")
 
-        if st.button("🔄 Recharger TDB depuis OneDrive"):
+        if (not cloud_mode) and st.button("🔄 Recharger TDB depuis OneDrive"):
             refresh_from_onedrive(state, TABLEAU_DE_BORD_SRC, "tdb", load_tdb_file)
 
         file = st.file_uploader("Importer TABLEAU_DE_BORD.xlsx", type=["xlsx"], key="up_tdb")
@@ -304,7 +347,7 @@ def render_tab_inputs():
         st.write(f"🕒 Modifié : {pretty_mtime(state.benev_tmp)}")
         st.write(f"Dernier message traité : {benev_last_message(state.benev_tmp)}")
 
-        if st.button("🔄 Recharger Bénévoles depuis OneDrive"):
+        if (not cloud_mode) and st.button("🔄 Recharger Bénévoles depuis OneDrive"):
             refresh_from_onedrive(state, PLANNING_BENEVOLES_SRC, "benev", load_benev_file)
 
         file = st.file_uploader("Importer Planning Bénévoles.xlsx", type=["xlsx"], key="up_benev")
@@ -323,7 +366,8 @@ def render_tab_inputs():
         try:
             dfv = state.df_vols
             if dfv is not None and "Date_Vol" in dfv.columns:
-                dates = pd.to_datetime(dfv["Date_Vol"], errors="ignore")
+                dates = pd.to_datetime(dfv["Date_Vol"], errors="coerce", dayfirst=True, format="%d/%m/%y")
+                dates = dates.dropna()
                 if not dates.empty:
                     dmin, dmax = dates.min(), dates.max()
                     st.write(f"🗓️ Du {dmin:%d/%m} au {dmax:%d/%m} "
@@ -331,9 +375,68 @@ def render_tab_inputs():
         except Exception as e:
             st.error(f"❌ Erreur lecture Vols : {e}")
 
-        if st.button("🔄 Recharger Vols depuis OneDrive"):
-            refresh_from_onedrive(state, VOLS_SRC, "vols", load_vols_file)
+        source_choice = st.radio(
+            "Source vols",
+            ["Fichier Excel", "API Air France (CDG ➜ ParamDest, AF)"],
+            index=0 if state.vols_source != "api" else 1,
+        )
+        state.vols_source = "api" if source_choice.endswith("AF)") else "excel"
 
-        file = st.file_uploader("Importer Vols.xlsx", type=["xlsx"], key="up_vols")
-        if file:
-            overwrite_tmp_file(file, state, "vols", load_vols_file)
+        if state.vols_source == "api":
+            st.info(
+                "Appel direct API Air France (origin CDG, operating AF) pour les destinations ParamDest. "
+                "Limite 1 requête/s et 100/jour. Clé attendue dans `AF_API_KEY` (env ou secrets)."
+            )
+            cache_info = ""
+            cache_path = get_tmp_dir() / "vols_api_cache.parquet"
+            if cache_path.exists():
+                mtime = datetime.fromtimestamp(cache_path.stat().st_mtime)
+                cache_info = f"(cache du {mtime:%d/%m à %Hh%M})"
+                st.write(f"Cache disponible {cache_info}")
+                if st.button(f"Charger le dernier cache"):
+                    try:
+                        state.df_vols = pd.read_parquet(cache_path)
+                        st.success(f"Vols chargés depuis cache {cache_info}")
+                    except Exception as e:
+                        st.error(f"❌ Erreur lecture cache : {e}")
+            else:
+                st.write("Aucun cache API disponible pour l'instant.")
+
+            if state.api_start_date and state.api_end_date:
+                if st.button("Appeler l'API Air France"):
+                    try:
+                        df_api = load_vols_api(state.api_start_date, state.api_end_date)
+                        state.df_vols = df_api
+                        if df_api is not None:
+                            st.success(f"{len(df_api)} vols chargés via API (du {state.api_start_date:%d/%m} au {state.api_end_date:%d/%m}).")
+                            try:
+                                df_api.to_parquet(cache_path, index=False)
+                            except Exception:
+                                pass
+                            # Sauvegarde dans Vols.xlsx (feuille API-SXX-YYYY en dernière position)
+                            try:
+                                sheet_name = store_vols_api_sheet(df_api, state.api_start_date)
+                                st.info(f"Données API sauvegardées dans VOLS.xlsx (onglet {sheet_name}).")
+                                # Copie dans la version TMP (VOLS) pour affichage immédiat
+                                try:
+                                    from loaders.load_vols_api import copy_api_sheet_to_tmp
+                                    copy_api_sheet_to_tmp(sheet_name)
+                                    from loaders.load_vols import load_vols_df
+                                    state.df_vols = load_vols_df()
+                                except Exception:
+                                    pass
+                            except Exception as e:
+                                st.warning(f"Vols API chargés mais non sauvegardés dans Excel : {e}")
+                        else:
+                            st.warning("Aucun vol retourné par l'API.")
+                    except Exception as e:
+                        st.error(f"❌ Erreur API AF : {e}")
+            else:
+                st.warning("Sélectionne une période avant d'appeler l'API.")
+        else:
+            if (not cloud_mode) and st.button("🔄 Recharger Vols depuis OneDrive"):
+                refresh_from_onedrive(state, VOLS_SRC, "vols", load_vols_file)
+
+            file = st.file_uploader("Importer Vols.xlsx", type=["xlsx"], key="up_vols")
+            if file:
+                overwrite_tmp_file(file, state, "vols", load_vols_file)

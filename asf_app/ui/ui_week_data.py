@@ -20,7 +20,7 @@ def detect_week(state):
         return None
     if "Date_Vol" not in df_vols.columns:
         return None
-    dates = pd.to_datetime(df_vols["Date_Vol"], errors="coerce").dropna()
+    dates = pd.to_datetime(df_vols["Date_Vol"], errors="coerce", dayfirst=True, format="%d/%m/%y").dropna()
     if dates.empty:
         return None
     return int(dates.min().isocalendar().week)
@@ -31,9 +31,9 @@ def detect_week(state):
 # ======================================================================
 def robust_to_datetime(series):
     try:
-        return pd.to_datetime(series, errors="coerce")
+        return pd.to_datetime(series, errors="coerce", dayfirst=True, format="%d/%m/%y")
     except Exception:
-        return pd.to_datetime(series.astype(str), errors="coerce")
+        return pd.to_datetime(series.astype(str), errors="coerce", dayfirst=True, format="%d/%m/%y")
 
 
 # ======================================================================
@@ -108,11 +108,29 @@ def load_be_moteur():
 # ======================================================================
 def render_tab_week_data():
     state = get_state()
-    week = detect_week(state)
+    if state.api_start_date:
+        week = pd.to_datetime(state.api_start_date).isocalendar().week
+    else:
+        week = detect_week(state)
 
     st.header(f"📊 Données — Semaine {week if week else 'inconnue'}")
 
     col1, col2, col3 = st.columns(3, gap="medium")
+
+    # Mapping ParamDest pour affichages (ville <-> IATA)
+    iata_to_city = {}
+    city_to_iata = {}
+    try:
+        if state.df_param_dest is not None and not state.df_param_dest.empty:
+            for _, r in state.df_param_dest.iterrows():
+                iata = str(r.get("Dest_IATA", "")).upper()
+                city = str(r.get("Dest_Ville", "")).upper()
+                if iata:
+                    iata_to_city[iata] = city or iata
+                if city:
+                    city_to_iata[city] = iata or city
+    except Exception:
+        pass
 
     # ==========================================================================
     # BE PLANIFIABLES
@@ -121,6 +139,13 @@ def render_tab_week_data():
     if df_be is None:
         df_be = pd.DataFrame()
         st.error(f"❌ Erreur BE moteur : {err}")
+    else:
+        # Affichage Destination = Ville si possible
+        if "Destination" in df_be.columns:
+            df_be["Destination"] = df_be.apply(
+                lambda r: iata_to_city.get(str(r.get("IATA", "")).upper(), str(r.get("Destination", ""))),
+                axis=1
+            )
 
     with col1:
         bloc_with_sort(
@@ -139,7 +164,12 @@ def render_tab_week_data():
         tmp = state.df_benev.copy()
         tmp["Date_dt"] = robust_to_datetime(tmp["Date"])
 
-        if week:
+        if state.api_start_date and state.api_end_date:
+            mask = (tmp["Date_dt"] >= pd.to_datetime(state.api_start_date)) & (
+                tmp["Date_dt"] <= pd.to_datetime(state.api_end_date)
+            )
+            tmp = tmp[mask]
+        elif week:
             tmp = tmp[tmp["Date_dt"].dt.isocalendar().week == week]
 
         tmp["Date_fmt"] = tmp["Date_dt"].dt.strftime("%d/%m/%y")
@@ -207,6 +237,16 @@ def render_tab_week_data():
         df_benev["Départ"] = dep_fmt
 
         # --- MASQUAGE : si arrivée vide OU départ vide → ligne supprimée ---
+        # Filtre période choisie (prioritaire si définie)
+        df_benev["Date_dt"] = robust_to_datetime(df_benev["Date"])
+        if state.api_start_date and state.api_end_date:
+            start_dt = pd.to_datetime(state.api_start_date)
+            end_dt = pd.to_datetime(state.api_end_date)
+            mask = (df_benev["Date_dt"] >= start_dt) & (df_benev["Date_dt"] <= end_dt)
+            df_benev = df_benev[mask]
+        elif week:
+            df_benev = df_benev[df_benev["Date_dt"].dt.isocalendar().week == week]
+
         df_benev = df_benev[df_benev["Arrivée"] != ""]
         df_benev = df_benev[df_benev["Départ"] != ""]
 
@@ -226,38 +266,109 @@ def render_tab_week_data():
         )
 
     # ==========================================================================
-    # VOLS — MASQUAGE HEURES VIDES
+    # VOLS — reconstruction propre par segment
     # ==========================================================================
+    # Si le dataframe vols n'est pas chargé, on tente un chargement direct
+    if state.df_vols is None or (hasattr(state.df_vols, "empty") and state.df_vols.empty):
+        try:
+            from loaders.load_vols import load_vols_df
+            state.df_vols = load_vols_df()
+        except Exception:
+            state.df_vols = None
+
     if state.df_vols is not None and not state.df_vols.empty:
-        tmp = state.df_vols.copy()
-        tmp["Date_dt"] = robust_to_datetime(tmp["Date_Vol"])
+        vols_df = state.df_vols.copy()
+        vols_df["Date_dt"] = pd.to_datetime(vols_df["Date_Vol"], errors="coerce", dayfirst=True)
 
-        if week:
-            tmp = tmp[tmp["Date_dt"].dt.isocalendar().week == week]
+        # Période choisie
+        if state.api_start_date and state.api_end_date:
+            start_dt = pd.to_datetime(state.api_start_date)
+            end_dt = pd.to_datetime(state.api_end_date)
+            vols_df = vols_df[(vols_df["Date_dt"] >= start_dt) & (vols_df["Date_dt"] <= end_dt)]
+        elif week:
+            vols_df = vols_df[vols_df["Date_dt"].dt.isocalendar().week == week]
 
-        tmp["Date_fmt"] = tmp["Date_dt"].dt.strftime("%d/%m/%y")
+        def fmt_hour(v):
+            if v is None or v == "" or pd.isna(v):
+                return ""
+            if hasattr(v, "strftime"):
+                return v.strftime("%Hh%M")
+            parsed = pd.to_datetime(v, errors="coerce", dayfirst=True)
+            if pd.isna(parsed):
+                return ""
+            return parsed.strftime("%Hh%M")
 
-        df_flights = tmp[[
-            "Destination_Nom",
-            "Date_fmt",
-            "Heure_Vol",
-            "Routing"
-        ]].rename(columns={
-            "Destination_Nom": "Destination",
-            "Date_fmt": "Date",
-            "Heure_Vol": "Heure",
-        })
+        # Destinations éligibles (BE statut D) — matching sur IATA
+        iata_set = set()
+        try:
+            df_be_planif, _ = load_be_moteur()
+            for _, rr in df_be_planif.iterrows():
+                i = str(rr.get("IATA", "")).strip().upper()
+                if len(i) == 3:
+                    iata_set.add(i)
+        except Exception:
+            pass
+        try:
+            if state.df_be is not None and not state.df_be.empty:
+                df_be_d = state.df_be[state.df_be.get("Status_BE", "").astype(str).str.strip() == "D"]
+                for _, rr in df_be_d.iterrows():
+                    i = str(rr.get("Dest_IATA", rr.get("IATA", ""))).strip().upper()
+                    if len(i) == 3:
+                        iata_set.add(i)
+        except Exception:
+            pass
+        allow_all_dest = len(iata_set) == 0
+        # Debug sets
+        try:
+            print("[Vols dispo] IATA BE D:", sorted(iata_set))
+        except Exception:
+            pass
 
-        # --- masquage des lignes sans heure ---
-        df_flights = df_flights[df_flights["Heure"].notna()]
-        df_flights = df_flights[df_flights["Heure"] != ""]
+        rows = []
+        for _, r in vols_df.iterrows():
+            dtdt = r.get("Date_dt")
+            if pd.isna(dtdt):
+                continue
+            date_str = dtdt.strftime("%d/%m/%y")
+            heure_str = str(r.get("Heure_Vol", "")).strip()
+            if not heure_str:
+                continue
+            routing_raw = str(r.get("Routing", "")) or ""
+            parts = [p.strip().upper() for p in routing_raw.replace(" ", "").replace(",", "-").split("-") if p]
+            # si le dernier est CDG (retour), on le retire pour l'affichage
+            if len(parts) > 1 and parts[-1] == "CDG":
+                parts = parts[:-1]
+            if len(parts) < 2:
+                continue
+            # chaque segment vérifie si la destination est dans les BE
+            for idx in range(1, len(parts)):
+                dest_iata = parts[idx]
+                dest_city = iata_to_city.get(dest_iata, dest_iata)
+                if (not allow_all_dest) and dest_iata not in iata_set:
+                    continue
+                # Affiche toujours le routing complet (sans retour CDG), même si la destination est un stop intermédiaire
+                sub_route = "-".join(parts)
+                rows.append({
+                    "Destination": dest_city,
+                    "Date": date_str,
+                    "Heure": heure_str,
+                    "Routing": sub_route,
+                    "Numero_Vol": r.get("Numero_Vol", ""),
+                    "IATA": dest_iata,
+                    "Source": r.get("Source", "excel"),
+                })
 
-        # tri strict
+        df_flights = pd.DataFrame(rows)
+
         if not df_flights.empty:
-            df_flights = df_flights.sort_values(
-                ["Destination", "Date", "Heure"],
-                kind="mergesort"
-            ).reset_index(drop=True)
+            df_flights = df_flights.sort_values(["Destination", "Date", "Heure", "Numero_Vol"], kind="mergesort").reset_index(drop=True)
+        try:
+            print("[Vols dispo] Lignes retenues:", len(df_flights))
+            if not df_flights.empty:
+                print("[Vols dispo] Dates:", sorted(df_flights["Date"].unique().tolist()))
+                print("[Vols dispo] Dest:", sorted(df_flights["Destination"].unique().tolist()))
+        except Exception:
+            pass
 
     else:
         df_flights = pd.DataFrame()
@@ -266,7 +377,7 @@ def render_tab_week_data():
         bloc_with_sort(
             title="Vols disponibles",
             df=df_flights,
-            sort_options=["Destination", "Date", "Heure"],
+            sort_options=["Destination", "Date", "Heure", "Numero_Vol"],
             default_sort="Destination",
-            min_height=50
+            min_height=50,
         )

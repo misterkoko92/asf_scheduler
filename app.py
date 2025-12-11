@@ -19,6 +19,7 @@ from asf_app.ui.ui_logs import render_tab_logs
 from asf_app.ui.ui_communication.ui_communication import render_tab_communication  # <-- FIX IMPORT
 from asf_app.ui.ui_shipments_update import render_tab_shipments_update
 from asf_app.ui.ui_stats.ui_stats import render_tab_stats
+from asf_app.ui.ui_simulation import render_tab_simulation
 from asf_app.ui.ui_faq import render_tab_faq
 
 from scheduler.config_paths import (
@@ -94,6 +95,7 @@ tabs = st.tabs([
     "📊 Planning",
     "📣 Communication",
     "🚚 Mise à Jour expéditions",
+    "🧪 Simulation",
     "📈 Statistiques",
     "📝 Logs",
     "❓ FAQ / Instructions",
@@ -130,12 +132,16 @@ with tabs[5]:
 
 # ONGLET 7 — STATISTIQUES
 with tabs[6]:
+    render_tab_simulation()
+
+# ONGLET 8 — STATISTIQUES
+with tabs[7]:
     render_tab_stats()
 
-# ONGLET 8 — LOGS
-with tabs[7]:
+# ONGLET 9 — LOGS
+with tabs[8]:
     render_tab_logs()
 
-# ONGLET 9 — FAQ / Instructions
-with tabs[8]:
+# ONGLET 10 — FAQ / Instructions
+with tabs[9]:
     render_tab_faq()

@@ -12,7 +12,7 @@ import shutil
 
 # Excel
 from openpyxl import load_workbook
-from openpyxl.styles import Alignment, Font, Border, Side
+from openpyxl.styles import Alignment, Font, Border, Side, PatternFill
 from openpyxl.cell.cell import MergedCell
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
@@ -26,6 +26,7 @@ from scheduler.planning_enrichment import enrich_planning
 # Scheduler
 from scheduler.core_scheduler import Scheduler
 import scheduler.config as engine_cfg
+from utils.export_pdf import export_first_sheet_to_pdf
 
 # Chemins
 import scheduler.config_paths as cp
@@ -43,9 +44,9 @@ from scheduler.config_paths import (
 )
 
 # Loaders
-from loaders.load_shipments import load_shipments, load_shipments_df
-from loaders.load_vols import load_vols_df
-from loaders.load_benevoles import load_benevoles
+from loaders.load_shipments import load_shipments, get_shipments_df_cached
+from loaders.load_vols import get_vols_df_cached
+from loaders.load_benevoles import get_benevoles_cached
 from loaders.universal_loader import load_and_normalize
 
 # Column maps
@@ -334,26 +335,23 @@ def _export_pdf_via_excel(filepath: Path, sheet_name: str = None) -> None:
         sys_name = platform.system().lower()
         pdf_path = filepath.with_suffix(".pdf")
         if "darwin" in sys_name:
-            # AppleScript : copie la feuille 1 dans un nouveau classeur puis exporte en PDF
-            rename_snippet = ""
+            # AppleScript : ouvre le classeur, copie la feuille cible dans un nouveau classeur, exporte en PDF
+            ws_selector = 'worksheet 1 of wbSource'
             if sheet_name:
-                rename_snippet = f'set name of worksheet 1 of wbTemp to "{sheet_name}"'
+                ws_selector = f'worksheet "{sheet_name}" of wbSource'
             script = f'''
 set theFile to POSIX file "{filepath}"
 set pdfFile to POSIX file "{pdf_path}"
 tell application "Microsoft Excel"
     activate
     set wbSource to open theFile
-    -- copie la feuille cible (ou la 1ère) dans un nouveau classeur
-    if (count of worksheets of wbSource) > 0 then
-        copy worksheet 1 of wbSource
+    try
+        set wsTarget to {ws_selector}
+        copy wsTarget to new workbook
         set wbTemp to active workbook
-        try
-            {rename_snippet}
-        end try
         save wbTemp in pdfFile as PDF file format
         close wbTemp saving no
-    end if
+    end try
     close wbSource saving no
 end tell
 '''
@@ -362,17 +360,20 @@ end tell
                 raise RuntimeError(res.stderr or res.stdout)
         elif "windows" in sys_name:
             # PowerShell + COM Excel
+            sheet_ps = "1"
+            if sheet_name:
+                sheet_ps = f'"{sheet_name}"'
             ps_cmd = r'''
 $xl = New-Object -ComObject Excel.Application
 $xl.Visible = $false
 $wb = $xl.Workbooks.Open("{xlsx}")
 try {
-    $ws = $wb.Sheets.Item(1)
+    $ws = $wb.Sheets.Item({sheet_sel})
     $ws.ExportAsFixedFormat(0, "{pdf}")
 } catch {}
 $wb.Close($false)
 $xl.Quit()
-'''.format(xlsx=str(filepath).replace("\\","\\\\"), pdf=str(pdf_path).replace("\\","\\\\"))
+'''.format(xlsx=str(filepath).replace("\\","\\\\"), pdf=str(pdf_path).replace("\\","\\\\"), sheet_sel=sheet_ps)
             subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd], check=False)
         # ne rien faire si Linux ou si échec
     except Exception:
@@ -468,8 +469,20 @@ def export_excel_planning(df, week, year, df_vols=None, df_parambenev=None, df_d
         monday = None
     dfp = df.copy().fillna("")
     dfp["DATE"] = pd.to_datetime(dfp.get("Date_Vol", dfp.get("DATE", "")), errors="coerce")
-    dfp["HEURE_VOL"] = pd.to_datetime(dfp.get("Heure_Vol", dfp.get("HEURE VOL", "")), errors="coerce")
-    dfp = dfp.sort_values(by=["DATE", "HEURE_VOL"])
+    # Normaliser heures (remplacer h par :) avant conversion
+    heures_raw = dfp.get("Heure_Vol", dfp.get("HEURE VOL", ""))
+    dfp["HEURE_VOL_DT"] = (
+        pd.to_datetime(
+            heures_raw.astype(str).str.replace("h", ":", regex=False),
+            errors="coerce",
+        )
+    )
+    dfp["HEURE_VOL"] = dfp["HEURE_VOL_DT"]
+    dfp["HEURE_MIN"] = (
+        dfp["HEURE_VOL_DT"].dt.hour.fillna(99).astype(int) * 60
+        + dfp["HEURE_VOL_DT"].dt.minute.fillna(59).astype(int)
+    )
+    dfp = dfp.sort_values(by=["DATE", "HEURE_MIN", "Destination", "Vol"], kind="mergesort")
 
     # Mapping prenom court NOM
     map_bene_to_display = {}
@@ -499,7 +512,7 @@ def export_excel_planning(df, week, year, df_vols=None, df_parambenev=None, df_d
     dfp["ROUTING"] = dfp.get("Routing", dfp.get("ROUTING", "")).astype(str).str.replace(",", "-").str.upper()
     dfp["VOL_AFF"] = dfp.get("Numero_Vol", dfp.get("Vol", dfp.get("Numero_Vol_Aff", ""))).astype(str)
     dfp["VOL_AFF"] = dfp["VOL_AFF"].str.replace(r"\.0$", "", regex=True).apply(lambda x: f"AF {x}" if x and not str(x).upper().startswith("AF") else x)
-    dfp["HEURE_AFF"] = dfp["HEURE_VOL"].dt.strftime("%Hh%M")
+    dfp["HEURE_AFF"] = dfp["HEURE_VOL_DT"].dt.strftime("%Hh%M")
     dfp["BE_NUM"] = dfp.get("BE_Numero", dfp.get("NUMERO BE", dfp.get("BE_Num", ""))).astype(str).str.replace(r"\.0$", "", regex=True)
     # Garder seulement YYNNNN (sans préfixe BE)
     # Normalisation numéro BE
@@ -514,6 +527,7 @@ def export_excel_planning(df, week, year, df_vols=None, df_parambenev=None, df_d
     dfp["BE_EXP"] = dfp.get("BE_Expediteur", "")
     dfp["BE_DEST"] = dfp.get("BE_Destinataire", "")
     dfp["BE_KEY"] = dfp["BE_NUM"].apply(_norm_be)
+    dfp["_STATUS"] = dfp.get("_STATUS", "normal")
 
     # ------------------------------------------------------------------
     # Maj MAG CENTRAL (col J/L) + récup de la date départ MAG utilisée
@@ -577,7 +591,9 @@ def export_excel_planning(df, week, year, df_vols=None, df_parambenev=None, df_d
             pass
         return used_dates
 
-    map_depart_mag = update_mag_central_dates()
+    # ⏸️ Pause temporaire : ne pas écrire dans MAG CENTRAL source pendant l'export.
+    # map_depart_mag = update_mag_central_dates()
+    map_depart_mag = {}
 
     # Date départ MAG issue de MAG central ou fallback vendredi précédent
     def _depart_mag_for(be_key):
@@ -626,8 +642,8 @@ def export_excel_planning(df, week, year, df_vols=None, df_parambenev=None, df_d
                 if r not in keep_rows:
                     ws_plan.row_dimensions[r].hidden = True
             continue
-        df_day = df_day.sort_values(by=["DATE", "HEURE_VOL", "Destination", "VOL_AFF"])
-        for (dt, vol, heure), df_vol in df_day.groupby(["DATE", "VOL_AFF", "HEURE_VOL"]):
+        df_day = df_day.sort_values(by=["DATE", "HEURE_MIN", "VOL_AFF", "Destination"], kind="mergesort")
+        for (dt, hmin, vol), df_vol in df_day.groupby(["DATE", "HEURE_MIN", "VOL_AFF"], sort=False):
             df_vol = df_vol.reset_index(drop=True)
             if current_row > end:
                 break
@@ -636,17 +652,22 @@ def export_excel_planning(df, week, year, df_vols=None, df_parambenev=None, df_d
                 if current_row > end:
                     break
                 is_first = idx == 0
+                status = str(r.get("_STATUS", "normal")).lower()
                 # Bénévole : une seule liste par vol, on ne répète pas au-delà du nb de bénévoles
                 bene_val = bene_list[idx] if idx < len(bene_list) else ""
                 ws_plan.cell(row=current_row, column=4).value = bene_val  # D
                 if is_first:
                     ws_plan.cell(row=current_row, column=6).value = r["VILLE"]      # F
-                    ws_plan.cell(row=current_row, column=7).value = r["IATA"]      # G
-                    ws_plan.cell(row=current_row, column=8).value = r["ROUTING"]   # H
-                    ws_plan.cell(row=current_row, column=9).value = r["VOL_AFF"]   # I
-                    ws_plan.cell(row=current_row, column=10).value = r["HEURE_AFF"]# J
-                ws_plan.cell(row=current_row, column=11).value = r["BE_NUM"]        # K
-                ws_plan.cell(row=current_row, column=12).value = r["BE_COLIS"]      # L
+                    ws_plan.cell(row=current_row, column=7).value = r["IATA"]       # G
+                    ws_plan.cell(row=current_row, column=8).value = r["ROUTING"]    # H
+                    ws_plan.cell(row=current_row, column=9).value = r["VOL_AFF"]    # I
+                    ws_plan.cell(row=current_row, column=10).value = r["HEURE_AFF"] # J
+                be_num_val = r["BE_NUM"]
+                ws_plan.cell(row=current_row, column=11).value = be_num_val        # K
+                be_colis_val = "" if status.startswith("old") else r["BE_COLIS"]
+                ws_plan.cell(row=current_row, column=12).value = be_colis_val      # L
+                if status.startswith("old"):
+                    ws_plan.cell(row=current_row, column=12).value = ""  # vider col L pour suppression
                 ws_plan.cell(row=current_row, column=13).value = r["BE_TYPE"]       # M
                 # Col O : Date départ MAG (dd/mm/yy)
                 dep_mag = r.get("DEPART_MAG")
@@ -659,6 +680,15 @@ def export_excel_planning(df, week, year, df_vols=None, df_parambenev=None, df_d
                 ws_plan.cell(row=current_row, column=15).value = dep_mag_str        # O
                 ws_plan.cell(row=current_row, column=16).value = r["BE_EXP"]        # P
                 ws_plan.cell(row=current_row, column=17).value = r["BE_DEST"]       # Q
+                # Coloration si modif/supp/ajout (D à Q)
+                fill_color = None
+                if status.startswith("old"):
+                    fill_color = PatternFill("solid", fgColor="F8CCCC")  # rouge clair
+                elif status == "new":
+                    fill_color = PatternFill("solid", fgColor="CFE2FF")  # bleu clair
+                if fill_color:
+                    for col_idx in range(4, 18):
+                        ws_plan.cell(row=current_row, column=col_idx).fill = fill_color
                 current_row += 1
             current_row += 2  # 2 lignes vides entre vols
         for r in range(current_row, end + 1):
@@ -707,7 +737,7 @@ def export_excel_planning(df, week, year, df_vols=None, df_parambenev=None, df_d
     df_dispo_export = df_dispos
     if df_dispo_export is None:
         try:
-            df_dispo_export = load_benevoles()
+            df_dispo_export = get_benevoles_cached()
         except Exception:
             df_dispo_export = None
 
@@ -782,96 +812,69 @@ def export_excel_planning(df, week, year, df_vols=None, df_parambenev=None, df_d
     except Exception:
         pass
 
-    wb.save(out_path)
-
-    # Si nom déjà existant, suffixe -vZZ où ZZ = Q1 (si présent)
-    try:
-        version_cell = ws_plan["Q1"].value or ""
-        version_str = str(version_cell).strip()
-        if out_path.exists():
-            # ajouter suffixe
-            suffix = f"-v{version_str}" if version_str else "-v01"
-            out_path_renamed = out_path.with_name(out_path.stem + suffix + out_path.suffix)
-            counter = 1
-            while out_path_renamed.exists():
-                counter += 1
-                out_path_renamed = out_path.with_name(out_path.stem + f"{suffix}-{counter}" + out_path.suffix)
-            out_path.rename(out_path_renamed)
-            out_path = out_path_renamed
-            wb.save(out_path)
-    except Exception:
-        pass
-
-    # Préparer une copie temporaire dédiée au PDF (police Aptos 12, 1ère feuille uniquement)
-    pdf_source = out_path
-    pdf_tmp = None
-    try:
-        pdf_tmp = out_path.with_name(out_path.stem + "_pdf_tmp.xlsx")
-        shutil.copy2(out_path, pdf_tmp)
-        wb_pdf = load_workbook(pdf_tmp)
-        main_sheet = wb_pdf.sheetnames[0] if wb_pdf.sheetnames else None
-        # ne garder que la première feuille
-        if main_sheet:
-            for sh in list(wb_pdf.sheetnames):
-                if sh != main_sheet:
-                    del wb_pdf[sh]
-            ws_pdf = wb_pdf[main_sheet]
-            # Remplacer les formules par leurs valeurs (cached) pour éviter #NAME? avec LibreOffice
-            try:
-                wb_data_only = load_workbook(pdf_tmp, data_only=True)
-                ws_data = wb_data_only[main_sheet]
-            except Exception:
-                ws_data = None
-            aptos_font = Font(name="Aptos", size=12)
-            for row in ws_pdf.iter_rows():
-                for cell in row:
-                    # force police
-                    if cell.value is not None:
-                        cell.font = aptos_font
-                    # injecter valeur calculée si formule
-                    if cell.data_type == "f" and ws_data is not None:
-                        val = ws_data[cell.coordinate].value
-                        cell.value = val
-            try:
-                if wb_data_only:
-                    wb_data_only.close()
-            except Exception:
-                pass
-            wb_pdf.save(pdf_tmp)
-            pdf_source = pdf_tmp
-    except Exception:
-        pdf_source = out_path
-
-    pdf_target = out_path.with_suffix(".pdf")
-
-    # Export PDF fidèle via Excel (mac/Windows) puis fallback LibreOffice (1ère feuille uniquement)
-    try:
-        _export_pdf_via_excel(pdf_source, sheet_name=ws_plan.title)
-    except Exception:
-        pass
-
-    produced_pdf = pdf_source.with_suffix(".pdf")
-    if produced_pdf.exists():
-        # si un PDF a été produit avec le nom temporaire, le renommer vers la cible finale
+    # Déterminer semaine/année depuis A1 si possible
+    def _week_year_from_a1():
+        val = ws_plan["A1"].value
+        wk, yr = week, year
         try:
-            if produced_pdf != pdf_target:
-                if pdf_target.exists():
-                    pdf_target.unlink()
-                Path(produced_pdf).rename(pdf_target)
+            if isinstance(val, datetime):
+                wk = val.isocalendar()[1]
+                yr = val.isocalendar()[0]
+            else:
+                dt = pd.to_datetime(val, errors="coerce", dayfirst=True)
+                if pd.notna(dt):
+                    wk = dt.isocalendar()[1]
+                    yr = dt.isocalendar()[0]
         except Exception:
             pass
+        return int(wk), int(yr)
 
-    # Nettoyage copie temporaire PDF
+    week_final, year_final = _week_year_from_a1()
+
+    # Construire nom final avec version Q1
     try:
-        if pdf_tmp and pdf_tmp.exists():
-            pdf_tmp.unlink()
+        version_cell = ws_plan["Q1"].value
+    except Exception:
+        version_cell = ""
+    version_str = str(version_cell).strip()
+    try:
+        if version_str.isdigit():
+            version_str = f"{int(version_str):02d}"
     except Exception:
         pass
+    if not version_str:
+        version_str = "01"
 
-    # Alerte si aucun PDF n'a été généré (Excel non pilotable ou refus d'autorisation)
-    if not pdf_target.exists():
+    base_name = f"ASFmm - PLANNING SEMAINE N° {week_final:02d} - {year_final} - v{version_str}"
+    planning_dir_final = cp.ASF_ONEDRIVE / "Planning MAB" / f"ASFmm PLANNING {year_final}"
+    planning_dir_final.mkdir(parents=True, exist_ok=True)
+    target_path = planning_dir_final / f"{base_name}.xlsx"
+    counter = 2
+    while target_path.exists():
+        target_path = planning_dir_final / f"{base_name}-{counter}.xlsx"
+        counter += 1
+
+    # Sauvegarder dans le chemin final (déplacement si besoin)
+    wb.save(out_path)
+    if out_path != target_path:
         try:
-            st.warning("PDF non généré : Excel n'a pas pu être piloté (autorisation AppleScript/COM requise).")
+            shutil.move(out_path, target_path)
+        except Exception:
+            # fallback copie
+            wb.save(target_path)
+        out_path = target_path
+
+    wb.save(out_path)
+
+    # Export PDF (1ère feuille) via AppleScript helper
+    pdf_target = out_path.with_suffix(".pdf")
+    try:
+        pdf_path = export_first_sheet_to_pdf(out_path, pdf_target)
+        if not pdf_path.exists():
+            raise RuntimeError("PDF non généré.")
+    except Exception:
+        try:
+            st.warning("PDF non généré : Excel non accessible pour l’export automatique.")
         except Exception:
             pass
 
@@ -897,10 +900,10 @@ def render_tab_planning():
         df_be = load_shipments(df_parambe)
 
     with st.spinner("Chargement vols…"):
-        df_vols = load_vols_df()
+        df_vols = get_vols_df_cached()
 
     with st.spinner("Chargement disponibilités bénévoles…"):
-        df_dispos = load_benevoles()
+        df_dispos = get_benevoles_cached()
 
     st.success("✔ Fichiers chargés")
 
@@ -1164,7 +1167,7 @@ def render_tab_planning():
     # (Style des boutons géré globalement dans app.py)
 
     # BE en statut D (inclut ceux déjà planifiés)
-    df_be_mod = load_shipments_df()
+    df_be_mod = get_shipments_df_cached()
     if df_be_mod.empty:
         st.info("Aucun BE en statut D disponible.")
     else:
@@ -1238,7 +1241,7 @@ def render_tab_planning():
 
         def _fmt_date_long(val):
             try:
-                d = pd.to_datetime(val)
+                d = pd.to_datetime(val, dayfirst=True)
                 if pd.isna(d):
                     return str(val)
             except Exception:

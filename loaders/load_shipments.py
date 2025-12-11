@@ -3,9 +3,23 @@
 
 from typing import List, Dict
 import uuid
+import datetime as dt
 import pandas as pd
 import numpy as np
 
+try:
+    import streamlit as st
+
+    @st.cache_data(show_spinner=False)
+    def _get_shipments_df_cached(planifiables_only: bool = True) -> pd.DataFrame:
+        return load_shipments_df(planifiables_only=planifiables_only)
+
+    def get_shipments_df_cached(planifiables_only: bool = True) -> pd.DataFrame:
+        return _get_shipments_df_cached(planifiables_only=planifiables_only)
+
+except Exception:
+    def get_shipments_df_cached(planifiables_only: bool = True) -> pd.DataFrame:
+        return load_shipments_df(planifiables_only=planifiables_only)
 from scheduler.models import Shipment
 from scheduler.config_paths import TABLEAU_DE_BORD, SHEET_MAG_CENTRAL
 
@@ -22,6 +36,7 @@ from scheduler.column_map import column_map_mag_central
 from scheduler.column_map import column_map_param_be
 from scheduler.format_rules import format_be_numero
 from scheduler.config_paths import SHEET_PARAM_BE
+from loaders.load_params import get_param_be
 
 
 # ======================================================================
@@ -69,6 +84,27 @@ def _normalize(df: pd.DataFrame) -> pd.DataFrame:
         )
 
     return df
+
+
+def _parse_time_generic(val) -> dt.time | None:
+    """Retourne un objet time à partir de nombreux formats (HHhMM, HH:MM, HH:MM:SS, numérique)."""
+    if val in ("", None):
+        return None
+    if isinstance(val, dt.time):
+        return val
+    sval = str(val).strip()
+    for fmt in ("%Hh%M", "%H:%M:%S", "%H:%M"):
+        try:
+            return dt.datetime.strptime(sval, fmt).time()
+        except Exception:
+            continue
+    try:
+        num = float(sval)
+        hours = int(num)
+        minutes = int(round((num - hours) * 60))
+        return dt.time(hour=hours, minute=minutes)
+    except Exception:
+        return None
 
 
 # ======================================================================
@@ -255,10 +291,11 @@ def load_shipments(param_be_raw) -> List[Shipment]:
 # =====================================================================
 # VERSION DATAFRAME — Chargement complet MAG CENTRAL + ParamBE
 # =====================================================================
-def load_shipments_df() -> pd.DataFrame:
+def load_shipments_df(planifiables_only: bool = True) -> pd.DataFrame:
     """
     Charge les BE depuis MAG CENTRAL + ParamBE
     et retourne un DataFrame normalisé (pas une liste).
+    planifiables_only=True => filtre BE_Statut == 'D'
     Utilisable hors Streamlit.
     """
 
@@ -280,14 +317,9 @@ def load_shipments_df() -> pd.DataFrame:
     # 2) Charger ParamBE automatiquement
     # -----------------------------------------------------------
     try:
-        param_be_raw = load_and_normalize(
-            path=TABLEAU_DE_BORD,
-            sheet_name=SHEET_PARAM_BE,
-            mapping=column_map_param_be,
-            header=0,
-        )
+        param_be_raw = get_param_be()
         print(f"ParamBE chargé automatiquement : {len(param_be_raw)} lignes")
-    except Exception as e:
+    except Exception:
         print("⚠️ ParamBE introuvable ou illisible — valeurs par défaut utilisées")
         param_be_raw = pd.DataFrame(columns=["Type", "Priorite", "Coeff_Equiv"])
 
@@ -299,7 +331,8 @@ def load_shipments_df() -> pd.DataFrame:
     # -----------------------------------------------------------
     df = df_raw.copy()
     df["BE_Statut"] = df["BE_Statut"].astype(str).str.strip().str.upper()
-    df = df[df["BE_Statut"] == "D"].copy()
+    if planifiables_only:
+        df = df[df["BE_Statut"] == "D"].copy()
 
     print(f"➡ BE planifiables : {len(df)}")
 
@@ -375,25 +408,86 @@ def load_shipments_df() -> pd.DataFrame:
     df["Equiv_Colis"] = pd.to_numeric(equivs, errors="coerce").fillna(0)
 
     # -----------------------------------------------------------
-    # 5) Nettoyage final
+    # 5) Normalisation de type (entiers / uppercase / dates)
     # -----------------------------------------------------------
-    keep_cols = [
+    def _coerce_int(col: str):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
+
+    for col in [
         "BE_Numero",
         "BE_Nb_Colis",
-        "BE_Type",
-        "BE_Expediteur",
-        "BE_Destinataire",
-        "BE_Douane",
-        "BE_Statut",
-        "Priorite",
+        "BE_Numero_MAG",
+        "BE_Nb_Colis_MAG",
+        "Numero_Facture",
         "Equiv_Colis",
-        "Destination",
-    ]
+    ]:
+        _coerce_int(col)
 
-    # Conserver uniquement les colonnes disponibles
-    keep_cols = [c for c in keep_cols if c in df.columns]
-    df = df[keep_cols].reset_index(drop=True)
+    if "BE_Statut" in df.columns:
+        df["BE_Statut"] = df["BE_Statut"].astype(str).str.strip().str.upper()
+    if "Destination" in df.columns:
+        df["Destination"] = df["Destination"].astype(str).str.strip().str.upper()
+
+    latest_impr_date = None
+    if "BE_Date_Impression" in df.columns:
+        try:
+            latest_impr_date = pd.to_datetime(df["BE_Date_Impression"], errors="coerce").max(skipna=True)
+        except Exception:
+            latest_impr_date = None
+
+    # Dates au format datetime + colonne str JJ/MM/AA (dayfirst)
+    for col in [c for c in df.columns if "Date" in c]:
+        try:
+            dt_col = pd.to_datetime(df[col], errors="coerce", dayfirst=True)
+            df[col] = dt_col.dt.date
+            df[f"{col}_str"] = dt_col.dt.strftime("%d/%m/%y")
+        except Exception:
+            pass
+
+    # Heure_Vol : objet time + colonne formattée HHhMM
+    if "Heure_Vol" in df.columns:
+        df["Heure_Vol"] = df["Heure_Vol"].apply(_parse_time_generic)
+        df["Heure_Vol_str"] = df["Heure_Vol"].apply(lambda t: t.strftime("%Hh%M") if isinstance(t, dt.time) else "")
+        # alias UI
+        df["Heure_Display"] = df["Heure_Vol_str"]
+    # alias UI pour date de vol principale si présente
+    if "BE_Date_Vol" in df.columns:
+        df["Date_Display"] = df["BE_Date_Vol_str"] if "BE_Date_Vol_str" in df.columns else ""
+
+    # Numéro BE format YYNNNN pour l'export (basé sur date impression)
+    def _fmt_be(row):
+        be_raw = row.get("BE_Numero")
+        be_date = row.get("BE_Date_Impression")
+        fmt, _ = format_be_numero(be_raw, be_date, latest_impr_date)
+        return fmt
+
+    df["BE_Numero_YYNNNN"] = df.apply(_fmt_be, axis=1)
+    # Pour le dataframe planif/exports : col BE_Numero au format YYNNNN si dispo
+    df["BE_Numero"] = df["BE_Numero_YYNNNN"].fillna(df["BE_Numero"].astype(str))
+
+    # -----------------------------------------------------------
+    # 6) Nettoyage final : garder toutes les colonnes disponibles
+    # -----------------------------------------------------------
+    # Équivalence colis : assure un type numérique robuste
+    if "Equiv_Colis" in df.columns:
+        df["Equiv_Colis"] = pd.to_numeric(df["Equiv_Colis"], errors="coerce")
+
+    df = df.reset_index(drop=True)
 
     print(f"✔ load_shipments_df OK — {len(df)} lignes, {len(df.columns)} colonnes")
 
     return df
+
+
+# Cache Streamlit (optionnel) pour éviter des relectures multiples dans l'UI
+try:
+    import streamlit as st
+
+    @st.cache_data(show_spinner=False)
+    def get_shipments_df_cached(planifiables_only: bool = True) -> pd.DataFrame:
+        return load_shipments_df(planifiables_only=planifiables_only)
+
+except Exception:
+    def get_shipments_df_cached(planifiables_only: bool = True) -> pd.DataFrame:
+        return load_shipments_df(planifiables_only=planifiables_only)

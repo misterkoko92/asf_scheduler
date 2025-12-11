@@ -18,8 +18,8 @@ from scheduler.config_paths import (
 )
 
 from loaders.load_shipments import load_shipments
-from loaders.load_vols import load_vols
-from loaders.load_benevoles import load_benevoles
+from loaders.load_vols import load_vols, get_vols_df_cached
+from loaders.load_benevoles import get_benevoles_cached
 from loaders.universal_loader import load_and_normalize
 
 from scheduler.column_map import (
@@ -68,12 +68,12 @@ def audit():
     # Chargement vols / bénévoles
     # ----------------------
     print("📗 Chargement vols…")
-    df_vols = load_vols()
+    df_vols = get_vols_df_cached()
     print(f"✔ Vols chargés : {len(df_vols)} lignes\n")
 
 
     print("📙 Chargement disponibilités bénévoles…")
-    df_dispos = load_benevoles()
+    df_dispos = get_benevoles_cached()
 
     # ----------------------
     # Construction d’un planning "raw"

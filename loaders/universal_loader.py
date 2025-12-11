@@ -2,6 +2,15 @@
 # -*- coding: utf-8 -*-
 
 import pandas as pd
+
+def _warn_unmapped_columns(df: pd.DataFrame, mapping: dict, context: str = ""):
+    """Log en console les colonnes non mappées pour diagnostic."""
+    source_cols = set(df.columns)
+    mapped_sources = set(mapping.keys())
+    unmapped = sorted(source_cols - mapped_sources)
+    if unmapped:
+        prefix = f"[UNMAPPED {context}] " if context else "[UNMAPPED] "
+        print(prefix + ", ".join(map(str, unmapped)))
 import unicodedata
 
 
@@ -68,6 +77,10 @@ def fuzzy_match_columns(df: pd.DataFrame, mapping: dict):
     new_cols = {}  # old_column_name → mapped_column_name
 
     for raw_key, final_name in mapping.items():
+        # Colonnes explicitement ignorées
+        if final_name is None:
+            continue
+
         nk = normalize_header(raw_key)
 
         # 1) Correspondance exacte après normalisation
@@ -111,16 +124,34 @@ def load_and_normalize(path, sheet_name, mapping: dict, header=0):
         print(f"[ERROR] load_and_normalize : impossible de lire {path}\n{e}")
         return pd.DataFrame()
 
+    # Retire les colonnes vides type "Unnamed: xx"
+    df = df.loc[:, [c for c in df.columns if not str(c).lower().startswith("unnamed")]]
+
+    # Alerte colonnes non mappées (diagnostic)
+    _warn_unmapped_columns(df, mapping, context=str(sheet_name))
+
     # Mapping intelligent
     df = fuzzy_match_columns(df, mapping)
 
-    # Ajout des colonnes manquantes
+    # Supprimer les colonnes marquées comme ignorées (nom cible qui commence par "_IGNORE")
+    df = df[[c for c in df.columns if not str(c).startswith("_IGNORE")]]
+
+    # Ajout des colonnes manquantes (hors colonnes ignorées)
     for target in mapping.values():
+        if target is None:
+            continue
+        if isinstance(target, str) and target.startswith("_IGNORE"):
+            continue
         if target not in df.columns:
             print(f"[WARN] Colonne manquante ajoutée : {target}")
             df[target] = ""
 
     # Remplir NaN pour éviter toute erreur en aval
     df = df.fillna("")
+
+    # Colonnes "telephone" forcées en texte pour éviter les erreurs Arrow
+    for col in df.columns:
+        if "telephone" in str(col).lower() or "phone" in str(col).lower():
+            df[col] = df[col].astype(str)
 
     return df

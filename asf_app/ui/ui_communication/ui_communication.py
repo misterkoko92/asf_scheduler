@@ -27,7 +27,7 @@ from asf_app.ui.ui_communication.whatsapp_handler import (
     open_whatsapp_for_benevole
 )
 from scheduler.format_rules import format_be_number, format_vol_number
-from loaders.load_shipments import load_shipments_df
+from loaders.load_shipments import get_shipments_df_cached
 
 # Loaders (nouveau)
 from asf_app.ui.loader import load_parameters
@@ -57,16 +57,42 @@ def render_tab_communication():
     st.title("📨 Communication")
 
     # -------------------------------------------------------
-    # 1) Récupérer le planning enrichi depuis PlanningState
+    # 1) Choix de la source (moteur principal ou simulation OR-Tools)
     # -------------------------------------------------------
     planning_state = get_planning_state()
-    df_planning = planning_state.planning
+    df_plan_main = planning_state.planning
+    sim_res = st.session_state.get("sim_result") or {}
+    df_plan_sim = sim_res.get("planning_df")
 
-    if df_planning is None or df_planning.empty:
-        st.warning("⚠️ Le planning n’a pas encore été généré dans l’onglet Planning.")
+    if (df_plan_main is None or df_plan_main.empty) and (df_plan_sim is None or getattr(df_plan_sim, "empty", True)):
+        # Proposer quand même de basculer sur simulation si dispo
+        st.warning("⚠️ Aucun planning principal. Lance une simulation OR-Tools pour alimenter la communication.")
         return
 
-    st.info("✔ Planning enrichi chargé.")
+    options = []
+    if df_plan_main is not None and not df_plan_main.empty:
+        options.append("planning")
+    if df_plan_sim is not None and not getattr(df_plan_sim, "empty", True):
+        options.append("simulation")
+    # fallback si aucune option détectée
+    if not options:
+        st.warning("⚠️ Aucun planning disponible. Génère un planning (onglet Planning) ou lance une simulation.")
+        return
+    default_source = "planning" if "planning" in options else options[0]
+    source = st.radio(
+        "Source du planning pour la communication",
+        options=options,
+        format_func=lambda x: "Moteur principal" if x == "planning" else "Simulation OR-Tools",
+        index=options.index(default_source),
+        horizontal=True,
+    )
+
+    df_planning = df_plan_main if source == "planning" else df_plan_sim
+    if df_planning is None or getattr(df_planning, "empty", True):
+        st.warning("⚠️ Le planning choisi est vide.")
+        return
+
+    st.info("✔ Planning chargé depuis : " + ("Moteur principal" if source == "planning" else "Simulation OR-Tools"))
 
     # -------------------------------------------------------
     # 2) Charger ParamDest / ParamBenev / ParamExp / ParamBE
@@ -87,7 +113,7 @@ def render_tab_communication():
 
     # Compléter Destinataire via mapping BE (MAG CENTRAL + planning), avec tolérance format
     try:
-        df_be = load_shipments_df()
+        df_be = get_shipments_df_cached()
     except Exception:
         df_be = pd.DataFrame()
 
