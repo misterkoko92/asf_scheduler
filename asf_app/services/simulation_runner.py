@@ -16,6 +16,8 @@ def run_ortools_simulation(
     timeout_seconds: int = 180,
     planifiables_only: bool = True,
     verbose: bool = False,
+    priority_mode: str = "colis",
+    data_source_name: str | None = None,
 ) -> Dict[str, Any]:
     """
     Lance le solveur OR-Tools et retourne un dict contenant
@@ -25,5 +27,35 @@ def run_ortools_simulation(
         planifiables_only=planifiables_only,
         timeout_seconds=timeout_seconds,
         verbose=verbose,
+        priority_mode=priority_mode,
+        data_source_name=data_source_name,
     )
 
+
+def run_ortools_simulation_dual(
+    *,
+    timeout_seconds: int = 180,
+    planifiables_only: bool = True,
+    verbose: bool = False,
+    data_source_name: str | None = None,
+) -> Dict[str, Any]:
+    """
+    Lance deux simulations : priorité colis (par défaut) et priorité bénévoles.
+    Retourne un dict {modes: {colis: res, benevoles: res}, selected: 'colis'}.
+    """
+    modes = {}
+    modes["colis"] = run_ortools_simulation(
+        timeout_seconds=timeout_seconds,
+        planifiables_only=planifiables_only,
+        verbose=verbose,
+        priority_mode="colis",
+        data_source_name=data_source_name,
+    )
+    modes["benevoles"] = run_ortools_simulation(
+        timeout_seconds=timeout_seconds,
+        planifiables_only=planifiables_only,
+        verbose=verbose,
+        priority_mode="benevoles",
+        data_source_name=data_source_name,
+    )
+    return {"modes": modes, "selected": "colis"}

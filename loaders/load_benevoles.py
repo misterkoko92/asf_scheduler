@@ -2,33 +2,13 @@
 # -*- coding: utf-8 -*-
 
 import pandas as pd
-from datetime import datetime, time
+from pathlib import Path
 from scheduler.config_paths import PLANNING_BENEVOLES, SHEET_BENEV_DISPO
 from loaders.universal_loader import load_and_normalize
 from scheduler.column_map import column_map_benev_dispo
 from utils.datetime_utils import parse_date_series, normalize_hour_str, parse_time_series
 
-def _parse_excel_time(v) -> time | None:
-    if v is None or str(v).strip() == "":
-        return None
-    if isinstance(v, time):
-        return v
-    if isinstance(v, datetime):
-        return v.time()
-    s = str(v).strip()
-    for fmt in ("%H:%M", "%H:%M:%S"):
-        try:
-            return datetime.strptime(s, fmt).time()
-        except Exception:
-            pass
-    try:
-        vf = float(v)
-        sec = int(vf * 86400)
-        return time(sec // 3600, (sec % 3600) // 60, sec % 60)
-    except Exception:
-        return None
-
-def load_benevoles() -> pd.DataFrame:
+def load_benevoles(*, planning_path: Path | None = None) -> pd.DataFrame:
     """
     Charge et normalise la feuille 'Disponibilités'.
     - Conserve les heures sous leur forme originale (float Excel ou string)
@@ -36,8 +16,9 @@ def load_benevoles() -> pd.DataFrame:
     - Convertit uniquement les colonnes textuelles en string
     """
 
+    benev_path = planning_path or PLANNING_BENEVOLES
     df = load_and_normalize(
-        path=PLANNING_BENEVOLES,
+        path=benev_path,
         sheet_name=SHEET_BENEV_DISPO,
         mapping=column_map_benev_dispo,
         header=0
@@ -80,7 +61,12 @@ def load_benevoles() -> pd.DataFrame:
 
     # 5) Les autres colonnes (hors heures/dates/numériques) → string
     for col in df.columns:
-        if col in hour_cols or col in ["Date", "ID", "Max_Jours_Semaine", "Max_Exp_Semaine", "Max_Exp_Jour", "Attente_Max_Heures"]:
+        if (
+            col in hour_cols
+            or col in ["Date", "ID", "Max_Jours_Semaine", "Max_Exp_Semaine", "Max_Exp_Jour", "Attente_Max_Heures"]
+            or col.endswith("_time")
+            or col.endswith("_dt")
+        ):
             continue
         df[col] = df[col].astype(str).fillna("")
 
@@ -98,3 +84,12 @@ try:
 except Exception:
     def get_benevoles_cached() -> pd.DataFrame:
         return load_benevoles()
+
+
+def clear_benevoles_cache() -> None:
+    cached = globals().get("get_benevoles_cached")
+    if cached is not None and hasattr(cached, "clear"):
+        try:
+            cached.clear()
+        except Exception:
+            pass

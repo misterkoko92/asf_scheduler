@@ -226,6 +226,7 @@ def prepare_paths(copy_sources: bool = True) -> None:
     Met à jour les chemins globaux TABLEAU_DE_BORD / PLANNING_BENEVOLES / VOLS.
     """
     global TABLEAU_DE_BORD, PLANNING_BENEVOLES, VOLS, TMP_DIR, ASF_ONEDRIVE
+    global TABLEAU_DE_BORD_SRC, PLANNING_BENEVOLES_SRC, PLANNING_BENEVOLES_SRC_LEGACY, VOLS_SRC
 
     # Prend en compte un override ENV dynamique (utile en tests)
     env_tmp = os.getenv("ASF_TMP_DIR")
@@ -234,6 +235,20 @@ def prepare_paths(copy_sources: bool = True) -> None:
     env_root = os.getenv("ASF_ONEDRIVE_ROOT")
     if env_root:
         ASF_ONEDRIVE = normalize(env_root)
+        TABLEAU_DE_BORD_SRC = normalize(ASF_ONEDRIVE / "Hélida" / "TABLEAU DE BORD.xlsx")
+        PLANNING_BENEVOLES_SRC = normalize(
+            ASF_ONEDRIVE / "Planning Bénévoles" / "Planning BENEVOLE.xlsx"
+        )
+        PLANNING_BENEVOLES_SRC_LEGACY = normalize(
+            ASF_ONEDRIVE / "Planning Bénévoles" / "Planning BENEVOLE 2025.xlsx"
+        )
+        VOLS_SRC = normalize(
+            ASF_ONEDRIVE / "Planning MAB" / "Fichiers Source" / "aVols" / "Vols.xlsx"
+        )
+
+    TABLEAU_DE_BORD = normalize(TMP_DIR / "TABLEAU_DE_BORD.xlsx")
+    PLANNING_BENEVOLES = normalize(TMP_DIR / "PLANNING_BENEVOLES.xlsx")
+    VOLS = normalize(TMP_DIR / "VOLS.xlsx")
 
     TMP_DIR.mkdir(parents=True, exist_ok=True)
     OUTPUT_PLANNING_DIR.mkdir(parents=True, exist_ok=True)

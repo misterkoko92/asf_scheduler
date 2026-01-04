@@ -1,10 +1,18 @@
 import streamlit as st
 import pandas as pd
 
-from asf_app.services.simulation_runner import run_ortools_simulation
+from asf_app.services.simulation_runner import run_ortools_simulation_dual
 from asf_app.state import get_state
-from utils.datetime_utils import parse_date_series, parse_time_series, normalize_hour_str
+from utils.datetime_utils import parse_date_series, parse_time_series
 from utils.ui_helpers import build_iata_city_maps, sort_planning_df, format_be_label, format_vol_label
+from pathlib import Path
+from utils.benevole_utils import count_benevoles_with_dispo
+from scheduler.planning_schema import normalize_planning_df
+from scheduler.planning_views import build_export_view
+
+# Backward compatibility wrapper (historical name kept in code paths)
+def _sort_planning(df):
+    return sort_planning_df(df)
 
 
 def render_tab_simulation():
@@ -26,22 +34,52 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
     with col_verbose:
         verbose = st.checkbox("Log console détaillé", value=True)
 
-    if "sim_result" not in st.session_state:
-        st.session_state.sim_result = None
+    if "sim_results" not in st.session_state:
+        st.session_state.sim_results = None
+    if "sim_active_mode" not in st.session_state:
+        st.session_state.sim_active_mode = "colis"
 
-    if st.button("Lancer la simulation OR-Tools", type="primary"):
+    if st.button("Lancer la simulation OR-Tools (2 modes)", type="primary"):
         with st.spinner("Optimisation OR-Tools en cours…"):
-            st.session_state.sim_result = run_ortools_simulation(
+            dual_res = run_ortools_simulation_dual(
                 timeout_seconds=int(timeout),
                 planifiables_only=True,
                 verbose=verbose,
             )
+            st.session_state.sim_results = dual_res.get("modes")
+            st.session_state.sim_active_mode = dual_res.get("selected", "colis")
+            st.session_state["sim_original_df"] = {}
 
-    result = st.session_state.sim_result
-    if not result:
+    modes = st.session_state.sim_results
+    if not modes:
         st.info("Aucune simulation lancée pour l'instant.")
         return
 
+    # Choix du mode affiché
+    mode_labels = []
+    mode_values = []
+    for key, res in modes.items():
+        stats_mode = res.get("statistiques", {})
+        label = (
+            "Priorité Colis"
+            if key == "colis"
+            else "Priorité Bénévole"
+        )
+        extra = f" — {stats_mode.get('nb_colis_expedies', 0)} colis / {stats_mode.get('nb_benevoles_mobilises', 0)} bénév"
+        mode_labels.append(f"{label}{extra}")
+        mode_values.append(key)
+    current_mode = st.radio(
+        "Sélectionner le planning affiché",
+        options=mode_values,
+        format_func=lambda m: mode_labels[mode_values.index(m)],
+        index=mode_values.index(st.session_state.sim_active_mode)
+        if st.session_state.sim_active_mode in mode_values
+        else 0,
+        horizontal=True,
+    )
+    st.session_state.sim_active_mode = current_mode
+
+    result = modes.get(current_mode, {})
     stats = result.get("statistiques", {})
     st.markdown("### Résumé")
     resume_container = st.container()
@@ -58,7 +96,7 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
 
     start_dt, end_dt = _week_bounds()
 
-    plan_df = result.get("planning_df")
+    plan_df = normalize_planning_df(result.get("planning_df"))
     if plan_df is None or plan_df.empty:
         st.info("Aucun planning simulé à modifier.")
         return
@@ -76,49 +114,22 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
     df_parambenev = get_param_benev()
 
     # Disponibilités bénévoles uniques sur la semaine
-    def _compute_benev_dispo(df_dispo_src, s_dt, e_dt):
-        try:
-            dates_col = df_dispo_src.get("Date_dt", df_dispo_src.get("Date", ""))
-            df_tmp = df_dispo_src.copy()
-            df_tmp["_Date_dt"] = _parse_date_series(dates_col)
-            mask_week = pd.Series(True, index=df_tmp.index)
-            if s_dt is None or e_dt is None:
-                dates_dispo = df_tmp["_Date_dt"].dropna()
-                if not dates_dispo.empty:
-                    s_dt = dates_dispo.min()
-                    e_dt = dates_dispo.max()
-            if s_dt is not None and e_dt is not None:
-                mask_week = mask_week & (df_tmp["_Date_dt"] >= s_dt) & (df_tmp["_Date_dt"] <= e_dt)
-            return int(df_tmp.loc[mask_week, "Benevole"].dropna().nunique()), s_dt, e_dt
-        except Exception:
-            return 0, s_dt, e_dt
-
-    benev_dispo_total, start_dt, end_dt = _compute_benev_dispo(df_dispo, start_dt, end_dt)
+    benev_dispo_total, start_dt, end_dt = count_benevoles_with_dispo(df_dispo, start_dt, end_dt)
 
     # Carte IATA -> Ville (pour afficher Destination en clair)
     dest_city_map, city_to_iata_map = build_iata_city_maps(df_paramdest)
 
-    def _parse_date_series(series):
-        # Première passe sur format attendu jj/mm/aa, fallback dayfirst
-        ser = pd.to_datetime(series, format="%d/%m/%y", errors="coerce")
-        mask_na = ser.isna()
-        if mask_na.any():
-            ser.loc[mask_na] = pd.to_datetime(series.loc[mask_na], errors="coerce", dayfirst=True)
-        return ser
-
-    def _parse_time_series(series):
-        s_clean = series.astype(str).str.replace("h", ":", regex=False)
-        return pd.to_datetime(s_clean, format="%H:%M", errors="coerce")
-
     if "_MANUEL" not in plan_df.columns:
         plan_df["_MANUEL"] = False
-    # Garder une copie du planning initial pour les diffs export
+    # Garder une copie du planning initial pour les diffs export (par mode)
     if "sim_original_df" not in st.session_state:
-        st.session_state["sim_original_df"] = plan_df.copy()
+        st.session_state["sim_original_df"] = {}
+    if current_mode not in st.session_state["sim_original_df"]:
+        st.session_state["sim_original_df"][current_mode] = plan_df.copy()
     # Trie initial pour affichage cohérent
     plan_df = sort_planning_df(plan_df)
     # On conserve le tri dans le state pour l'affichage final
-    st.session_state.sim_result["planning_df"] = plan_df
+    st.session_state.sim_results[current_mode]["planning_df"] = plan_df
 
     # Style helper pour les lignes manuelles
     def _style_manual_df(df: pd.DataFrame):
@@ -145,7 +156,7 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
             cols.append(
                 {
                     "Date_Vol": row.get("Date_Vol", ""),
-                    "Vol": row.get("Vol", row.get("Numero_Vol", "")),
+                    "Numero_Vol": row.get("Numero_Vol", ""),
                     "Destination": row.get("Destination", ""),
                     "BE_Numero": row.get("BE_Numero", ""),
                     "Nb_Colis": nb_colis if pd.notna(nb_colis) else 0,
@@ -164,7 +175,7 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
         df = df_plan.copy()
         df["_MANUEL"] = df.get("_MANUEL", False)
         agg = (
-            df.groupby(["Date_Vol", "Vol", "Destination"], as_index=False)
+            df.groupby(["Date_Vol", "Numero_Vol", "Destination"], as_index=False)
             .agg(
                 {
                     "Heure_Vol": "first",
@@ -187,7 +198,7 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
                     "Benevole": row.get("Benevole", ""),
                     "Date_Vol": row.get("Date_Vol", ""),
                     "Heure_Vol": row.get("Heure_Vol", ""),
-                    "Vol": row.get("Vol", row.get("Numero_Vol", "")),
+                    "Numero_Vol": row.get("Numero_Vol", ""),
                     "Destination": row.get("Destination", ""),
                     "BE_Numero": row.get("BE_Numero", ""),
                     "_MANUEL": bool(row.get("_MANUEL", False)),
@@ -236,14 +247,34 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
         # Disponibilités par bénévole (filtrées sur la semaine)
         dispo_counts = {}
         try:
-            dates_col = df_dispo_src.get("Date_dt", df_dispo_src.get("Date", ""))
             df_tmp = df_dispo_src.copy()
-            df_tmp["_Date_dt"] = parse_date_series(dates_col)
-            mask_week = pd.Series(True, index=df_tmp.index)
+            dates_col = df_tmp.get("Date_dt", df_tmp.get("Date", ""))
+            # Parse robuste avec dayfirst
+            dt_parsed = pd.to_datetime(dates_col, errors="coerce", dayfirst=True)
+            if dt_parsed.isna().all():
+                dt_parsed = parse_date_series(dates_col)
+            df_tmp["_Date_dt"] = dt_parsed
+
+            # Déterminer la fenêtre si absente
+            if start_dt is None or end_dt is None:
+                dates_non_na = df_tmp["_Date_dt"].dropna()
+                if not dates_non_na.empty:
+                    start_dt = dates_non_na.min() if start_dt is None else start_dt
+                    end_dt = dates_non_na.max() if end_dt is None else end_dt
+
+            mask_week = df_tmp["_Date_dt"].notna()
             if start_dt is not None and end_dt is not None:
-                mask_week = mask_week & (df_tmp["_Date_dt"] >= start_dt) & (df_tmp["_Date_dt"] <= end_dt)
+                mask_week &= (df_tmp["_Date_dt"] >= start_dt) & (df_tmp["_Date_dt"] <= end_dt)
+
             df_tmp = df_tmp[mask_week]
-            dispo_counts = df_tmp.groupby("Benevole")["_Date_dt"].nunique().to_dict()
+            # Garder uniquement les lignes avec plage horaire valide
+            df_tmp["Benevole"] = df_tmp.get("Benevole", "").astype(str).str.strip()
+            arr_col = "Heure_Arrivee_time" if "Heure_Arrivee_time" in df_tmp.columns else "Heure_Arrivee"
+            dep_col = "Heure_Depart_time" if "Heure_Depart_time" in df_tmp.columns else "Heure_Depart"
+            arr_parsed = pd.to_datetime(df_tmp.get(arr_col, ""), errors="coerce")
+            dep_parsed = pd.to_datetime(df_tmp.get(dep_col, ""), errors="coerce")
+            df_tmp = df_tmp[arr_parsed.notna() & dep_parsed.notna()]
+            dispo_counts = df_tmp.groupby("Benevole")["_Date_dt"].dt.date.nunique().to_dict()
         except Exception:
             dispo_counts = {}
 
@@ -256,6 +287,11 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
 
         benevole_set = set(dispo_counts.keys())
         benevole_set.update(df_plan_local.get("Benevole", []).dropna().unique() if not df_plan_local.empty else [])
+        # Ajouter tous les bénévoles connus (même sans dispo)
+        try:
+            benevole_set.update(df_parambenev["Benevole"].dropna().unique())
+        except Exception:
+            pass
 
         for bene in benevole_set:
             if str(bene).strip() == "":
@@ -289,7 +325,19 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
         nb_be_envoyes = df_plan["BE_Numero"].nunique() if df_plan is not None and not df_plan.empty else 0
         nb_vols = 0
         if df_plan is not None and not df_plan.empty:
-            nb_vols = len(df_plan[["Date_Vol", "Vol"]].drop_duplicates())
+            nb_vols = len(df_plan[["Date_Vol", "Numero_Vol"]].drop_duplicates())
+
+        # Recalcule le dénominateur des bénévoles disponibles uniquement sur la semaine courante
+        def _recalc_benev_dispo():
+            s_dt = start_dt
+            e_dt = end_dt
+            if df_plan is not None and not df_plan.empty:
+                dates_plan = pd.to_datetime(df_plan["Date_Vol"], errors="coerce")
+                dates_plan = dates_plan.dropna()
+                if not dates_plan.empty:
+                    s_dt = dates_plan.min()
+                    e_dt = dates_plan.max()
+            return count_benevoles_with_dispo(df_dispo, s_dt, e_dt)[0]
 
         def _col_sum(df_src):
             if df_src is None or df_src.empty:
@@ -311,7 +359,7 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
         if df_plan is not None and not df_plan.empty and "Benevole" in df_plan.columns:
             benev_used = df_plan["Benevole"].dropna().astype(str).str.strip().replace("", pd.NA).dropna().nunique()
 
-        benev_dispo = benev_dispo_total
+        benev_dispo = _recalc_benev_dispo()
         taux_colis = round(nb_colis_expedies / nb_colis_total * 100, 1) if nb_colis_total else 0
 
         status_label = stats.get("status", "N/A")
@@ -386,7 +434,7 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
             else:
                 # comparer valeurs principales
                 ref = orig_by_key[key].iloc[0]
-                cols_cmp = ["Date_Vol", "Heure_Vol", "Vol", "Destination", "Benevole"]
+                cols_cmp = ["Date_Vol", "Heure_Vol", "Numero_Vol", "Destination", "Benevole"]
                 changed = any(str(row.get(c, "")) != str(ref.get(c, "")) for c in cols_cmp)
                 if changed:
                     # ancienne version
@@ -408,85 +456,21 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
         df_out = pd.DataFrame(rows).drop(columns=["__KEY"], errors="ignore")
         return df_out
 
-    def _export_simulation_excel():
+    def _export_simulation_excel(*, write_source_excel: bool):
         from asf_app.ui.ui_planning.ui_planning import export_excel_planning
-        current_plan = st.session_state.sim_result.get("planning_df", plan_df)
-        original_plan = st.session_state.get("sim_original_df")
+        current_plan = st.session_state.sim_results.get(current_mode, {}).get("planning_df", plan_df)
+        original_plan = st.session_state.get("sim_original_df", {}).get(current_mode)
         # Export sans traçage des anciennes lignes : on prend uniquement le planning courant
         df_with_status = sort_planning_df(current_plan)
         week, year = _compute_week_year(current_plan)
         df_export = pd.DataFrame(df_with_status).copy()
         df_export = df_export.drop(columns=["_MANUEL", "_STATUS"], errors="ignore")
-        # Colonnes attendues par l'export principal
-        required_cols = [
-            "Ville",
-            "Dest_Ville",
-            "Destination",  # sera l'IATA pour alimenter la colonne IATA de l'export
-            "Heure_Vol",
-            "Vol",
-            "Numero_Vol",
-            "BE_Numero",
-            "BE_Nb_Colis",
-            "BE_Type",
-            "BE_Expediteur",
-            "BE_Destinataire",
-            "Routing",
-            "Date_Vol",
-        ]
-        for col in required_cols:
-            if col not in df_export.columns:
-                df_export[col] = ""
-        # Assurer la colonne Destinataire
-        if "BE_Destinataire" not in df_export.columns:
-            df_export["BE_Destinataire"] = ""
-
-        # Enrichir avec les infos vols (Routing, IATA, Numero_Vol) via jointure
-        vols_enrich = df_vols_all.copy()
-        def _norm_vol(val: str) -> str:
-            s = str(val).strip().upper()
-            s = s.replace("AF ", "AF").replace("  ", " ")
-            s = s.replace("AF", "AF ").strip() if s.startswith("AF") else s
-            return s
-        vols_enrich["Date_key"] = pd.to_datetime(vols_enrich["Date_Vol"], errors="coerce", dayfirst=True).dt.date
-        vols_enrich["Vol_key"] = vols_enrich["Numero_Vol"].apply(_norm_vol) if "Numero_Vol" in vols_enrich.columns else ""
-
-        df_export["Date_key"] = pd.to_datetime(df_export["Date_Vol"], errors="coerce", dayfirst=True).dt.date
-        df_export["Vol_key"] = df_export.get("Vol", df_export.get("Numero_Vol", "")).apply(_norm_vol)
-
-        df_export = df_export.merge(
-            vols_enrich[["Date_key", "Vol_key", "Routing", "IATA", "Numero_Vol", "Destination"]],
-            on=["Date_key", "Vol_key"],
-            how="left",
-            suffixes=("", "_VOL"),
+        df_export = build_export_view(
+            df_export,
+            df_paramdest=df_paramdest,
+            df_vols=df_vols_all,
         )
-
-        # Colonnes finales : Ville (ville), Destination (IATA), Routing, Numero_Vol
-        def _city_for(row):
-            # privilégier Dest_Ville si déjà là, sinon mapping IATA->ville
-            existing = str(row.get("Dest_Ville", "") or row.get("Ville", "")).strip()
-            if existing:
-                return existing
-            iata_val = str(row.get("IATA_VOL", "") or row.get("Dest_IATA", "") or row.get("IATA", "")).strip().upper()
-            return dest_city_map.get(iata_val, iata_val)
-
-        df_export["Dest_Ville"] = df_export.apply(_city_for, axis=1)
-        df_export["Ville"] = df_export["Dest_Ville"]
-
-        def _iata_for(row):
-            val = str(row.get("IATA_VOL", "") or row.get("IATA", "") or row.get("Dest_IATA", "")).strip().upper()
-            if not val:
-                val = city_to_iata_map.get(str(row.get("Dest_Ville", "")).strip().upper(), "")
-            return val
-
-        df_export["IATA"] = df_export.apply(_iata_for, axis=1)
-        df_export["Dest_IATA"] = df_export["IATA"]
-        df_export["Destination"] = df_export["IATA"]  # utilisé par l'export pour alimenter la col IATA
-        df_export["Routing"] = df_export.get("Routing_VOL", df_export.get("Routing", ""))
-        df_export["Numero_Vol"] = df_export.get("Numero_Vol_VOL", df_export.get("Vol", df_export.get("Numero_Vol", "")))
-
-        # Dates/heures en datetime pour éviter NaT -> Planning vide
-        df_export["Date_Vol"] = _parse_date_series(df_export["Date_Vol"])
-        df_export["Heure_Vol"] = parse_time_series(df_export["Heure_Vol"]).dt.strftime("%H:%M")
+        df_export["Ville"] = df_export.get("Dest_Ville", "")
         # Tri Date/Heure avant export pour alimenter la feuille Planning dans l'ordre
         try:
             df_export = df_export.sort_values(by=["Date_Vol", "Heure_Vol"], kind="mergesort").reset_index(drop=True)
@@ -506,7 +490,7 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
                         start_dt = dates_plan.min()
                         end_dt = dates_plan.max()
             if start_dt is not None and end_dt is not None and "Date_Vol" in vols_filtered.columns:
-                vols_filtered["Date_dt"] = _parse_date_series(vols_filtered["Date_Vol"])
+                vols_filtered["Date_dt"] = parse_date_series(vols_filtered["Date_Vol"])
                 vols_filtered = vols_filtered[(vols_filtered["Date_dt"] >= start_dt) & (vols_filtered["Date_dt"] <= end_dt)]
                 vols_filtered = vols_filtered.drop(columns=["Date_dt"], errors="ignore")
         except Exception:
@@ -520,6 +504,9 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
             df_vols=vols_clean,
             df_parambenev=df_parambenev,
             df_dispos=dispo_clean,
+            df_paramdest=df_paramdest,
+            create_tables=False,  # éviter les tables qui peuvent corrompre l'export en V2
+            write_source_excel=write_source_excel,
         )
         return out_path
 
@@ -586,7 +573,7 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
         if state.api_start_date and state.api_end_date:
             start_dt = pd.to_datetime(state.api_start_date)
             end_dt = pd.to_datetime(state.api_end_date)
-            df_vols["Date_dt"] = _parse_date_series(df_vols["Date_Vol"])
+            df_vols["Date_dt"] = parse_date_series(df_vols["Date_Vol"])
             df_vols = df_vols[(df_vols["Date_dt"] >= start_dt) & (df_vols["Date_dt"] <= end_dt)]
     except Exception:
         pass
@@ -601,7 +588,7 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
         date_raw = r.get("Date_Vol", "")
         heure_raw = r.get("Heure_Vol", "")
         already = (
-            (plan_df.get("Vol", plan_df.get("Numero_Vol", "")).astype(str) == str(vol_num))
+            (plan_df.get("Numero_Vol", "").astype(str) == str(vol_num))
             & (plan_df.get("Date_Vol", "").astype(str) == str(date_raw))
         ).any()
         status = "déjà utilisé" if already else "disponible"
@@ -621,7 +608,7 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
     sel_vol_idx = 0
     if planned_row is not None:
         planned_date = str(planned_row.get("Date_Vol", ""))
-        planned_vol = str(planned_row.get("Vol", planned_row.get("Numero_Vol", "")))
+        planned_vol = str(planned_row.get("Numero_Vol", ""))
         for i, (d, vnum, _) in enumerate(vol_values):
             if str(d) == planned_date and str(vnum) == planned_vol:
                 sel_vol_idx = i
@@ -647,7 +634,7 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
         # Occupé si déjà affecté sur ce vol/date
         already = (
             (benev_existing.get("Benevole", "").astype(str) == name)
-            & (benev_existing.get("Vol", benev_existing.get("Numero_Vol", "")).astype(str) == str(vol_choice_val))
+            & (benev_existing.get("Numero_Vol", "").astype(str) == str(vol_choice_val))
             & (benev_existing.get("Date_Vol", "").astype(str) == str(date_choice))
         ).any()
         if already:
@@ -662,7 +649,7 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
         rows = df_dispo
         if "Date_dt" in df_dispo.columns:
             try:
-                dates_dt = _parse_date_series(df_dispo["Date_dt"])
+                dates_dt = parse_date_series(df_dispo["Date_dt"])
                 rows = df_dispo[dates_dt.dt.date == d]
             except Exception:
                 rows = df_dispo
@@ -710,13 +697,12 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
             bene_row = df_parambenev[df_parambenev["Benevole"].astype(str) == str(benev_val)]
             bene_id = bene_row["ID"].iloc[0] if not bene_row.empty else ""
             bene_tel = bene_row["Telephone"].iloc[0] if not bene_row.empty else ""
-            dest_city = dest_city_map.get(code_iata_be, str(be_row.get("Destination", "")))
             row_data = {
                 "BE_Numero": be_num,
-                "Destination": dest_city,
+                "Destination": code_iata_be,
                 "Date_Vol": date_choice,
                 "Heure_Vol": heure_choice,
-                "Vol": vol_choice_val,
+                "Numero_Vol": vol_choice_val,
                 "BE_Nb_Colis": be_row.get("BE_Nb_Colis", ""),
                 "BE_Nb_Equiv": be_row.get("Equiv_Colis", be_row.get("BE_Nb_Equiv", "")),
                 "BE_Expediteur": be_row.get("BE_Expediteur", ""),
@@ -731,17 +717,20 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
                 df_new.loc[mask, row_data.keys()] = list(row_data.values())
             else:
                 df_new = pd.concat([df_new, pd.DataFrame([row_data])], ignore_index=True)
-            st.session_state.sim_result["planning_df"] = _sort_planning(df_new)
+            df_new = normalize_planning_df(df_new)
+            st.session_state.sim_results[current_mode]["planning_df"] = _sort_planning(df_new)
             st.success("Planning simulation mis à jour.")
     with col_d2:
         if st.button("Supprimer l'expédition sélectionnée", type="secondary"):
             df_new = plan_df[plan_df["BE_Numero"].astype(str) != str(be_num)].copy()
-            st.session_state.sim_result["planning_df"] = _sort_planning(df_new)
+            df_new = normalize_planning_df(df_new)
+            st.session_state.sim_results[current_mode]["planning_df"] = _sort_planning(df_new)
             st.success("Expédition supprimée du planning simulé.")
 
     # Re-trier et recalculer tous les tableaux dès cette passe pour éviter le décalage d'une interaction
-    plan_df = _sort_planning(st.session_state.sim_result["planning_df"])
-    st.session_state.sim_result["planning_df"] = plan_df
+    plan_df = normalize_planning_df(st.session_state.sim_results[current_mode]["planning_df"])
+    plan_df = _sort_planning(plan_df)
+    st.session_state.sim_results[current_mode]["planning_df"] = plan_df
 
     (
         bilan_df,
@@ -781,20 +770,29 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
         except Exception:
             pass
 
-    if st.button("📤 Exporter le planning simulé (Excel)", type="primary"):
-        try:
-            out_path = _export_simulation_excel()
-            st.success(f"Planning simulé exporté : {out_path.name}")
-            _open_file(out_path)
-            # Export PDF 1ère feuille + ouvrir le PDF
+    col_export, col_write = st.columns([1, 2])
+    with col_write:
+        write_source_excel = st.toggle(
+            "Activer / Désactiver l'écriture sur le excel source",
+            value=True,
+            key="sim_write_source_excel",
+        )
+    with col_export:
+        if st.button("📤 Exporter le planning simulé (Excel)", type="primary"):
             try:
-                from utils.export_pdf import export_first_sheet_to_pdf
-                pdf_path = export_first_sheet_to_pdf(out_path)
-                _open_file(pdf_path)
-            except Exception as e_pdf:
-                st.warning(f"PDF non généré automatiquement : {e_pdf}")
-        except Exception as e:
-            st.error(f"Erreur lors de l'export : {e}")
+                out_path = Path(_export_simulation_excel(write_source_excel=write_source_excel))
+                st.success(f"Planning simulé exporté : {out_path}")
+                _open_file(out_path)
+                # Export PDF 1ère feuille + ouvrir le PDF
+                try:
+                    from utils.export_pdf import export_first_sheet_to_pdf
+                    pdf_path = export_first_sheet_to_pdf(out_path)
+                    st.success(f"PDF généré : {pdf_path}")
+                    _open_file(pdf_path)
+                except Exception as e_pdf:
+                    st.warning(f"PDF non généré automatiquement : {e_pdf}")
+            except Exception as e:
+                st.error(f"Erreur lors de l'export : {e}")
 
     st.dataframe(_style_manual_df(plan_df), height=400, width="stretch", hide_index=True)
 

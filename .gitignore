@@ -3,6 +3,7 @@ venv/
 __pycache__/
 *.pyc
 *.pyo
+.pytest_cache/
 
 # Build Python
 build/
@@ -17,6 +18,7 @@ data/*.xlsx
 data/*.csv
 planning_resultats/
 *.pdf
+.tmp_asf/
 
 # Electron
 electron_app/node_modules/

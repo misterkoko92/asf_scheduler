@@ -156,7 +156,7 @@ def enrich_planning(df_planning: pd.DataFrame) -> pd.DataFrame:
     # ==========================================================
     df = df.merge(
         df_vols_unique[["IATA_UP", "Routing", "Heure_Vol", "Date_Vol", "Numero_Vol", "Max_Colis"]],
-        left_on=["Vol", "Date_Vol"],
+        left_on=["Numero_Vol", "Date_Vol"],
         right_on=["Numero_Vol", "Date_Vol"],
         how="left",
         suffixes=("", "_VOL")

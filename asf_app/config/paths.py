@@ -87,6 +87,18 @@ class AppPaths:
         engine_paths.PLANNING_BENEVOLES = self.benev
         engine_paths.VOLS = self.vols
 
+        # Nettoie les caches Param* pour éviter les données obsolètes
+        try:
+            from scheduler.be_manager import reset_param_be_cache
+            reset_param_be_cache()
+        except Exception:
+            pass
+        try:
+            from loaders.load_params import clear_param_caches
+            clear_param_caches()
+        except Exception:
+            pass
+
         # Dans ta version plus avancée, tu peux ajouter :
         # engine_paths._update_internal_temp_paths()
         # pour re-générer automatiquement les fichiers temporaires.

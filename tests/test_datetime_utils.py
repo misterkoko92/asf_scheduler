@@ -28,3 +28,10 @@ def test_hour_min_from_series():
     ser = pd.Series(["00h00", "01h30", "18:20"])
     mins = hour_min_from_series(ser)
     assert mins.tolist() == [0, 90, 1100]
+
+
+def test_parse_time_series_numeric_excel():
+    ser = pd.Series([0.5, 0.25, None])
+    parsed = parse_time_series(ser)
+    assert parsed.dt.hour.tolist()[:2] == [12, 6]
+    assert parsed.dt.minute.tolist()[:2] == [0, 0]

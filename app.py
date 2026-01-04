@@ -92,10 +92,9 @@ tabs = st.tabs([
     "📁 Données semaine",
     "➕ Ajouts manuels",
     "⚙️ Paramètres",
-    "📊 Planning",
+    "📊 Planning V2 (OR-Tools)",
     "📣 Communication",
     "🚚 Mise à Jour expéditions",
-    "🧪 Simulation",
     "📈 Statistiques",
     "📝 Logs",
     "❓ FAQ / Instructions",
@@ -110,38 +109,34 @@ with tabs[0]:
     st.divider()
     render_tab_week_data()
 
-# ONGLET 2 — AJOUTS MANUELS
+# ONGLET 1 — AJOUTS MANUELS
 with tabs[1]:
     render_tab_manual()
 
-# ONGLET 3 — PARAMÈTRES
+# ONGLET 2 — PARAMÈTRES
 with tabs[2]:
     render_tab_params()
 
-# ONGLET 4 — PLANNING
+# ONGLET 3 — PLANNING V2 (OR-Tools)
 with tabs[3]:
-    render_tab_planning()
+    render_tab_simulation()
 
-# ONGLET 5 — COMMUNICATION
+# ONGLET 4 — COMMUNICATION
 with tabs[4]:
     render_tab_communication()
 
-# ONGLET 6 — MISE À JOUR EXPÉDITIONS
+# ONGLET 5 — MISE À JOUR EXPÉDITIONS
 with tabs[5]:
     render_tab_shipments_update()
 
-# ONGLET 7 — STATISTIQUES
+# ONGLET 6 — STATISTIQUES
 with tabs[6]:
-    render_tab_simulation()
-
-# ONGLET 8 — STATISTIQUES
-with tabs[7]:
     render_tab_stats()
 
-# ONGLET 9 — LOGS
-with tabs[8]:
+# ONGLET 7 — LOGS
+with tabs[7]:
     render_tab_logs()
 
-# ONGLET 10 — FAQ / Instructions
-with tabs[9]:
+# ONGLET 8 — FAQ / Instructions
+with tabs[8]:
     render_tab_faq()

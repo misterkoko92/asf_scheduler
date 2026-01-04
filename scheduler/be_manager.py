@@ -3,11 +3,11 @@
 
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Dict
+from pathlib import Path
 
 import pandas as pd
 
-from scheduler.models import Shipment
 from scheduler.config_paths import (
     TABLEAU_DE_BORD,
     SHEET_PARAM_BE,
@@ -16,15 +16,6 @@ from scheduler.config_paths import (
 from loaders.universal_loader import load_and_normalize
 from scheduler.column_map import column_map_param_be
 
-# Nouvelles règles métier centralisées
-from scheduler.be_rules import (
-    ASF_EQUIV,
-    is_expediteur_asf,
-    compute_be_priority,
-    compute_equiv_colis,
-    is_planifiable_status,
-    STATUS_PLANIFIABLE,
-)
 
 
 # ------------------------------------------------------------
@@ -92,20 +83,27 @@ def normalize_param_be(param_be_raw) -> Dict[str, Dict[str, int]]:
 # ============================================================
 # 2) Chargement ParamBE depuis Excel (avec cache)
 # ============================================================
-def load_param_be(use_cache: bool = True) -> Dict[str, Dict[str, int]]:
+def load_param_be(
+    use_cache: bool = True,
+    *,
+    tdb_path: Path | None = None,
+) -> Dict[str, Dict[str, int]]:
     """
     Charge ParamBE (normalisé via column_map_param_be).
     Format retourné :
       { "MM": {"Priorite_Type": 3, "Equiv": 1}, ... }
     """
     global _PARAM_BE_CACHE
+    if tdb_path is not None:
+        use_cache = False
+
     if use_cache and _PARAM_BE_CACHE is not None:
         return _PARAM_BE_CACHE
 
     print("=== PARAM_BE : Chargement ===")
 
     df = load_and_normalize(
-        path=TABLEAU_DE_BORD,
+        path=(tdb_path or TABLEAU_DE_BORD),
         sheet_name=SHEET_PARAM_BE,
         mapping=column_map_param_be,
         header=0,
@@ -140,70 +138,6 @@ def load_param_be(use_cache: bool = True) -> Dict[str, Dict[str, int]]:
     return param_be
 
 
-# ============================================================
-# 5) Filtrer exclusions (compatibilité + statut)
-# ============================================================
-
-def filter_shipments(shipments: List[Shipment]) -> List[Shipment]:
-    """
-    Filtre les BE non planifiables selon leur statut.
-    - Si Shipment.status est défini et != PLANIFIABLE → exclusion
-    - Sinon (legacy) : on applique encore le filtre special == 'exclure'
-    Ajoute une raison sur le Shipment (reason_not_planned).
-    """
-    out: List[Shipment] = []
-    excluded = 0
-
-    for s in shipments:
-        status = getattr(s, "status", None)
-
-        if status is not None:
-            if not is_planifiable_status(status):
-                reason = getattr(s, "reason_not_planned", None)
-                if not reason:
-                    s.reason_not_planned = f"Status={status}"
-                excluded += 1
-                continue
-        else:
-            # Legacy : si pas de statut, on conserve l'ancien comportement
-            if str(s.special or "").lower().strip() == "exclure":
-                s.reason_not_planned = "Spécial = Exclure"
-                excluded += 1
-                continue
-
-        out.append(s)
-
-    print("\n=== FILTRE BE : EXCLUSIONS / STATUT ===")
-    print(f"Total entrées      : {len(shipments)}")
-    print(f"Total exclues      : {excluded}")
-    print(f"Total conservées   : {len(out)}")
-    print("=================================\n")
-    return out
-
-
-# ============================================================
-# 6) Tri final
-# ============================================================
-
-def sort_shipments(shipments: List[Shipment]) -> List[Shipment]:
-    """
-    Trie les BE :
-      - par priorité (croissant)
-      - puis par nb équiv-colis (décroissant)
-    """
-    sorted_list = sorted(
-        shipments,
-        key=lambda s: (
-            s.priority,
-            -int(getattr(s, "equiv_colis", s.nb_colis_physiques)),
-        ),
-    )
-
-    print("\n=== TRI FINAL DES BE ===")
-    for s in sorted_list:
-        print(
-            f" - BE {s.be_numero} | Priorité={s.priority} | Equiv={s.equiv_colis}"
-        )
-    print("=================================\n")
-
-    return sorted_list
+def reset_param_be_cache() -> None:
+    global _PARAM_BE_CACHE
+    _PARAM_BE_CACHE = None

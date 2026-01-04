@@ -4,6 +4,7 @@ Helpers centralisés pour charger les feuilles Param* avec cache Streamlit.
 
 from __future__ import annotations
 
+from pathlib import Path
 import pandas as pd
 
 from loaders.universal_loader import load_and_normalize
@@ -23,8 +24,9 @@ except Exception:
     st = None
 
 
-def _load_param_be():
-    df = load_and_normalize(TABLEAU_DE_BORD, SHEET_PARAM_BE, column_map_param_be, header=0)
+def _load_param_be(tableau_de_bord_path: Path | None = None):
+    path = tableau_de_bord_path or TABLEAU_DE_BORD
+    df = load_and_normalize(path, SHEET_PARAM_BE, column_map_param_be, header=0)
     for col in ["Priorite_Type", "Equiv"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
@@ -33,8 +35,9 @@ def _load_param_be():
     return df
 
 
-def _load_param_dest():
-    df = load_and_normalize(TABLEAU_DE_BORD, SHEET_PARAM_DEST, column_map_param_dest, header=0)
+def _load_param_dest(tableau_de_bord_path: Path | None = None):
+    path = tableau_de_bord_path or TABLEAU_DE_BORD
+    df = load_and_normalize(path, SHEET_PARAM_DEST, column_map_param_dest, header=0)
     freq_cols = [
         "Freq_Semaine",
         "Freq_Lundi",
@@ -64,14 +67,16 @@ def _load_param_dest():
     return df
 
 
-def _load_param_exp():
-    df = load_and_normalize(TABLEAU_DE_BORD, SHEET_PARAM_EXP, column_map_param_expediteur, header=0)
+def _load_param_exp(tableau_de_bord_path: Path | None = None):
+    path = tableau_de_bord_path or TABLEAU_DE_BORD
+    df = load_and_normalize(path, SHEET_PARAM_EXP, column_map_param_expediteur, header=0)
     return df
 
 
-def _load_param_benev():
+def _load_param_benev(planning_benevoles_path: Path | None = None):
     # Source fiable : classeur Planning BENEVOLE (feuille ParamBenev)
-    df = load_and_normalize(PLANNING_BENEVOLES, SHEET_PARAM_BENEV, column_map_param_benev, header=0)
+    path = planning_benevoles_path or PLANNING_BENEVOLES
+    df = load_and_normalize(path, SHEET_PARAM_BENEV, column_map_param_benev, header=0)
     # Numériques
     if "ID" in df.columns:
         df["ID"] = pd.to_numeric(df["ID"], errors="coerce").astype("Int64")
@@ -113,3 +118,31 @@ else:
 
     def get_param_benev():
         return _load_param_benev()
+
+
+def load_param_be_from_path(tableau_de_bord_path: Path) -> pd.DataFrame:
+    return _load_param_be(tableau_de_bord_path=tableau_de_bord_path)
+
+
+def load_param_dest_from_path(tableau_de_bord_path: Path) -> pd.DataFrame:
+    return _load_param_dest(tableau_de_bord_path=tableau_de_bord_path)
+
+
+def load_param_exp_from_path(tableau_de_bord_path: Path) -> pd.DataFrame:
+    return _load_param_exp(tableau_de_bord_path=tableau_de_bord_path)
+
+
+def load_param_benev_from_path(planning_benevoles_path: Path) -> pd.DataFrame:
+    return _load_param_benev(planning_benevoles_path=planning_benevoles_path)
+
+
+def clear_param_caches() -> None:
+    if st is None:
+        return
+    for name in ("_param_be", "_param_dest", "_param_exp", "_param_benev"):
+        cached = globals().get(name)
+        if cached is not None and hasattr(cached, "clear"):
+            try:
+                cached.clear()
+            except Exception:
+                pass

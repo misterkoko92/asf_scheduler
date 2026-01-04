@@ -7,8 +7,7 @@ from datetime import datetime
 
 from asf_app.state import get_state
 
-from scheduler.be_manager import filter_shipments, sort_shipments
-from loaders.load_shipments import load_shipments
+from loaders.load_shipments import load_shipments_df
 from utils.ui_helpers import build_iata_city_maps, format_be_label, format_vol_label
 from utils.datetime_utils import parse_date_series, parse_time_series, normalize_hour_str, hour_min_from_series
 
@@ -76,31 +75,41 @@ def load_be_moteur():
         return None, "ParamBE indisponible"
 
     try:
-        shipments = load_shipments(state.df_param_be.copy())
+        df_raw = load_shipments_df(
+            planifiables_only=True,
+            param_be_raw=state.df_param_be.copy(),
+        )
     except Exception as e:
-        return None, f"Erreur load_shipments : {e}"
+        return None, f"Erreur load_shipments_df : {e}"
 
-    if not shipments:
+    if df_raw is None or df_raw.empty:
         return None, "Aucun BE moteur"
 
-    shipments = filter_shipments(shipments)
-    shipments = sort_shipments(shipments)
+    def _col(name: str, default: str = "") -> pd.Series:
+        if name in df_raw.columns:
+            return df_raw[name]
+        return pd.Series([default] * len(df_raw), index=df_raw.index)
 
-    df_be = pd.DataFrame([
-        {
-            "BE_Numero": str(s.be_numero),
-            "Type": s.type_colis,
-            "Destination": getattr(s, "dest", ""),
-            "IATA": getattr(s, "dest_iata", getattr(s, "dest", "")),
-            "Expéditeur": s.expediteur,
-            "Nb_Colis": s.nb_colis_physiques,
-            "Equiv_colis": s.equiv_colis,
-            "Priorité": s.priority,
-            "Douane": "OUI" if s.customs else "NON",
-            "Special": s.special or "",
-        }
-        for s in shipments
-    ])
+    df_be = pd.DataFrame()
+    df_be["BE_Numero"] = _col("BE_Numero").astype(str)
+    df_be["Type"] = _col("BE_Type").astype(str)
+    df_be["Destination"] = _col("Destination").astype(str)
+    df_be["IATA"] = _col("Destination").astype(str)
+    df_be["Expéditeur"] = _col("BE_Expediteur").astype(str)
+    df_be["Nb_Colis"] = pd.to_numeric(_col("BE_Nb_Colis", "0"), errors="coerce").fillna(0).astype(int)
+    df_be["Equiv_colis"] = pd.to_numeric(_col("Equiv_Colis", "0"), errors="coerce").fillna(0).astype(int)
+    df_be["Priorité"] = pd.to_numeric(_col("Priorite", "0"), errors="coerce").fillna(0).astype(int)
+    douane_raw = _col("BE_Douane").astype(str).str.strip().str.lower()
+    df_be["Douane"] = douane_raw.apply(
+        lambda v: "OUI" if v in {"oui", "yes", "1", "true"} else "NON"
+    )
+    df_be["Special"] = _col("BE_Special").astype(str)
+
+    df_be = df_be.sort_values(
+        by=["Priorité", "Equiv_colis"],
+        ascending=[True, False],
+        kind="mergesort",
+    ).reset_index(drop=True)
 
     return df_be, None
 

@@ -26,10 +26,10 @@ def build_resume_benevoles(planning_df: pd.DataFrame) -> pd.DataFrame:
     df["Benevole"] = df["Benevole"].astype(str)
 
     resume = df.groupby("Benevole").agg(
-        Nb_Vols=("Vol", "nunique"),
+        Nb_Vols=("Numero_Vol", "nunique"),
         Colis_Réels=("BE_Nb_Colis", "sum"),
         Colis_Équiv_Total=("BE_Nb_Equiv", "sum"),
-        Vols=("Vol", lambda x: ", ".join(sorted(set(x)))),
+        Vols=("Numero_Vol", lambda x: ", ".join(sorted(set(x)))),
     ).reset_index()
 
     resume["Colis_Équiv_Moyen"] = (
@@ -74,7 +74,7 @@ def build_stats_jours(planning_df: pd.DataFrame) -> pd.DataFrame:
     df = planning_df.copy()
 
     stats = df.groupby("Date_Vol").agg(
-        Nb_Vols=("Vol", "nunique"),
+        Nb_Vols=("Numero_Vol", "nunique"),
         Nb_BE=("BE_Numero", "count"),
         Colis_Réels=("BE_Nb_Colis", "sum"),
         Colis_Équiv=("BE_Nb_Equiv", "sum"),

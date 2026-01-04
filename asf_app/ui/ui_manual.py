@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import shutil
 
-from asf_app.state import get_state
+from asf_app.state import get_state, sync_state_paths_to_engine
 
 from scheduler.config_paths import (
     SHEET_BENEV_DISPO,
@@ -106,9 +106,35 @@ def render_tab_manual():
             df_filtered = df_dispo[df_dispo["Benevole"] == bene_sel].copy()
             df_filtered = df_filtered.reset_index().rename(columns={"index": "ROW_ORIG"})
 
+            # Assurer que les colonnes horaires soient éditables en texte (sinon Streamlit les bloque)
+            def _time_to_str(val):
+                try:
+                    t = pd.to_datetime(val, errors="coerce").time()
+                    return t.strftime("%H:%M") if t else ""
+                except Exception:
+                    return str(val) if val is not None else ""
+
+            for col in ["Heure_Arrivee", "Heure_Depart", "Heure_Arrivee_time", "Heure_Depart_time"]:
+                if col in df_filtered.columns:
+                    df_filtered[col] = df_filtered[col].apply(_time_to_str)
+
             st.caption(f"Disponibilités existantes pour **{bene_sel}**")
 
-            edited = st.data_editor(df_filtered, width="stretch", num_rows="dynamic")
+            col_cfg = {
+                "ROW_ORIG": st.column_config.NumberColumn("ROW_ORIG", disabled=True),
+            }
+            # Forcer l'édition des heures comme texte (évite le verrouillage)
+            for col in ["Heure_Arrivee", "Heure_Depart", "Heure_Arrivee_time", "Heure_Depart_time"]:
+                if col in df_filtered.columns:
+                    col_cfg[col] = st.column_config.TextColumn(col, disabled=False)
+
+            edited = st.data_editor(
+                df_filtered,
+                width="stretch",
+                num_rows="dynamic",
+                hide_index=True,
+                column_config=col_cfg,
+            )
 
             if st.button("💾 Enregistrer disponibilités"):
 
@@ -136,6 +162,7 @@ def render_tab_manual():
                     st.stop()
 
                 state.df_benev = df_new
+                sync_state_paths_to_engine(state)
                 st.success("✔ Disponibilités enregistrées")
 
     # =====================================================================
@@ -148,7 +175,12 @@ def render_tab_manual():
 
         df_vols = state.df_vols.copy()
 
-        edited = st.data_editor(df_vols, width="stretch", num_rows="dynamic")
+        edited = st.data_editor(
+            df_vols,
+            width="stretch",
+            num_rows="dynamic",
+            hide_index=True,
+        )
 
         if st.button("💾 Enregistrer vols"):
 
@@ -157,6 +189,7 @@ def render_tab_manual():
                 st.stop()
 
             state.df_vols = edited
+            sync_state_paths_to_engine(state)
             st.success("✔ Vols mis à jour")
 
     # =====================================================================
@@ -173,7 +206,8 @@ def render_tab_manual():
             df_be,
             width="stretch",
             num_rows="dynamic",
-            key="editor_be_manual"
+            hide_index=True,
+            key="editor_be_manual",
         )
 
         if st.button("💾 Enregistrer BE"):
@@ -183,4 +217,5 @@ def render_tab_manual():
                 st.stop()
 
             state.df_be = edited
+            sync_state_paths_to_engine(state)
             st.success("✔ BE mis à jour")

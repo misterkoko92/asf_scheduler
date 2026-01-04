@@ -89,7 +89,7 @@ def _build_message_for_benevole(df_bene, vols_info, map_iata_city):
     df_bene["Numero_Vol_Aff"] = (
         df_bene["Numero_Vol_Aff"]
         .replace(["", None, pd.NA], pd.NA)
-        .fillna(df_bene.get("Vol", ""))
+        .fillna(df_bene.get("Numero_Vol", ""))
         .astype(str)
         .str.replace(r"\.0$", "", regex=True)
         .apply(lambda x: f"AF {x}" if x and not str(x).upper().startswith("AF") else str(x))
@@ -206,9 +206,9 @@ def _compute_vols_info(df_comm):
     df_comm["Dest_Ville"] = df_comm.get("Dest_Ville", df_comm.get("Destination", df_comm.get("DESTINATION", "")))
     df_comm["Code_IATA"] = df_comm.get("Code_IATA", df_comm.get("Dest_IATA", df_comm.get("DESTINATION", "")))
     df_comm["Numero_Vol_Aff"] = (
-        df_comm.get("Numero_Vol_Aff", df_comm.get("NUMERO VOL", df_comm.get("Vol", "")))
+        df_comm.get("Numero_Vol_Aff", df_comm.get("NUMERO VOL", df_comm.get("Numero_Vol", "")))
         .replace(["", None, pd.NA], pd.NA)
-        .fillna(df_comm.get("Vol", ""))
+        .fillna(df_comm.get("Numero_Vol", ""))
         .astype(str)
         .str.replace(r"\.0$", "", regex=True)
         .apply(lambda x: f"AF {x}" if x and not str(x).upper().startswith("AF") else str(x))

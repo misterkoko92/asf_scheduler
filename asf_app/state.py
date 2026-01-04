@@ -151,6 +151,50 @@ def reset_state():
     st.session_state[STATE_KEY] = AppState()
 
 
+def sync_state_paths_to_engine(state: AppState) -> None:
+    """
+    Aligne les chemins actifs de l'UI et du moteur, et nettoie les caches.
+    """
+    if state.tdb_tmp is not None:
+        cp.TABLEAU_DE_BORD = Path(state.tdb_tmp).resolve()
+    if state.benev_tmp is not None:
+        cp.PLANNING_BENEVOLES = Path(state.benev_tmp).resolve()
+    if state.vols_tmp is not None:
+        cp.VOLS = Path(state.vols_tmp).resolve()
+
+    st.session_state["paths"] = {
+        "tdb": str(cp.TABLEAU_DE_BORD),
+        "benev": str(cp.PLANNING_BENEVOLES),
+        "vols": str(cp.VOLS),
+    }
+
+    try:
+        from scheduler.be_manager import reset_param_be_cache
+        reset_param_be_cache()
+    except Exception:
+        pass
+    try:
+        from loaders.load_params import clear_param_caches
+        clear_param_caches()
+    except Exception:
+        pass
+    try:
+        from loaders.load_shipments import clear_shipments_cache
+        clear_shipments_cache()
+    except Exception:
+        pass
+    try:
+        from loaders.load_benevoles import clear_benevoles_cache
+        clear_benevoles_cache()
+    except Exception:
+        pass
+    try:
+        from loaders.load_vols import clear_vols_cache
+        clear_vols_cache()
+    except Exception:
+        pass
+
+
 # ======================================================================
 # FIN DU FICHIER
 # ======================================================================

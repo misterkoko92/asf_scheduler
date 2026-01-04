@@ -20,8 +20,9 @@ from reportlab.platypus import SimpleDocTemplate, Table as RLTable, TableStyle
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 
-# Enrichissement planning (toutes les colonnes finales)
-from scheduler.planning_enrichment import enrich_planning
+# Vues planning (export/communication)
+from scheduler.planning_views import build_export_view
+from scheduler.planning_schema import normalize_planning_df
 
 # Scheduler
 from scheduler.core_scheduler import Scheduler
@@ -44,7 +45,7 @@ from scheduler.config_paths import (
 )
 
 # Loaders
-from loaders.load_shipments import load_shipments, get_shipments_df_cached
+from loaders.load_shipments import get_shipments_df_cached
 from loaders.load_vols import get_vols_df_cached
 from loaders.load_benevoles import get_benevoles_cached
 from loaders.universal_loader import load_and_normalize
@@ -148,7 +149,7 @@ def build_preview(df_planning: pd.DataFrame, df_paramdest: pd.DataFrame) -> pd.D
         return f"{int(year_hint)%100:02d}" + digits.zfill(4)
 
     # Format numéro de vol en AFXXX
-    df_preview["Numero_Vol"] = df_preview.get("Vol", df_preview.get("Numero_Vol", "")).apply(_format_vol_display)
+    df_preview["Numero_Vol"] = df_preview.get("Numero_Vol", "").apply(_format_vol_display)
     # Nombre de colis (entier)
     df_preview["BE_Nb_Colis"] = pd.to_numeric(df_preview.get("BE_Nb_Colis", 0), errors="coerce").fillna(0).astype(int)
     # Heure format HHhMM
@@ -420,7 +421,17 @@ def _export_pdf_via_soffice(filepath: Path, sheet_range: str = "1-1") -> Path | 
 # EXPORT XLSX
 # ---------------------------------------------------------------------------
 
-def export_excel_planning(df, week, year, df_vols=None, df_parambenev=None, df_dispos=None):
+def export_excel_planning(
+    df,
+    week,
+    year,
+    df_vols=None,
+    df_parambenev=None,
+    df_dispos=None,
+    df_paramdest=None,
+    create_tables: bool = True,
+    write_source_excel: bool = False,
+):
     # Maquette : priorité OneDrive aaSOURCE/Planning-maquette.xlsx
     onedrive_maquette = (
         cp.ASF_ONEDRIVE
@@ -467,7 +478,18 @@ def export_excel_planning(df, week, year, df_vols=None, df_parambenev=None, df_d
         monday = date.fromisocalendar(int(year), int(week), 1)
     except Exception:
         monday = None
-    dfp = df.copy().fillna("")
+    dfp = build_export_view(df, df_paramdest=df_paramdest, df_vols=df_vols).fillna("")
+
+    def _clear_tables(ws):
+        """Supprime tous les tableaux d'une feuille (compat dict/list) pour éviter les doublons corrompus."""
+        try:
+            tbls = ws._tables
+            if isinstance(tbls, dict):
+                tbls.clear()
+            else:
+                ws._tables = []
+        except Exception:
+            pass
     dfp["DATE"] = pd.to_datetime(dfp.get("Date_Vol", dfp.get("DATE", "")), errors="coerce")
     # Normaliser heures (remplacer h par :) avant conversion
     heures_raw = dfp.get("Heure_Vol", dfp.get("HEURE VOL", ""))
@@ -482,7 +504,7 @@ def export_excel_planning(df, week, year, df_vols=None, df_parambenev=None, df_d
         dfp["HEURE_VOL_DT"].dt.hour.fillna(99).astype(int) * 60
         + dfp["HEURE_VOL_DT"].dt.minute.fillna(59).astype(int)
     )
-    dfp = dfp.sort_values(by=["DATE", "HEURE_MIN", "Destination", "Vol"], kind="mergesort")
+    dfp = dfp.sort_values(by=["DATE", "HEURE_MIN", "Destination", "Numero_Vol"], kind="mergesort")
 
     # Mapping prenom court NOM
     map_bene_to_display = {}
@@ -508,10 +530,64 @@ def export_excel_planning(df, week, year, df_vols=None, df_parambenev=None, df_d
 
     dfp["BENEVOLE_DISP"] = dfp.get("Benevole", dfp.get("BENEVOLE", "")).apply(_bene_display)
     dfp["VILLE"] = dfp.get("Ville", dfp.get("Dest_Ville", dfp.get("Destination", ""))).astype(str).str.upper()
-    dfp["IATA"] = dfp.get("Destination", dfp.get("Dest_IATA", "")).astype(str).str.upper()
-    dfp["ROUTING"] = dfp.get("Routing", dfp.get("ROUTING", "")).astype(str).str.replace(",", "-").str.upper()
-    dfp["VOL_AFF"] = dfp.get("Numero_Vol", dfp.get("Vol", dfp.get("Numero_Vol_Aff", ""))).astype(str)
+    dfp["IATA"] = dfp.get("IATA", dfp.get("Dest_IATA", dfp.get("Destination", ""))).astype(str).str.upper()
+    # Recalage Routing depuis Data Vols (Date + Numero) avec fallback IATA
+    if df_vols is not None and not getattr(df_vols, "empty", True):
+        def _normalize_vol_key(value: object) -> str:
+            s = str(value or "").strip().upper()
+            if s.startswith("AF"):
+                s = s.replace("AF", "").strip()
+            digits = "".join(ch for ch in s if ch.isdigit())
+            if digits:
+                try:
+                    return str(int(digits))
+                except Exception:
+                    return digits.lstrip("0") or digits
+            return s
+
+        vols_map = df_vols.copy()
+        if "Date_Vol_dt" in vols_map.columns:
+            vols_date = pd.to_datetime(vols_map["Date_Vol_dt"], errors="coerce")
+        else:
+            vols_date = pd.to_datetime(vols_map.get("Date_Vol", ""), errors="coerce", dayfirst=True)
+        vols_map["_DATE_KEY"] = vols_date.dt.date
+        vols_map["_VOL_KEY"] = vols_map.get("Numero_Vol", "").apply(_normalize_vol_key)
+        routing_map = (
+            vols_map.dropna(subset=["Routing"])
+            .drop_duplicates(subset=["_DATE_KEY", "_VOL_KEY"])
+            .set_index(["_DATE_KEY", "_VOL_KEY"])["Routing"]
+            .to_dict()
+        )
+        dfp["_DATE_KEY"] = pd.to_datetime(dfp["DATE"], errors="coerce").dt.date
+        dfp["_VOL_KEY"] = dfp.get("Numero_Vol", "").apply(_normalize_vol_key)
+        routing_series = (
+            dfp["Routing"]
+            if "Routing" in dfp.columns
+            else pd.Series([""] * len(dfp), index=dfp.index)
+        )
+        mask_routing_empty = (
+            routing_series.fillna("")
+            .astype(str)
+            .str.strip()
+            .str.lower()
+            .replace({"nan": "", "none": ""})
+            .eq("")
+        )
+        if mask_routing_empty.any():
+            def _route_fallback(row):
+                key = (row.get("_DATE_KEY"), row.get("_VOL_KEY"))
+                if key in routing_map:
+                    return routing_map[key]
+                return ""
+
+            dfp.loc[mask_routing_empty, "Routing"] = (
+                dfp.loc[mask_routing_empty].apply(_route_fallback, axis=1)
+            )
+        dfp = dfp.drop(columns=["_DATE_KEY", "_VOL_KEY"], errors="ignore")
+
+    dfp["VOL_AFF"] = dfp.get("Numero_Vol", dfp.get("Numero_Vol_Aff", "")).astype(str)
     dfp["VOL_AFF"] = dfp["VOL_AFF"].str.replace(r"\.0$", "", regex=True).apply(lambda x: f"AF {x}" if x and not str(x).upper().startswith("AF") else x)
+    dfp["ROUTING"] = dfp.get("Routing", dfp.get("ROUTING", "")).astype(str).str.replace(",", "-").str.upper()
     dfp["HEURE_AFF"] = dfp["HEURE_VOL_DT"].dt.strftime("%Hh%M")
     dfp["BE_NUM"] = dfp.get("BE_Numero", dfp.get("NUMERO BE", dfp.get("BE_Num", ""))).astype(str).str.replace(r"\.0$", "", regex=True)
     # Garder seulement YYNNNN (sans préfixe BE)
@@ -591,9 +667,8 @@ def export_excel_planning(df, week, year, df_vols=None, df_parambenev=None, df_d
             pass
         return used_dates
 
-    # ⏸️ Pause temporaire : ne pas écrire dans MAG CENTRAL source pendant l'export.
-    # map_depart_mag = update_mag_central_dates()
-    map_depart_mag = {}
+    # Ecriture optionnelle vers MAG CENTRAL source
+    map_depart_mag = update_mag_central_dates() if write_source_excel else {}
 
     # Date départ MAG issue de MAG central ou fallback vendredi précédent
     def _depart_mag_for(be_key):
@@ -704,10 +779,12 @@ def export_excel_planning(df, week, year, df_vols=None, df_parambenev=None, df_d
         ws_plan.column_dimensions[col_letter].width = max(10, min(max_len + 2, 40))
 
     from openpyxl.utils.dataframe import dataframe_to_rows
+    _clear_tables(ws_export)
     ws_export.delete_rows(1, ws_export.max_row)
     for row in dataframe_to_rows(dfp, index=False, header=True):
         ws_export.append(row)
 
+    _clear_tables(ws_vols)
     if df_vols is not None and not getattr(df_vols, "empty", True):
         ws_vols.delete_rows(1, ws_vols.max_row)
         for row in dataframe_to_rows(df_vols, index=False, header=True):
@@ -715,7 +792,8 @@ def export_excel_planning(df, week, year, df_vols=None, df_parambenev=None, df_d
         # Appliquer un tableau (filtres/tri)
         max_row = ws_vols.max_row
         max_col = ws_vols.max_column
-        if max_row >= 2 and max_col >= 1:
+        if create_tables and max_row >= 2 and max_col >= 1:
+            _clear_tables(ws_vols)
             from openpyxl.utils import get_column_letter
             ref = f"A1:{get_column_letter(max_col)}{max_row}"
             tab = Table(displayName="Table_Vols", ref=ref)
@@ -727,10 +805,6 @@ def export_excel_planning(df, week, year, df_vols=None, df_parambenev=None, df_d
                 showColumnStripes=False,
             )
             tab.tableStyleInfo = style
-            # supprimer tableau existant s'il existe
-            existing = [t for t in ws_vols._tables if t.name == "Table_Vols"]
-            for t in existing:
-                ws_vols._tables.remove(t)
             ws_vols.add_table(tab)
 
     # Export disponibilités bénévoles → feuille Data Benevoles
@@ -741,6 +815,7 @@ def export_excel_planning(df, week, year, df_vols=None, df_parambenev=None, df_d
         except Exception:
             df_dispo_export = None
 
+    _clear_tables(ws_bene)
     if df_dispo_export is not None and not getattr(df_dispo_export, "empty", True):
         df_dispo_export = df_dispo_export.copy()
         # garder les colonnes utiles (headers Disponibilités)
@@ -761,7 +836,8 @@ def export_excel_planning(df, week, year, df_vols=None, df_parambenev=None, df_d
             ws_bene.append(row)
         max_row_b = ws_bene.max_row
         max_col_b = ws_bene.max_column
-        if max_row_b >= 2 and max_col_b >= 1:
+        if create_tables and max_row_b >= 2 and max_col_b >= 1:
+            _clear_tables(ws_bene)
             from openpyxl.utils import get_column_letter
             ref_b = f"A1:{get_column_letter(max_col_b)}{max_row_b}"
             tab_b = Table(displayName="Table_Benevoles", ref=ref_b)
@@ -773,9 +849,6 @@ def export_excel_planning(df, week, year, df_vols=None, df_parambenev=None, df_d
                 showColumnStripes=False,
             )
             tab_b.tableStyleInfo = style_b
-            existing_b = [t for t in ws_bene._tables if t.name == "Table_Benevoles"]
-            for t in existing_b:
-                ws_bene._tables.remove(t)
             ws_bene.add_table(tab_b)
 
     # Repositionner les cellules de colonne A (avec formules) sur une ligne visible centrée
@@ -806,6 +879,11 @@ def export_excel_planning(df, week, year, df_vols=None, df_parambenev=None, df_d
     move_to_middle(203, 190, 218)
 
     wb.save(out_path)
+    # Validation simple : recharger le fichier pour s'assurer qu'il n'est pas corrompu
+    try:
+        load_workbook(out_path)
+    except Exception as e:
+        raise RuntimeError(f"Export Excel invalide : {e}")
     # Renommer la première feuille
     try:
         ws_plan.title = f"Planning S{week:02d}-{year}"
@@ -897,7 +975,7 @@ def render_tab_planning():
         df_paramdest, df_paramexp, df_parambenev, df_parambe = load_parameters()
 
     with st.spinner("Chargement BE…"):
-        df_be = load_shipments(df_parambe)
+        _ = get_shipments_df_cached()
 
     with st.spinner("Chargement vols…"):
         df_vols = get_vols_df_cached()
@@ -940,6 +1018,7 @@ def render_tab_planning():
                 st.error("❌ Aucun planning généré.")
                 return
 
+            df_planning = normalize_planning_df(df_planning)
             planning_state.set_planning(df_planning, df_bilan)
             st.success(f"✔ Planning généré ({len(df_planning)} lignes)")
 
@@ -982,9 +1061,9 @@ def render_tab_planning():
     # -------------------------------------------------------------------
     # Charger le planning depuis state
     # -------------------------------------------------------------------
-    df_planning = planning_state.planning
+    df_planning = normalize_planning_df(planning_state.planning)
 
-    if df_planning is None:
+    if df_planning is None or df_planning.empty:
         st.info("Aucun planning généré pour le moment.")
         return
 
@@ -1060,20 +1139,29 @@ def render_tab_planning():
         df_vols_bilan = df_planning.copy()
         df_vols_bilan["BE_Nb_Colis"] = pd.to_numeric(df_vols_bilan.get("BE_Nb_Colis", 0), errors="coerce").fillna(0).astype(int)
         df_vols_bilan = (
-            df_vols_bilan.groupby(["Destination", "Date_Vol", "Vol"], dropna=False)["BE_Nb_Colis"]
+            df_vols_bilan.groupby(["Destination", "Date_Vol", "Numero_Vol"], dropna=False)["BE_Nb_Colis"]
             .sum()
             .reset_index()
             .rename(columns={"BE_Nb_Colis": "Nb_Colis"})
             .sort_values(["Destination", "Date_Vol"])
         )
-        df_vols_view = df_vols_bilan.assign(Vol=lambda d: d["Vol"].apply(_format_vol_display))[["Destination", "Date_Vol", "Vol", "Nb_Colis"]].reset_index(drop=True)
+        df_vols_view = df_vols_bilan.assign(
+            Numero_Vol=lambda d: d["Numero_Vol"].apply(_format_vol_display)
+        )[["Destination", "Date_Vol", "Numero_Vol", "Nb_Colis"]].reset_index(drop=True)
         df_plan_manual = df_planning.copy()
         if "_MANUEL" in df_plan_manual.columns:
             df_plan_manual["_MANUEL"] = df_plan_manual["_MANUEL"].fillna(False)
         else:
             df_plan_manual["_MANUEL"] = False
-        manual_keys = set(df_plan_manual[df_plan_manual["_MANUEL"]][["Destination", "Date_Vol", "Vol"]].apply(tuple, axis=1).tolist())
-        manual_mask_vols = df_vols_view.apply(lambda r: (r["Destination"], r["Date_Vol"], r["Vol"]) in manual_keys, axis=1)
+        manual_keys = set(
+            df_plan_manual[df_plan_manual["_MANUEL"]][["Destination", "Date_Vol", "Numero_Vol"]]
+            .apply(tuple, axis=1)
+            .tolist()
+        )
+        manual_mask_vols = df_vols_view.apply(
+            lambda r: (r["Destination"], r["Date_Vol"], r["Numero_Vol"]) in manual_keys,
+            axis=1,
+        )
         def _style_vol(row):
             color = "background-color: #f2f2f2" if manual_mask_vols.iloc[row.name] else ""
             return [color]*len(row)
@@ -1288,11 +1376,6 @@ def render_tab_planning():
             if be_col_planning is None:
                 be_col_planning = "BE_Numero"
                 df_planning[be_col_planning] = df_planning.get(be_col_planning, "")
-            # colonnes bénévole détaillées si manquantes
-            for col in ["Benevole_Prenom", "Benevole_Prenom_Court", "Benevole_Nom"]:
-                if col not in df_planning.columns:
-                    df_planning[col] = ""
-
             be_planning_norm = df_planning[be_col_planning].apply(_norm_full)
             mask_planned = (
                 be_planning_norm == _norm_full(selected_be)
@@ -1311,7 +1394,7 @@ def render_tab_planning():
 
             default_date = _default("Date_Vol", "")
             default_dest = _default("Destination", be_info.get("Destination", ""))
-            default_vol = _default("Vol", "")
+            default_vol = _default("Numero_Vol", "")
             default_heure = _default("Heure_Vol", "")
             default_bene = _default("Benevole", "")
 
@@ -1332,6 +1415,7 @@ def render_tab_planning():
                 map_ville_to_iata = {}
             if len(code_iata_be) != 3:
                 code_iata_be = map_ville_to_iata.get(code_iata_be.upper(), code_iata_be)
+            default_dest = code_iata_be
 
             # df_vols peut être une liste (fallback) : sécuriser en DataFrame
             try:
@@ -1420,7 +1504,7 @@ def render_tab_planning():
                 already_planned = (
                     dest_match
                     & (df_planning.get("Date_Vol", pd.Series(dtype=str)).astype(str) == str(date_raw))
-                    & (df_planning.get("Vol", pd.Series(dtype=str)).apply(_norm_volnum_cmp) == _norm_volnum_cmp(vol_num_raw))
+                    & (df_planning.get("Numero_Vol", pd.Series(dtype=str)).apply(_norm_volnum_cmp) == _norm_volnum_cmp(vol_num_raw))
                 ).any()
                 statut = "déjà au planning" if already_planned else "disponible"
 
@@ -1486,7 +1570,7 @@ def render_tab_planning():
                     already = (
                         (df_planning["Benevole"].astype(str) == str(name))
                         & (df_planning["Date_Vol"].astype(str) == str(date_choice))
-                        & (df_planning["Vol"].astype(str) == str(vol_choice_val))
+                        & (df_planning["Numero_Vol"].astype(str) == str(vol_choice_val))
                     ).any()
                     if already:
                         return "déjà affecté sur ce créneau"
@@ -1538,20 +1622,14 @@ def render_tab_planning():
                 with btn_a:
                     if st.button("Mettre à jour le planning", type="primary", key="btn_update_planning"):
                         df_new = df_planning.copy()
-                        # Informations bénévole (ID, prénom, nom, téléphone) depuis ParamBenev si dispo
+                        # Informations bénévole (ID, téléphone) depuis ParamBenev si dispo
                         bene_phone = ""
                         bene_id = ""
-                        bene_prenom = ""
-                        bene_prenom_court = ""
-                        bene_nom = ""
                         try:
                             row_b = df_parambenev[df_parambenev["Benevole"] == bene_choice]
                             if not row_b.empty:
                                 bene_phone = row_b.get("Telephone", pd.Series([""])).iloc[0]
                                 bene_id = row_b.get("ID", pd.Series([""])).iloc[0]
-                                bene_prenom = row_b.get("Prenom", pd.Series([""])).iloc[0]
-                                bene_prenom_court = row_b.get("Prenom_Court", pd.Series([""])).iloc[0]
-                                bene_nom = row_b.get("Nom", pd.Series([""])).iloc[0]
                         except Exception:
                             pass
 
@@ -1568,53 +1646,36 @@ def render_tab_planning():
                         if be_value_str.endswith(".0"):
                             be_value_str = be_value_str[:-2]
 
-                        if "_MANUEL" not in df_planning.columns:
-                            df_planning["_MANUEL"] = False
-
                         if mask_planned.any():
-                            df_new.loc[mask_planned, be_col_planning] = be_value_str
+                            df_new.loc[mask_planned, "BE_Numero"] = be_value_str
                             df_new.loc[mask_planned, "Date_Vol"] = date_choice
                             df_new.loc[mask_planned, "Destination"] = default_dest
-                            df_new.loc[mask_planned, "Vol"] = vol_choice_val
+                            df_new.loc[mask_planned, "Numero_Vol"] = vol_choice_val
                             df_new.loc[mask_planned, "Heure_Vol"] = heure_choice
                             df_new.loc[mask_planned, "Benevole"] = bene_choice
+                            df_new.loc[mask_planned, "ID"] = str(bene_id).replace(".0", "").strip()
                             df_new.loc[mask_planned, "Telephone"] = bene_phone
+                            df_new.loc[mask_planned, "BE_Nb_Colis"] = be_info.get("BE_Nb_Colis", "")
+                            df_new.loc[mask_planned, "BE_Nb_Equiv"] = be_info.get("BE_Nb_Equiv", be_info.get("Equiv_Colis", ""))
+                            df_new.loc[mask_planned, "BE_Type"] = be_info.get("BE_Type", "")
+                            df_new.loc[mask_planned, "BE_Expediteur"] = be_info.get("BE_Expediteur", "")
+                            df_new.loc[mask_planned, "BE_Destinataire"] = be_info.get("BE_Destinataire", "")
                             df_new.loc[mask_planned, "_MANUEL"] = True
-                            df_new.loc[mask_planned, "Benevole_Prenom"] = bene_prenom or be_info.get("Benevole_Prenom", be_info.get("Prenom", ""))
-                            df_new.loc[mask_planned, "Benevole_Prenom_Court"] = bene_prenom_court or be_info.get("Benevole_Prenom_Court", be_info.get("Prenom_Court", ""))
-                            df_new.loc[mask_planned, "Benevole_Nom"] = bene_nom or be_info.get("Benevole_Nom", be_info.get("Nom", ""))
-                            # ids bénévoles si dispo
-                            id_bene = bene_id or be_info.get("ID_BENEVOLE", be_info.get("ID", be_info.get("BENEVOLE_ID", "")))
-                            if "BENEVOLE_ID" in df_new.columns:
-                                try:
-                                    df_new.loc[mask_planned, "BENEVOLE_ID"] = str(id_bene).replace(".0", "").strip()
-                                except Exception:
-                                    df_new.loc[mask_planned, "BENEVOLE_ID"] = id_bene
-                            if "ID_BENEVOLE" in df_new.columns:
-                                try:
-                                    df_new.loc[mask_planned, "ID_BENEVOLE"] = str(id_bene).replace(".0", "").strip()
-                                except Exception:
-                                    df_new.loc[mask_planned, "ID_BENEVOLE"] = id_bene
                         else:
                             new_row = {col: "" for col in df_new.columns}
-                            id_bene = bene_id or be_info.get("ID_BENEVOLE", be_info.get("ID", be_info.get("BENEVOLE_ID", "")))
-                            bene_num = be_info.get("Benevole_Num", be_info.get("Benevole_num", ""))
+                            id_bene = str(bene_id).replace(".0", "").strip()
                             be_num_fmt = be_info.get("BE_Numero_Str", be_value_str)
                             new_row.update({
                                 "BE_Numero": be_num_fmt,
                                 "Date_Vol": date_choice,
                                 "Destination": default_dest,
-                                "Vol": vol_choice_val,
+                                "Numero_Vol": vol_choice_val,
                                 "Heure_Vol": heure_choice,
                                 "BE_Nb_Colis": be_info.get("BE_Nb_Colis", ""),
+                                "BE_Nb_Equiv": be_info.get("BE_Nb_Equiv", be_info.get("Equiv_Colis", "")),
                                 "BE_Type": be_info.get("BE_Type", ""),
                                 "Benevole": bene_choice,
-                                "Benevole_Prenom": bene_prenom or be_info.get("Benevole_Prenom", be_info.get("Prenom", "")),
-                                "Benevole_Prenom_Court": bene_prenom_court or be_info.get("Benevole_Prenom_Court", be_info.get("Prenom_Court", "")),
-                                "Benevole_Nom": bene_nom or be_info.get("Benevole_Nom", be_info.get("Nom", "")),
-                                "BENEVOLE_ID": str(id_bene).replace(".0", "").strip() if id_bene not in ("", None) else "",
-                                "ID_BENEVOLE": str(id_bene).replace(".0", "").strip() if id_bene not in ("", None) else "",
-                                "Benevole_Num": bene_num,
+                                "ID": id_bene,
                                 "BE_Expediteur": be_info.get("BE_Expediteur", ""),
                                 "BE_Destinataire": be_info.get("BE_Destinataire", ""),
                                 "Telephone": bene_phone,
@@ -1631,6 +1692,7 @@ def render_tab_planning():
                         except Exception:
                             pass
 
+                        df_new = normalize_planning_df(df_new)
                         planning_state.set_planning(df_new, planning_state.bilan)
                         st.success("Planning mis à jour. L’aperçu ci-dessous est recalculé.")
                         df_planning = df_new
@@ -1640,6 +1702,7 @@ def render_tab_planning():
                     if st.button("Supprimer du planning", disabled=not planned, type="secondary"):
                         if planned:
                             df_new = df_planning[~mask_planned].copy()
+                            df_new = normalize_planning_df(df_new)
                             planning_state.set_planning(df_new, planning_state.bilan)
                             st.success("BE supprimé du planning.")
                             df_planning = df_new
@@ -1665,9 +1728,15 @@ def render_tab_planning():
             return
 
         # FULL enrichissement
-        df = enrich_planning(df_planning) #df_final
-
-        out_path = export_excel_planning(df, week, year, df_vols=df_vols, df_parambenev=df_parambenev, df_dispos=df_dispos) #df_final
+        out_path = export_excel_planning(
+            df_planning,
+            week,
+            year,
+            df_vols=df_vols,
+            df_parambenev=df_parambenev,
+            df_dispos=df_dispos,
+            df_paramdest=df_paramdest,
+        )
         planning_state.set_last_export_path(out_path)
 
         st.success(f"✔ Planning exporté : {out_path.name}")

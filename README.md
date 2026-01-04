@@ -76,6 +76,22 @@ Les chemins des fichiers Excel (Tableau de Bord, Planning, Param) sont configur�
 
 ---
 
+## 🔌 Sources de données (préparation intégrations)
+
+Par défaut, le moteur utilise les fichiers Excel locaux. Une couche `DataSource` est en place pour préparer l’intégration future de :
+- `asf-wms` (BE / expéditions)
+- `asf-benev` (disponibilités bénévoles)
+
+Variables d’environnement supportées :
+- `ASF_DATA_SOURCE=excel|composite|asf-wms|asf-benev`
+- `ASF_WMS_ROOT` (défaut: `~/asf-wms`)
+- `ASF_BENEV_ROOT` (défaut: `~/asf-benev`)
+- `ASF_WMS_ENABLE=1` / `ASF_BENEV_ENABLE=1` pour activer les sources externes quand elles seront implémentées.
+
+⚠️ Les connecteurs `asf-wms` / `asf-benev` sont volontairement des stubs pour l’instant : ils doivent être branchés sur les APIs ou exports locaux des projets concernés.
+
+---
+
 ## 🧪 Tests
 
 ```bash

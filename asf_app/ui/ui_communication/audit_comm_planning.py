@@ -17,7 +17,7 @@ from scheduler.config_paths import (
     SHEET_PARAM_BENEV,
 )
 
-from loaders.load_shipments import load_shipments
+from loaders.load_shipments import load_shipments_df
 from loaders.load_vols import load_vols, get_vols_df_cached
 from loaders.load_benevoles import get_benevoles_cached
 from loaders.universal_loader import load_and_normalize
@@ -61,8 +61,8 @@ def audit():
     # Chargement BE
     # ----------------------
     print("📘 Chargement BE (MAG CENTRAL)…")
-    df_be = load_shipments(df_parambe)        # ← PATCH ICI
-    print(f"✔ BE chargés : {len(df_be)} lignes")
+    df_be = load_shipments_df(param_be_raw=df_parambe, planifiables_only=True)
+    print(f"✔ BE charges : {len(df_be)} lignes")
 
     # ----------------------
     # Chargement vols / bénévoles

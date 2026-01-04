@@ -18,15 +18,12 @@ from datetime import datetime, timedelta, time
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
-import logging
-from pathlib import Path
-import scheduler.config_paths as cp
-from ortools.sat.python import cp_model
+try:
+    from ortools.sat.python import cp_model
+except ModuleNotFoundError:  # pragma: no cover - optional dependency
+    cp_model = None
 
-from loaders.load_benevoles import load_benevoles
-from loaders.load_params import get_param_be, get_param_benev, get_param_dest
-from loaders.load_shipments import load_shipments_df
-from loaders.load_vols import load_vols_df
+from scheduler.data_sources import DataSource, resolve_data_source
 from scheduler.config import (
     DUREE_MISSION_HEURES,
     MAX_BE_PER_FLIGHT,
@@ -36,11 +33,42 @@ from scheduler.config import (
     MIN_HOURS_BETWEEN_FLIGHTS,
 )
 from utils.logging_utils import get_logger
+from scheduler.planning_schema import normalize_planning_df
 
 
 # =====================================================================
 # PUBLIC API
 # =====================================================================
+
+def solve_planning_ortools(
+    *,
+    planifiables_only: bool = True,
+    timeout_seconds: int = 180,
+    verbose: bool = False,
+    priority_mode: str = "colis",
+    data_source: DataSource | None = None,
+    data_source_name: str | None = None,
+) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, Any]]:
+    """
+    Exécute OR-Tools pour la génération principale du planning.
+    Retourne (planning_df, bilan_df, stats).
+    """
+    result = solve_planning_ortools_simulation(
+        planifiables_only=planifiables_only,
+        timeout_seconds=timeout_seconds,
+        verbose=verbose,
+        priority_mode=priority_mode,
+        data_source=data_source,
+        data_source_name=data_source_name,
+    )
+
+    planning_df = result.get("planning_df", pd.DataFrame())
+    bilan_df = result.get("bilan_df", pd.DataFrame())
+    stats = result.get("statistiques", {}) or {}
+    stats["priority_mode"] = result.get("priority_mode", priority_mode)
+    stats["status"] = result.get("status", stats.get("status", "UNKNOWN"))
+    return planning_df, bilan_df, stats
+
 
 def solve_planning_ortools_simulation(
     *,
@@ -48,11 +76,17 @@ def solve_planning_ortools_simulation(
     timeout_seconds: int = 180,
     verbose: bool = False,
     dry_run: bool = False,
+    priority_mode: str = "colis",  # "colis" ou "benevoles"
+    data_source: DataSource | None = None,
+    data_source_name: str | None = None,
 ) -> Dict[str, Any]:
     """
     Exécute le solveur OR-Tools et retourne un planning/bilan simulés.
     Pensé pour l'onglet Simulation uniquement.
     """
+
+    if cp_model is None:
+        return _empty_result("ORTOOLS_MISSING")
 
     # Logger (console + fichier)
     logger = get_logger("ortools_sim", console=verbose)
@@ -65,22 +99,32 @@ def solve_planning_ortools_simulation(
     # 1) Chargement des données
     # -----------------------------------------------------------------
     try:
-        df_be = load_shipments_df(planifiables_only=planifiables_only)
+        source = data_source or resolve_data_source(data_source_name)
+        ds_name = getattr(source, "name", type(source).__name__)
+
+        df_param_dest = source.load_param_dest()
+        df_param_be = source.load_param_be()
+        df_param_benev = source.load_param_benev()
+
+        df_be = source.load_shipments_df(
+            df_param_be,
+            planifiables_only=planifiables_only,
+        )
         if df_be.empty:
             return _empty_result("AUCUN_BE")
 
-        df_vols_raw = load_vols_df()
+        df_vols_raw = source.load_vols_df(df_param_dest)
         if df_vols_raw.empty:
             return _empty_result("AUCUN_VOL")
 
-        df_benev_raw = load_benevoles()
+        df_benev_raw = source.load_benevoles_df(df_param_benev)
         if df_benev_raw.empty:
             return _empty_result("AUCUN_BENEVOLE")
 
-        df_param_dest = get_param_dest()
-        df_param_be = get_param_be()
-        df_param_benev = get_param_benev()
-        _log(f"[ORTOOLS] Chargés BE={len(df_be)}, vols={len(df_vols_raw)}, dispo={len(df_benev_raw)}")
+        _log(
+            f"[ORTOOLS] Data source={ds_name} | "
+            f"BE={len(df_be)} vols={len(df_vols_raw)} dispo={len(df_benev_raw)}"
+        )
     except Exception as exc:  # pragma: no cover - safety
         _log(f"[ORTOOLS] Erreur chargement : {exc}")
         return _empty_result("ERREUR_CHARGEMENT")
@@ -137,6 +181,17 @@ def solve_planning_ortools_simulation(
         model, df_benev, df_vols
     )
 
+    # Disponibilités totales (en minutes) par bénévole pour pondérer les choix
+    benev_avail_minutes: Dict[int, int] = defaultdict(int)
+    for _, row in df_benev.iterrows():
+        bid = int(row["ID"])
+        debut = row.get("heure_debut")
+        fin = row.get("heure_fin")
+        if isinstance(debut, time) and isinstance(fin, time):
+            delta = (datetime.combine(datetime.today(), fin) - datetime.combine(datetime.today(), debut)).total_seconds() / 60
+            if delta > 0:
+                benev_avail_minutes[bid] += int(delta)
+
     # Diagnostic : BE sans aucun vol compatible
     be_without_option = []
     for be_idx in be_groups.index:
@@ -188,7 +243,8 @@ def solve_planning_ortools_simulation(
     solver.parameters.max_time_in_seconds = timeout_seconds
     solver.parameters.num_search_workers = 8
 
-    # Phase 1 : maximiser poids pondéré (priorité haute = poids faible)
+    # Objectifs hiérarchiques — selon mode de priorité
+    # Préparation poids et bénévoles utilisés
     weights = []
     for (be_idx, v_idx) in x:
         be = be_groups.loc[be_idx]
@@ -196,55 +252,122 @@ def solve_planning_ortools_simulation(
         poids_pondere = be["poids_total"] * (10 - prio if prio is not None else 10)
         weights.append(poids_pondere)
 
-    model.Maximize(sum(w * var for w, var in zip(weights, x.values())))
-    _log("[ORTOOLS] Phase 1 — maximisation poids")
-    status = solver.Solve(model)
-    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        return _empty_result("INFAISABLE")
-
-    max_weight = solver.ObjectiveValue()
-    model.Add(sum(w * var for w, var in zip(weights, x.values())) >= int(max_weight))
-    _log(f"[ORTOOLS] Poids max atteint = {max_weight:.2f}")
-
-    # Phase 2 : minimiser le nombre de vols utilisés (éviter le split)
-    _log("[ORTOOLS] Phase 2 — minimisation nb vols")
-    model.Minimize(sum(u.values()))
-    status = solver.Solve(model)
-    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        return _empty_result("INFAISABLE")
-    min_flights = int(round(solver.ObjectiveValue()))
-    model.Add(sum(u.values()) <= min_flights)
-    _log(f"[ORTOOLS] Nb vols minimum = {min_flights}")
-
-    # Phase 3 : maximiser le nombre de bénévoles distincts utilisés
-    _log("[ORTOOLS] Phase 3 — maximisation bénévoles utilisés")
     benev_used = {}
+    benev_missions = {}
     for benev_id in benev_ids:
         bvar = model.NewBoolVar(f"b_used_{benev_id}")
         benev_used[benev_id] = bvar
         vols = benev_vols_compat.get(int(benev_id), [])
+        miss_var = model.NewIntVar(0, 50, f"missions_{benev_id}")
+        benev_missions[benev_id] = miss_var
         if vols:
-            model.Add(sum(y[(benev_id, v)] for v in vols if (benev_id, v) in y) >= 1).OnlyEnforceIf(bvar)
-            model.Add(sum(y[(benev_id, v)] for v in vols if (benev_id, v) in y) == 0).OnlyEnforceIf(bvar.Not())
+            model.Add(miss_var == sum(y[(benev_id, v)] for v in vols if (benev_id, v) in y))
+            model.Add(miss_var >= 1).OnlyEnforceIf(bvar)
+            model.Add(miss_var == 0).OnlyEnforceIf(bvar.Not())
         else:
+            model.Add(miss_var == 0)
             model.Add(bvar == 0)
 
-    model.Maximize(sum(benev_used.values()))
-    status = solver.Solve(model)
-    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        return _empty_result("INFAISABLE")
-    max_benev_used = int(round(solver.ObjectiveValue()))
-    model.Add(sum(benev_used.values()) >= max_benev_used)
+    def _phase_max_weight():
+        model.Maximize(sum(w * var for w, var in zip(weights, x.values())))
+        _log("[ORTOOLS] Phase — maximisation poids")
+        st = solver.Solve(model)
+        if st not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            return None
+        max_w = solver.ObjectiveValue()
+        model.Add(sum(w * var for w, var in zip(weights, x.values())) >= int(max_w))
+        _log(f"[ORTOOLS] Poids max atteint = {max_w:.2f}")
+        return max_w
 
-    # Phase 4 : équilibrage bénévoles (écart max-min)
-    _optimize_equilibrage(model, solver, y, df_param_benev, verbose)
+    def _phase_min_vols():
+        _log("[ORTOOLS] Phase — minimisation nb vols")
+        model.Minimize(sum(u.values()))
+        st = solver.Solve(model)
+        if st not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            return None
+        min_f = int(round(solver.ObjectiveValue()))
+        model.Add(sum(u.values()) <= min_f)
+        _log(f"[ORTOOLS] Nb vols minimum = {min_f}")
+        return min_f
 
-    # Résolution finale en conservant min vols / max benev
-    _log("[ORTOOLS] Phase 4 — résolution finale (contraintes poids/vols/bénévoles équilibrées)")
-    model.Minimize(sum(u.values()))
-    status = solver.Solve(model)
-    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        return _empty_result("INFAISABLE")
+    def _phase_max_benev():
+        _log("[ORTOOLS] Phase — maximisation bénévoles utilisés")
+        model.Maximize(sum(benev_used.values()))
+        st = solver.Solve(model)
+        if st not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            return None
+        max_b = int(round(solver.ObjectiveValue()))
+        model.Add(sum(benev_used.values()) >= max_b)
+        _log(f"[ORTOOLS] Bénévoles max utilisés = {max_b}")
+        return max_b
+
+    def _phase_min_excess_missions():
+        _log("[ORTOOLS] Phase — minimisation surplus de missions (>1 par bénévole)")
+        excess_vars = []
+        for bid, miss in benev_missions.items():
+            exc = model.NewIntVar(0, 50, f"excess_{bid}")
+            model.Add(exc >= miss - 1)
+            model.Add(exc >= 0)
+            excess_vars.append(exc)
+        model.Minimize(sum(excess_vars))
+        st = solver.Solve(model)
+        if st not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            return None
+        min_exc = int(round(solver.ObjectiveValue()))
+        model.Add(sum(excess_vars) <= min_exc)
+        _log(f"[ORTOOLS] Surplus missions total = {min_exc}")
+        return min_exc
+
+    def _phase_min_weighted_availability():
+        _log("[ORTOOLS] Phase — minimisation pondérée par disponibilités (privilégier peu disponibles)")
+        terms = []
+        for bid, miss in benev_missions.items():
+            avail = benev_avail_minutes.get(int(bid), 0)
+            weight = max(1, avail)  # éviter 0
+            terms.append(miss * weight)
+        model.Minimize(sum(terms))
+        st = solver.Solve(model)
+        if st not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            return None
+        _log("[ORTOOLS] Pondération disponibilités appliquée")
+        return solver.ObjectiveValue()
+
+    mode = priority_mode.lower()
+    if mode not in ("colis", "benevoles"):
+        mode = "colis"
+
+    if mode == "colis":
+        # 1) Poids, 2) Vols min, 3) Bénévoles max, 4) Équilibrage + résolution finale
+        if _phase_max_weight() is None:
+            return _empty_result("INFAISABLE")
+        if _phase_min_vols() is None:
+            return _empty_result("INFAISABLE")
+        if _phase_max_benev() is None:
+            return _empty_result("INFAISABLE")
+        _phase_min_excess_missions()
+        _phase_min_weighted_availability()
+        _optimize_equilibrage(model, solver, y, df_param_benev, verbose)
+        _log("[ORTOOLS] Phase finale — contraintes poids/vols/bénévoles équilibrées")
+        model.Minimize(sum(u.values()))
+        status = solver.Solve(model)
+        if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            return _empty_result("INFAISABLE")
+    else:
+        # Mode priorité bénévoles : 1) poids, 2) vols min (évite split), 3) bénév max, 4) surplus missions, 5) pondération dispos, 6) équilibrage
+        if _phase_max_weight() is None:
+            return _empty_result("INFAISABLE")
+        if _phase_min_vols() is None:
+            return _empty_result("INFAISABLE")
+        if _phase_max_benev() is None:
+            return _empty_result("INFAISABLE")
+        _phase_min_excess_missions()
+        _phase_min_weighted_availability()
+        _optimize_equilibrage(model, solver, y, df_param_benev, verbose)
+        _log("[ORTOOLS] Phase finale — contraintes bénévoles/poids/vols équilibrées")
+        model.Minimize(sum(u.values()))
+        status = solver.Solve(model)
+        if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            return _empty_result("INFAISABLE")
 
     # -----------------------------------------------------------------
     # 5) Extraction des résultats + format planning/bilan
@@ -263,12 +386,14 @@ def solve_planning_ortools_simulation(
         df_param_benev=df_param_benev,
         status=status,
         verbose=verbose,
+        priority_mode=mode,
     )
 
     planning_df, bilan_df = _build_planning_bilan(
         extracted["affectations_be"],
         extracted["planning_benevoles"],
     )
+    planning_df = normalize_planning_df(planning_df)
 
     # Logs diagnostics : BE non planifiés et bénévoles non utilisés
     be_non_planifies_df = extracted.get("be_non_planifies", pd.DataFrame())
@@ -288,6 +413,7 @@ def solve_planning_ortools_simulation(
         "planning_df": planning_df,
         "bilan_df": bilan_df,
         "dest_stats": extracted.get("dest_stats", pd.DataFrame()),
+        "priority_mode": mode,
     }
 
 
@@ -753,6 +879,7 @@ def _extract_results(
     df_param_benev: pd.DataFrame,
     status: int,
     verbose: bool = False,
+    priority_mode: str = "colis",
 ) -> Dict[str, Any]:
     affectations = []
     be_affectes = set()
@@ -772,6 +899,7 @@ def _extract_results(
                     "BE_Nb_Colis": int(be["nb_colis"]),
                     "BE_Poids_Equiv": int(be["poids_total"]),
                     "BE_Type": be.get("type", ""),
+                    "Vol_Routing": vol.get("Routing", ""),
                     "Vol_Date": vol.get("Date_Vol") or vol["datetime"].date(),
                     "Vol_Heure": vol.get("Heure_Vol") or vol["datetime"].time().strftime("%Hh%M"),
                     "Vol_Numero": vol.get("Numero_Vol", ""),
@@ -859,6 +987,7 @@ def _extract_results(
 
     stats = {
         "status": "OPTIMAL" if status == cp_model.OPTIMAL else "FEASIBLE",
+        "priority_mode": priority_mode,
         "nb_be_total": len(be_groups),
         "nb_be_envoyes": len(be_affectes),
         "taux_be": round(len(be_affectes) / len(be_groups) * 100, 1) if len(be_groups) else 0,
@@ -889,7 +1018,10 @@ def _extract_results(
     }
 
 
-def _build_planning_bilan(df_affectations: pd.DataFrame, df_planning_benev: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def _build_planning_bilan(
+    df_affectations: pd.DataFrame,
+    df_planning_benev: pd.DataFrame,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Recompose un planning au format proche du moteur principal :
       - 1 ligne par BE, avec bénévole associé (répartition greedy).
@@ -924,8 +1056,10 @@ def _build_planning_bilan(df_affectations: pd.DataFrame, df_planning_benev: pd.D
             planning_rows.append(
                 {
                     "Date_Vol": be["Vol_Date"],
-                    "Heure_Vol": be["Vol_Heure"] if isinstance(be["Vol_Heure"], str) else str(be["Vol_Heure"]),
-                    "Vol": be.get("Vol_Numero", ""),
+                    "Heure_Vol": be["Vol_Heure"]
+                    if isinstance(be["Vol_Heure"], str)
+                    else str(be["Vol_Heure"]),
+                    "Numero_Vol": be.get("Vol_Numero", ""),
                     "Destination": be.get("Vol_Destination", ""),
                     "BE_Numero": be["BE_Numero"],
                     "BE_Nb_Colis": be.get("BE_Nb_Colis", 0),
@@ -933,6 +1067,7 @@ def _build_planning_bilan(df_affectations: pd.DataFrame, df_planning_benev: pd.D
                     "BE_Expediteur": be.get("BE_Expediteur", ""),
                     "BE_Destinataire": be.get("BE_Destinataire", ""),
                     "BE_Type": be.get("BE_Type", ""),
+                    "Routing": be.get("Vol_Routing", ""),
                     "Benevole": benev_info.get("Benevole", ""),
                     "ID": benev_info.get("Benevole_ID", ""),
                     "Telephone": benev_info.get("Telephone", ""),
@@ -941,7 +1076,9 @@ def _build_planning_bilan(df_affectations: pd.DataFrame, df_planning_benev: pd.D
 
     planning_df = pd.DataFrame(planning_rows)
     if not planning_df.empty:
-        planning_df = planning_df.sort_values(["Date_Vol", "Heure_Vol", "Vol", "Destination", "BE_Numero"])
+        planning_df = planning_df.sort_values(
+            ["Date_Vol", "Heure_Vol", "Numero_Vol", "Destination", "BE_Numero"]
+        )
 
     # Bilan
     planned_be = set(planning_df["BE_Numero"].tolist()) if not planning_df.empty else set()
@@ -951,7 +1088,7 @@ def _build_planning_bilan(df_affectations: pd.DataFrame, df_planning_benev: pd.D
             bilan_rows.append(
                 {
                     "Date_Vol": row["Vol_Date"],
-                    "Vol": row.get("Vol_Numero", ""),
+                    "Numero_Vol": row.get("Vol_Numero", ""),
                     "Destination": row.get("Vol_Destination", ""),
                     "BE_Numero": row["BE_Numero"],
                     "Nb_Colis": row.get("BE_Nb_Colis", 0),

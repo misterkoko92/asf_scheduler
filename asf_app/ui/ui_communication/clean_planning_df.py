@@ -12,6 +12,7 @@ from scheduler.format_rules import (
     format_date_fr_long_slash,
     format_date_fr_words
 )
+from scheduler.planning_views import build_comm_base
 
 
 # ============================================================
@@ -82,7 +83,7 @@ def build_df_comm(df_planning: pd.DataFrame,
     if df_planning is None or df_planning.empty:
         return pd.DataFrame()
 
-    df_planning = df_planning.copy()
+    df_planning = build_comm_base(df_planning)
 
     # --------------------------------------------------------
     # 0) COLONNES ESSENTIELLES — PATCHES DE SÉCURITÉ

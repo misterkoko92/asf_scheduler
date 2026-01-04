@@ -32,7 +32,7 @@ def is_empty_date(x: Any) -> bool:
     """
     Détection simple d'une "date vide".
     Utilisé pour compat éventuelle ailleurs, mais pour le statut on se base
-    sur pd.isna(x) après conversion stricte (coerce) dans load_shipments.
+    sur pd.isna(x) après conversion stricte (coerce) dans load_shipments_df.
 
     Ici, on considère vide uniquement NaN / NaT.
     """

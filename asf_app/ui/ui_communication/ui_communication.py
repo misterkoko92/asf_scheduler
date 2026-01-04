@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 
 # PlanningState
-from asf_app.ui.state_planning import get_planning_state
+from asf_app.ui.ui_planning.state_planning import get_planning_state
 
 # Build df_comm
 from asf_app.ui.ui_communication.clean_planning_df import build_df_comm
@@ -28,6 +28,7 @@ from asf_app.ui.ui_communication.whatsapp_handler import (
 )
 from scheduler.format_rules import format_be_number, format_vol_number
 from loaders.load_shipments import get_shipments_df_cached
+from scheduler.planning_schema import normalize_planning_df
 
 # Loaders (nouveau)
 from asf_app.ui.loader import load_parameters
@@ -60,21 +61,27 @@ def render_tab_communication():
     # 1) Choix de la source (moteur principal ou simulation OR-Tools)
     # -------------------------------------------------------
     planning_state = get_planning_state()
-    df_plan_main = planning_state.planning
-    sim_res = st.session_state.get("sim_result") or {}
-    df_plan_sim = sim_res.get("planning_df")
+    df_plan_main = normalize_planning_df(planning_state.planning)
+    # OR-Tools V2 dans l'onglet simulation : stocké dans sim_results
+    sim_res_modes = st.session_state.get("sim_results") or {}
+    sim_active = st.session_state.get("sim_active_mode")
+    df_plan_sim = None
+    if sim_res_modes:
+        if sim_active and sim_active in sim_res_modes:
+            df_plan_sim = normalize_planning_df(sim_res_modes[sim_active].get("planning_df"))
+        else:
+            # premier mode disponible
+            df_plan_sim = normalize_planning_df(next(iter(sim_res_modes.values())).get("planning_df"))
 
-    if (df_plan_main is None or df_plan_main.empty) and (df_plan_sim is None or getattr(df_plan_sim, "empty", True)):
-        # Proposer quand même de basculer sur simulation si dispo
+    if (df_plan_main is None or getattr(df_plan_main, "empty", True)) and (df_plan_sim is None or getattr(df_plan_sim, "empty", True)):
         st.warning("⚠️ Aucun planning principal. Lance une simulation OR-Tools pour alimenter la communication.")
         return
 
     options = []
     if df_plan_main is not None and not df_plan_main.empty:
         options.append("planning")
-    if df_plan_sim is not None and not getattr(df_plan_sim, "empty", True):
+    if sim_res_modes:
         options.append("simulation")
-    # fallback si aucune option détectée
     if not options:
         st.warning("⚠️ Aucun planning disponible. Génère un planning (onglet Planning) ou lance une simulation.")
         return
@@ -82,12 +89,32 @@ def render_tab_communication():
     source = st.radio(
         "Source du planning pour la communication",
         options=options,
-        format_func=lambda x: "Moteur principal" if x == "planning" else "Simulation OR-Tools",
+        format_func=lambda x: "Moteur principal" if x == "planning" else "Planning V2 (OR-Tools)",
         index=options.index(default_source),
         horizontal=True,
     )
 
     df_planning = df_plan_main if source == "planning" else df_plan_sim
+    # Si source = simulation et plusieurs modes, proposer un choix
+    if source == "simulation" and sim_res_modes:
+        mode_labels = []
+        mode_values = []
+        for key, res in sim_res_modes.items():
+            stats_mode = res.get("statistiques", {})
+            label = "Priorité Colis" if key == "colis" else "Priorité Bénévoles"
+            extra = f" ({stats_mode.get('nb_colis_expedies', 0)} colis / {stats_mode.get('nb_benevoles_mobilises', 0)} bénév)"
+            mode_labels.append(f"{label}{extra}")
+            mode_values.append(key)
+        sel_mode = st.radio(
+            "Mode OR-Tools",
+            options=mode_values,
+            format_func=lambda m: mode_labels[mode_values.index(m)],
+            index=mode_values.index(sim_active) if sim_active in mode_values else 0,
+            horizontal=True,
+        )
+        st.session_state["sim_active_mode"] = sel_mode
+        df_planning = normalize_planning_df(sim_res_modes[sel_mode].get("planning_df"))
+        df_plan_sim = df_planning
     if df_planning is None or getattr(df_planning, "empty", True):
         st.warning("⚠️ Le planning choisi est vide.")
         return
@@ -185,18 +212,27 @@ def render_tab_communication():
 
     st.success(f"📅 Communication pour S{week} – {year}")
 
-    # Recherche du PDF dans OneDrive (format exact)
+    # Recherche du PDF dans OneDrive (format avec versions)
+    pdf_attach_path = None
     try:
         base_pdf_dir = cp.ASF_ONEDRIVE / "Planning MAB" / f"ASFmm PLANNING {year}"
-        pdf_name = f"ASFmm - PLANNING SEMAINE N° {week:02d} - {year}.pdf"
-        candidate = base_pdf_dir / pdf_name
-        if candidate.exists():
-            pdf_attach_path = candidate
+        if base_pdf_dir.exists():
+            pattern = f"ASFmm - PLANNING SEMAINE N° {week:02d} - {year}*.pdf"
+            candidates = sorted(base_pdf_dir.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+            if candidates:
+                labels = [c.name for c in candidates]
+                pdf_choice = st.radio(
+                    "Choisir la version PDF à utiliser",
+                    options=labels,
+                    index=0,
+                    horizontal=True,
+                )
+                pdf_attach_path = candidates[labels.index(pdf_choice)]
     except Exception:
         pdf_attach_path = None
 
     if pdf_attach_path:
-        st.info(f"📎 PDF joint détecté : {pdf_attach_path.name}")
+        st.info(f"📎 PDF joint détecté : {Path(pdf_attach_path).name}")
     else:
         st.warning("📎 Pas de planning PDF trouvé - ajouter le manuellement.")
 

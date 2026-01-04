@@ -7,6 +7,7 @@ from typing import Optional, Tuple, Dict
 import pandas as pd
 
 from scheduler import config
+from scheduler.planning_schema import normalize_planning_df
 
 
 class BEPlacementError(Exception):
@@ -60,7 +61,7 @@ def _extract_flights_from_planning(planning_df: pd.DataFrame) -> pd.DataFrame:
     Regroupe le planning par vol :
       - Date_Vol (datetime.date)
       - Heure_Vol (string HH:MM)
-      - Vol (string)
+      - Numero_Vol (string)
       - Destination (string)
       - nb_be : count
       - total_equiv : somme BE_Nb_Equiv
@@ -69,7 +70,7 @@ def _extract_flights_from_planning(planning_df: pd.DataFrame) -> pd.DataFrame:
     if planning_df is None or planning_df.empty:
         return pd.DataFrame(
             columns=[
-                "Date_Vol", "Heure_Vol", "Vol", "Destination",
+                "Date_Vol", "Heure_Vol", "Numero_Vol", "Destination",
                 "nb_be", "total_equiv", "benevoles"
             ]
         )
@@ -81,6 +82,7 @@ def _extract_flights_from_planning(planning_df: pd.DataFrame) -> pd.DataFrame:
     df["Heure_Vol"] = df["Heure_Vol"].apply(_norm_str)
     df["BE_Numero"] = df["BE_Numero"].apply(_norm_str)
     df["Benevole"] = df["Benevole"].apply(_norm_str)
+    df["Numero_Vol"] = df.get("Numero_Vol", "").apply(_norm_str)
 
     # Poids équivalent
     if "BE_Nb_Equiv" in df.columns:
@@ -90,7 +92,7 @@ def _extract_flights_from_planning(planning_df: pd.DataFrame) -> pd.DataFrame:
 
     # Agrégation
     grouped = df.groupby(
-        ["Date_Vol", "Heure_Vol", "Vol", "Destination"],
+        ["Date_Vol", "Heure_Vol", "Numero_Vol", "Destination"],
         dropna=False
     ).agg(
         nb_be=("BE_Numero", lambda s: s.apply(_norm_str).ne("").sum()),
@@ -149,7 +151,7 @@ def _choose_best_flight(candidates: pd.DataFrame, nb_colis: int) -> Optional[pd.
 
     df = candidates.copy()
     df["score"] = df["total_equiv"] + df["nb_be"] * 10
-    df = df.sort_values(["score", "Date_Vol", "Heure_Vol", "Vol"])
+    df = df.sort_values(["score", "Date_Vol", "Heure_Vol", "Numero_Vol"])
     return df.iloc[0]
 
 
@@ -170,7 +172,7 @@ def _choose_best_benevole_on_flight(planning_df, date_vol, heure_str, vol, nb_co
     mask = (
         (df["Date_Vol"] == date_vol) &
         (df["Heure_Vol"] == heure_str) &
-        (df["Vol"] == vol)
+        (df["Numero_Vol"] == vol)
     )
     vol_df = df.loc[mask]
 
@@ -212,7 +214,7 @@ def _build_new_row(be_num, nb_colis, dest, date_vol, heure_vol, vol, benevole):
     return {
         "Date_Vol": date_vol,
         "Heure_Vol": heure_str,
-        "Vol": vol,
+        "Numero_Vol": vol,
         "Destination": dest or "",
         "BE_Numero": be_num,
         "BE_Nb_Colis": nb_colis,
@@ -245,16 +247,16 @@ def place_be(planning_df, be_num, nb_colis, dest, date_vol, heure_vol, benevole)
         raise BEPlacementError("Impossible d'ajouter un BE sans numéro.")
 
     if has_be and not has_date and not has_benev:
-        return _place_be_auto(planning_df, be_num, nb_colis, dest)
+        return normalize_planning_df(_place_be_auto(planning_df, be_num, nb_colis, dest))
 
     if has_be and has_date and not has_benev:
-        return _place_be_semi_auto(planning_df, be_num, nb_colis, dest, date_vol, heure_vol)
+        return normalize_planning_df(_place_be_semi_auto(planning_df, be_num, nb_colis, dest, date_vol, heure_vol))
 
     if has_be and not has_date and has_benev:
-        return _place_be_with_forced_benevole(planning_df, be_num, nb_colis, dest, benevole)
+        return normalize_planning_df(_place_be_with_forced_benevole(planning_df, be_num, nb_colis, dest, benevole))
 
     if has_be and has_date and has_benev:
-        return _place_be_manual(planning_df, be_num, nb_colis, dest, date_vol, heure_vol, benevole)
+        return normalize_planning_df(_place_be_manual(planning_df, be_num, nb_colis, dest, date_vol, heure_vol, benevole))
 
     raise BEPlacementError("Paramètres incohérents.")
 
@@ -275,7 +277,7 @@ def _place_be_manual(planning_df, be_num, nb_colis, dest, date_vol, heure_vol, b
         vol_number = "MANUEL"
     else:
         row = same_day.sort_values(["total_equiv", "nb_be"]).iloc[0]
-        vol_number = row["Vol"]
+        vol_number = row["Numero_Vol"]
 
     new_row = _build_new_row(be_num, nb_colis, dest, date_vol, heure_vol, vol_number, benevole)
     return pd.concat([planning_df, pd.DataFrame([new_row])], ignore_index=True)
@@ -302,7 +304,7 @@ def _place_be_auto(planning_df, be_num, nb_colis, dest):
 
     date_vol = best["Date_Vol"]
     heure_str = best["Heure_Vol"]
-    vol = best["Vol"]
+    vol = best["Numero_Vol"]
 
     benev = _choose_best_benevole_on_flight(planning_df, date_vol, heure_str, vol, nb_colis)
 
@@ -333,7 +335,7 @@ def _place_be_semi_auto(planning_df, be_num, nb_colis, dest, date_vol, heure_vol
     if best is None:
         raise BEPlacementError("Pas de vol compatible en capacité ce jour-là.")
 
-    vol = best["Vol"]
+    vol = best["Numero_Vol"]
     heure_str = best["Heure_Vol"]
     benev = _choose_best_benevole_on_flight(planning_df, date_vol, heure_str, vol, nb_colis)
 
@@ -359,11 +361,11 @@ def _place_be_with_forced_benevole(planning_df, be_num, nb_colis, dest, benevole
     if vols_benev.empty:
         raise BEPlacementError(f"Le bénévole '{benevole}' n'est affecté à aucun vol.")
 
-    vols_benev = vols_benev[["Date_Vol", "Heure_Vol", "Vol", "Destination"]].drop_duplicates()
+    vols_benev = vols_benev[["Date_Vol", "Heure_Vol", "Numero_Vol", "Destination"]].drop_duplicates()
 
     merged = vols_benev.merge(
         flights,
-        on=["Date_Vol", "Heure_Vol", "Vol", "Destination"],
+        on=["Date_Vol", "Heure_Vol", "Numero_Vol", "Destination"],
         how="left"
     )
 
@@ -381,7 +383,7 @@ def _place_be_with_forced_benevole(planning_df, be_num, nb_colis, dest, benevole
     best = _choose_best_flight(merged, nb_colis)
     date_vol = best["Date_Vol"]
     heure_str = best["Heure_Vol"]
-    vol = best["Vol"]
+    vol = best["Numero_Vol"]
 
     heure_vol = _to_time(heure_str)
 

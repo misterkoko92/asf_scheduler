@@ -10,6 +10,9 @@ def parse_date_series(series: pd.Series, fmt: str = "%d/%m/%y") -> pd.Series:
     mask = ser.isna()
     if mask.any():
         ser.loc[mask] = pd.to_datetime(series.loc[mask], errors="coerce", dayfirst=True)
+        mask = ser.isna()
+        if mask.any():
+            ser.loc[mask] = pd.to_datetime(series.loc[mask], errors="coerce", dayfirst=False)
     return ser
 
 
@@ -18,11 +21,17 @@ def parse_time_series(series: pd.Series) -> pd.Series:
     Parse une série d'heures (peut contenir '10h00' ou '10:00').
     Retourne une Series datetime64[ns] (NaT si invalide).
     """
-    s_clean = series.astype(str).str.replace("h", ":", regex=False)
+    s_clean = series.astype(str).str.strip().str.replace("h", ":", regex=False)
     ser = pd.to_datetime(s_clean, format="%H:%M", errors="coerce")
     mask = ser.isna()
     if mask.any():
-        ser.loc[mask] = pd.to_datetime(s_clean.loc[mask], errors="coerce")
+        ser.loc[mask] = pd.to_datetime(s_clean.loc[mask], format="%H:%M:%S", errors="coerce")
+    # Support des heures Excel en format numérique (fraction de journée)
+    num = pd.to_numeric(series, errors="coerce")
+    num_mask = ser.isna() & num.notna()
+    if num_mask.any():
+        seconds = (num[num_mask] * 86400).round().astype("Int64")
+        ser.loc[num_mask] = pd.to_datetime(seconds, unit="s", errors="coerce")
     return ser
 
 

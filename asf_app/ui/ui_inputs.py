@@ -8,7 +8,7 @@ import streamlit as st
 from pathlib import Path
 import shutil
 
-from asf_app.state import get_state, get_tmp_dir
+from asf_app.state import get_state, get_tmp_dir, sync_state_paths_to_engine
 from openpyxl import load_workbook
 
 import scheduler.config_paths as cp
@@ -32,7 +32,7 @@ from scheduler.config_paths import (
 
 # Loaders normalisés
 from loaders.universal_loader import load_and_normalize
-from loaders.load_shipments import load_shipments
+from loaders.load_shipments import load_shipments_df
 from loaders.load_vols_api import load_vols_api, store_vols_api_sheet
 from scheduler.column_map import (
     column_map_mag_central,
@@ -43,7 +43,6 @@ from scheduler.column_map import (
     column_map_vols,
 )
 
-from scheduler import be_manager
 
 
 # -------------------------------------------------------------------------
@@ -59,14 +58,14 @@ def pretty_mtime(path: Path) -> str:
         return "N/A"
 
 
-def ensure_tmp_file(src_path: Path, filename: str) -> Path:
+def ensure_tmp_file(src_path: Path, filename: str, *, overwrite: bool = False) -> Path:
     """
     Assure la présence d’un fichier dans le TMP moteur.
     Copie si absent. Ne remplace pas si déjà là.
     """
     tmp_dir = get_tmp_dir()
     dst = tmp_dir / filename
-    if not dst.exists() and src_path.exists():
+    if src_path.exists() and (overwrite or not dst.exists()):
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src_path, dst)
     return dst
@@ -222,6 +221,7 @@ def overwrite_tmp_file(uploaded_file, state, key_name, reload_func):
             state.df_vols = None
 
         reload_func(state, force=True)
+        sync_state_paths_to_engine(state)
         st.success("✔ Fichier mis à jour dans le dossier TMP")
 
     except Exception as e:
@@ -233,7 +233,13 @@ def refresh_from_onedrive(state, src_path, key_name, reload_func):
     Copie depuis OneDrive vers TMP et recharge les df.
     """
     try:
-        dst = ensure_tmp_file(src_path, Path(src_path).name)
+        name_map = {
+            "tdb": TABLEAU_DE_BORD.name,
+            "benev": PLANNING_BENEVOLES.name,
+            "vols": VOLS.name,
+        }
+        dst_name = name_map.get(key_name, Path(src_path).name)
+        dst = ensure_tmp_file(src_path, dst_name, overwrite=True)
         setattr(state, f"{key_name}_tmp", dst)
 
         # reset dfs
@@ -248,6 +254,7 @@ def refresh_from_onedrive(state, src_path, key_name, reload_func):
             state.df_vols = None
 
         reload_func(state, force=True)
+        sync_state_paths_to_engine(state)
         st.success(f"✔ Rechargé depuis OneDrive : {src_path.name}")
 
     except Exception as e:
@@ -265,6 +272,7 @@ def refresh_all(state):
     load_tdb_file(state, force=True)
     load_benev_file(state, force=True)
     load_vols_file(state, force=True)
+    sync_state_paths_to_engine(state)
     st.success("✔ Tous les fichiers ont été rechargés depuis OneDrive.")
 
 
@@ -287,6 +295,7 @@ def render_tab_inputs():
         state.benev_tmp = PLANNING_BENEVOLES
     if state.vols_tmp is None:
         state.vols_tmp = VOLS
+    sync_state_paths_to_engine(state)
 
     # Chargements (évite d'afficher des erreurs sur Cloud si fichiers vides)
     if not cloud_mode or state.tdb_tmp.stat().st_size > 0:
@@ -315,17 +324,21 @@ def render_tab_inputs():
 
         # BE planifiables
         try:
-            param_be = be_manager.load_param_be()
-            be_raw = load_shipments(param_be)
-            be_filt = be_manager.filter_shipments(be_raw)
-            be_sorted = be_manager.sort_shipments(be_filt)
-
-            if be_sorted:
-                counts = {}
-                for s in be_sorted:
-                    counts[s.dest] = counts.get(s.dest, 0) + 1
-                st.write("📦 BE planifiables : " +
-                         ", ".join([f"{d} ({c})" for d, c in counts.items()]))
+            df_be = load_shipments_df(planifiables_only=True)
+            if df_be is not None and not df_be.empty:
+                counts = (
+                    df_be["Destination"]
+                    .astype(str)
+                    .str.strip()
+                    .replace("", pd.NA)
+                    .dropna()
+                    .value_counts()
+                    .to_dict()
+                )
+                st.write(
+                    "📦 BE planifiables : "
+                    + ", ".join([f"{d} ({c})" for d, c in counts.items()])
+                )
             else:
                 st.write("📦 Aucun BE planifiable.")
         except Exception as e:

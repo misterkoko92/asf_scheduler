@@ -21,8 +21,6 @@ from asf_app.ui.ui_stats.ui_stats import (
 # ==== IMPORTS BE MOTEUR ======================================================
 from loaders.universal_loader import load_and_normalize
 from scheduler.column_map import column_map_param_be
-from loaders.load_shipments import load_shipments  # on le garde si besoin ailleurs
-from scheduler.be_manager import filter_shipments, sort_shipments
 
 
 # ============================================================================

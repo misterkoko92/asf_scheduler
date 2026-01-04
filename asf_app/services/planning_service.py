@@ -6,6 +6,7 @@ from typing import Tuple, Dict
 import pandas as pd
 
 from scheduler.core_scheduler import Scheduler
+from scheduler.planning_schema import normalize_planning_df
 from asf_app.config.paths import AppPaths
 
 
@@ -30,6 +31,7 @@ def run_planning(paths: AppPaths) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
     scheduler = Scheduler()
     planning_df, bilan_df = scheduler.run()
+    planning_df = normalize_planning_df(planning_df)
 
     # Toujours assurer un DataFrame propre
     if planning_df is None:
@@ -64,13 +66,14 @@ def add_manual_be(planning_df: pd.DataFrame, form_data: Dict) -> pd.DataFrame:
     new_row = {
         "Date_Vol": form_data.get("date_vol"),
         "Heure_Vol": heure_str,
-        "Vol": form_data.get("vol_num", ""),
+        "Numero_Vol": form_data.get("vol_num", ""),
         "Destination": form_data.get("dest", ""),
         "BE_Numero": form_data.get("be_num", ""),
         "BE_Nb_Colis": form_data.get("nb_colis", 0),
         "BE_Nb_Equiv": form_data.get("nb_colis", 0),
         "Benevole": form_data.get("benevole", ""),
+        "_MANUEL": True,
     }
 
     df2 = pd.concat([planning_df, pd.DataFrame([new_row])], ignore_index=True)
-    return df2
+    return normalize_planning_df(df2)

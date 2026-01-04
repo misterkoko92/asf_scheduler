@@ -14,7 +14,7 @@ import pandas as pd
 import streamlit as st
 
 from asf_app.ui.loader import load_parameters
-from asf_app.ui.state_planning import get_planning_state
+from asf_app.ui.ui_planning.state_planning import get_planning_state
 from asf_app.ui.ui_communication.email_destinations_handler import _get_emails_for_destination
 from asf_app.ui.ui_communication.email_expediteurs_handler import _get_emails_for_expediteur
 from asf_app.ui.ui_communication.outlook import create_outlook_draft
@@ -24,7 +24,10 @@ from loaders.universal_loader import load_and_normalize
 from scheduler.column_map import column_map_mag_central
 from scheduler.config_paths import SHEET_MAG_CENTRAL, TABLEAU_DE_BORD
 import scheduler.config_paths as cp
+from utils.datetime_utils import parse_date_series, parse_time_series, normalize_hour_str, hour_min_from_series
+from utils.ui_helpers import build_iata_city_maps, format_be_label
 from utils.export_pdf import export_first_sheet_to_pdf
+from scheduler.planning_schema import normalize_planning_df
 
 
 # ---------------------------------------------------------------------------
@@ -423,7 +426,7 @@ def _bene_status(df_dispo: pd.DataFrame, df_planning: pd.DataFrame, name: str, d
             & (df_planning.get("Date_Vol", pd.Series(dtype=str)).astype(str) == str(date_str))
         )
         if vol_str is not None:
-            mask = mask & (df_planning.get("Vol", pd.Series(dtype=str)).astype(str) == str(vol_str))
+            mask = mask & (df_planning.get("Numero_Vol", pd.Series(dtype=str)).astype(str) == str(vol_str))
         already = mask.any()
 
     if already:
@@ -517,7 +520,7 @@ def _collect_be_from_planning(df_prev: pd.DataFrame, week: int, year: int) -> pd
         if cand in df.columns:
             heure_col = cand
             break
-    df_out["Vol"] = df.get(vol_col, "")
+    df_out["Numero_Vol"] = df.get(vol_col, "")
     df_out["Heure_Vol"] = df.get(heure_col, "")
     # Nb colis / Type si présents
     coli_col = None
@@ -565,349 +568,117 @@ def _apply_planning_update(
     bene_meta: Optional[dict] = None,
     bene_changed: bool = False,
 ):
-    from openpyxl import load_workbook
-    from openpyxl.styles import PatternFill
+    """
+    Nouvelle approche : construit un DF consolidé, applique l'action, puis regénère Export/Planning.
+    """
     import datetime as _dt
+    import openpyxl
+    from openpyxl.styles import PatternFill
 
-    wb = load_workbook(path)
+    def _norm_be(val: str) -> str:
+        digits = "".join(ch for ch in str(val) if ch.isdigit())
+        return digits.zfill(6) if digits else str(val)
 
-    def _find_sheet(name_kw: str, fallback_idx: int):
-        for sh in wb.sheetnames:
-            if name_kw.lower() in sh.lower():
-                return wb[sh]
-        return wb.worksheets[fallback_idx] if len(wb.worksheets) > fallback_idx else wb.active
-
-    ws_plan = _find_sheet("planning", 0)
-    ws_export = _find_sheet("export", 1)
-
-    fill_red = PatternFill(fill_type="solid", fgColor="F8CBAD")
-    fill_blue = PatternFill(fill_type="solid", fgColor="BDD7EE")
-
-    def _norm_be_cell(val: object) -> str:
-        s = "".join(ch for ch in str(val) if ch.isdigit())
-        if len(s) >= 6:
-            return s[-6:]
-        return s
-
-    # Incrémente Q1
+    # Lecture Export planning en DF
     try:
-        val_q1 = ws_plan["Q1"].value
-        val_q1 = int(val_q1) if val_q1 is not None else 0
-        ws_plan["Q1"].value = val_q1 + 1
+        df_export = pd.read_excel(path, sheet_name="Export planning")
+    except Exception:
+        df_export = pd.DataFrame()
+    # Fallback Planning si Export planning absent
+    if df_export.empty:
+        try:
+            df_export = pd.read_excel(path, sheet_name=0)
+        except Exception:
+            df_export = pd.DataFrame()
+
+    # Normalisation minimale
+    df_export = df_export.copy()
+    df_export.columns = [str(c) for c in df_export.columns]
+    if "BE_Numero" not in df_export.columns:
+        df_export["BE_Numero"] = df_export.get("BE_NUM", df_export.get("BE", ""))
+    df_export["BE_Key"] = df_export["BE_Numero"].apply(_norm_be)
+    if "Date_Vol" in df_export.columns:
+        df_export["Date_Vol"] = parse_date_series(df_export["Date_Vol"]).dt.date
+    if "Heure_Vol" in df_export.columns:
+        df_export["Heure_Vol"] = parse_time_series(df_export["Heure_Vol"]).dt.time
+        df_export["HEURE_MIN"] = hour_min_from_series(df_export["Heure_Vol"])
+    if "_STATUS" not in df_export.columns:
+        df_export["_STATUS"] = "normal"
+
+    # Appliquer l'action sur le DF
+    if action == "Annulation":
+        df_export.loc[df_export["BE_Key"] == _norm_be(be_num), "_STATUS"] = "old"
+    else:
+        # marquer l'ancienne ligne en old
+        df_export.loc[df_export["BE_Key"] == _norm_be(be_num), "_STATUS"] = "old"
+        # construire la nouvelle ligne
+        new_row = {
+            "BE_Numero": be_num,
+            "BE_Key": _norm_be(be_num),
+            "Destination": dest_iata,
+            "IATA": dest_iata,
+            "Date_Vol": parse_date_series(pd.Series([date_new])).iloc[0].date() if date_new else None,
+            "Heure_Vol": parse_time_series(pd.Series([heure_new])).iloc[0].time() if heure_new else None,
+            "Heure": normalize_hour_str(pd.Series([heure_new])).iloc[0],
+            "HEURE_MIN": hour_min_from_series(pd.Series([heure_new])).iloc[0],
+            "Numero_Vol": vol_new,
+            "Numero_Vol": vol_new,
+            "Routing": "",
+            "Benevole": bene_choice,
+            "BE_Nb_Colis": be_info.get("BE_Nb_Colis", be_info.get("Nb_Colis", "")),
+            "BE_Nb_Equiv": be_info.get("BE_Nb_Equiv", be_info.get("Equiv_Colis", "")),
+            "BE_Type": be_info.get("BE_Type", ""),
+            "BE_Expediteur": be_info.get("BE_Expediteur", ""),
+            "BE_Destinataire": be_info.get("BE_Destinataire", ""),
+            "_STATUS": "new",
+        }
+        df_export = pd.concat([df_export, pd.DataFrame([new_row])], ignore_index=True)
+
+    # Tri
+    df_export = df_export.sort_values(by=["Date_Vol", "Heure_Vol", "BE_Numero"], kind="mergesort").reset_index(drop=True)
+
+    # Écriture Excel
+    wb = openpyxl.load_workbook(path)
+    # incrémenter Q1 (version) si existant
+    try:
+        ws_plan = wb.worksheets[0]
+        q1_val = ws_plan["Q1"].value
+        ws_plan["Q1"].value = (int(q1_val) if q1_val not in (None, "") else 0) + 1
     except Exception:
         pass
 
-    # Helper : sur export, localiser colonne BE
-    export_be_col_idx = None
-    for idx, cell in enumerate(ws_export[1], start=1):
-        val = str(cell.value).lower() if cell.value is not None else ""
-        if "be" in val and "num" in val:
-            export_be_col_idx = idx
-            break
+    # Export planning
+    if "Export planning" in wb.sheetnames:
+        del wb["Export planning"]
+    ws_exp = wb.create_sheet("Export planning", 1)
+    headers = list(df_export.columns)
+    ws_exp.append(headers)
+    for _, r in df_export.iterrows():
+        ws_exp.append([r.get(h, "") for h in headers])
 
-    def _highlight_export(color_fill):
-        if export_be_col_idx is None:
-            return []
-        target_rows = []
-        for row in ws_export.iter_rows(min_row=2):
-            if len(row) < export_be_col_idx:
-                continue
-            if _norm_be_cell(row[export_be_col_idx - 1].value) == _norm_be_cell(be_num):
-                target_rows.append(row)
-        for row in target_rows:
-            for cell in row:
-                cell.fill = color_fill
-        return target_rows
-
-    def _highlight_plan(color_fill, clear_colis: bool = False):
-        target_rows = []
-        be_col_plan = 11  # K
-        for r in ws_plan.iter_rows(min_row=2):
-            if len(r) < be_col_plan:
-                continue
-            if _norm_be_cell(r[be_col_plan - 1].value) == _norm_be_cell(be_num):
-                target_rows.append(r)
-        for row in target_rows:
-            for idx, cell in enumerate(row, start=1):
-                if 4 <= idx <= 17:  # D à Q
-                    cell.fill = color_fill
-            if clear_colis and len(row) >= 12:
-                row[11].value = None  # colonne L (index 12 -> position 11)
-        return target_rows
-
-    # Annulation -> surligner lignes existantes
-    if action == "Annulation":
-        _highlight_export(fill_red)
-        _highlight_plan(fill_red, clear_colis=True)
-        wb.save(path)
-        return
-
-    # Ajout ou changement -> surligner ancien en rouge si présent
-    export_rows_red = _highlight_export(fill_red)
-    plan_rows_red = _highlight_plan(fill_red, clear_colis=True)
-
-    # Ajout nouvelle ligne export
-    headers = [c.value for c in ws_export[1]]
-    be_info_dict = be_info.to_dict()
-    plan_info_dict = plan_row.to_dict() if plan_row is not None else {}
-    plan_full_dict = plan_row_full.to_dict() if plan_row_full is not None else {}
-    # si pas de plan_row_full, essayer de prendre la première ligne export existante
-    if not plan_full_dict and export_rows_red:
-        headers = [c.value for c in ws_export[1]]
-        first_row_vals = [c.value for c in export_rows_red[0]]
-        plan_full_dict = {h: v for h, v in zip(headers, first_row_vals)}
-    merged = {**be_info_dict, **plan_info_dict}
-    merged.update({k: v for k, v in plan_full_dict.items() if k not in merged})
-    if bene_changed and bene_meta:
-        merged.update(bene_meta)
-    merged_lower = {str(k).lower(): v for k, v in merged.items()}
-    def _get_val(*keys, fallback=""):
-        for k in keys:
-            if k is None:
-                continue
-            k_low = str(k).lower()
-            for source in (be_info_dict, plan_info_dict, plan_full_dict, merged):
-                if source is None:
-                    continue
-                if k in source and not _is_empty(source.get(k)):
-                    return source.get(k)
-                if k.upper() in source and not _is_empty(source.get(k.upper())):
-                    return source.get(k.upper())
-                if hasattr(source, "keys") and k_low in source.keys():
-                    v = source.get(k_low, None) if hasattr(source, "get") else None
-                    if not _is_empty(v):
-                        return v
-            if k_low in merged_lower:
-                v = merged_lower[k_low]
-                if not _is_empty(v):
-                    return v
-        return fallback
-    def _normalize_date(val):
-        try:
-            d = pd.to_datetime(val)
-            if pd.isna(d):
-                return val
-            return d.date()
-        except Exception:
-            return val
-    def _is_empty(val) -> bool:
-        try:
-            import pandas as pd  # local import
-            if val is None:
-                return True
-            if isinstance(val, str) and val.strip() == "":
-                return True
-            if pd.isna(val):
-                return True
-        except Exception:
-            if val in (None, ""):
-                return True
-        return False
-
-    def _if_empty(val, fallback):
-        try:
-            if _is_empty(val):
-                return fallback
-        except Exception:
-            if val in (None, ""):
-                return fallback
-        return val
-
-    # Vols : récupérer infos routing/IATA/heure si dispo
-    def _norm_vol(val: str) -> str:
-        s = str(val or "").upper().strip()
-        s = s.replace("  ", " ")
-        s = s.replace("AF ", "AF")
-        if s.startswith("AF") and len(s) > 2:
-            s = s[:2] + " " + s[2:]
-        return s.strip()
-
-    def _parse_time(val):
-        try:
-            if isinstance(val, _dt.time):
-                return val
-            sval = str(val).replace("h", ":")
-            t = pd.to_datetime(sval, errors="coerce").time()
-            return t
-        except Exception:
-            return None
-
-    def _combine_dt(d, t):
-        try:
-            if isinstance(d, _dt.date) and isinstance(t, _dt.time):
-                return _dt.datetime.combine(d, t)
-        except Exception:
-            pass
-        return None
-    date_new_norm = _normalize_date(date_new)
-    time_new_parsed = _parse_time(heure_new)
-
-    vol_info = {}
-    try:
-        df_vols_cache = get_vols_df_cached()
-        if df_vols_cache is not None and not df_vols_cache.empty:
-            date_target = _normalize_date(date_new)
-            vol_target = _norm_vol(vol_new)
-            df_tmp = df_vols_cache.copy()
-            df_tmp["Date_dt"] = pd.to_datetime(df_tmp.get("Date_Vol", df_tmp.get("Date", "")), errors="coerce", dayfirst=True).dt.date
-            df_tmp["Vol_norm"] = df_tmp.get("Numero_Vol", df_tmp.get("Vol", "")).apply(_norm_vol)
-            match = df_tmp[(df_tmp["Date_dt"] == date_target) & (df_tmp["Vol_norm"] == vol_target)]
-            if not match.empty:
-                row_v = match.iloc[0]
-                vol_info = {
-                    "Routing": row_v.get("Routing", ""),
-                    "IATA": str(row_v.get("IATA", row_v.get("Dest_IATA", ""))).strip().upper(),
-                    "Destination": row_v.get("Destination", ""),
-                    "Heure_Vol": row_v.get("Heure_Vol", ""),
-                }
-                t_parsed = _parse_time(vol_info.get("Heure_Vol"))
-                vol_info["Heure_dt"] = t_parsed
-    except Exception:
-        vol_info = {}
-    bene_short_val = bene_choice or be_info_dict.get("Benevole") or plan_info_dict.get("Benevole") or ""
-    be_colis_new = _get_val("BE_Nb_Colis", "Nb_Colis", "BE_Nb_Colis_MAG", fallback="")
-    be_equiv_new = _get_val("BE_Nb_Equiv", "Equiv_Colis", fallback="")
-    bene_id_new = _if_empty(_get_val("ID", "ID_BENEVOLE", "ID_BEN_ID"), bene_meta.get("ID") if bene_meta else "")
-    bene_tel_new = _if_empty(_get_val("Telephone", "Telephone_BEN_ID"), bene_meta.get("Telephone") if bene_meta else "")
-    routing_new = _if_empty(vol_info.get("Routing", ""), _get_val("Routing", "Routing_VOL", "Routing_Str"))
-    iata_new = dest_iata or vol_info.get("IATA", _get_val("Dest_IATA", "IATA"))
-    dest_ville_new = _get_val("Dest_Ville", "Ville", fallback=dest_iata)
-    destination_vol_new = vol_info.get("Destination", dest_iata)
-    heure_dt_new = _combine_dt(date_new_norm, time_new_parsed or vol_info.get("Heure_dt"))
-    heure_time_new = time_new_parsed or vol_info.get("Heure_dt") or _parse_time(heure_new)
-    heure_str_new = _fmt_time(heure_time_new or heure_new)
-    heure_min_new = None
-    if isinstance(heure_time_new, _dt.time):
-        heure_min_new = heure_time_new.hour * 60 + heure_time_new.minute
-    vol_norm_new = _norm_vol(vol_new)
-
-    override_map = {
-        "Date_Vol": date_new_norm,
-        "DATE": date_new_norm,
-        "Date_key": date_new_norm,
-        "Heure_Vol": heure_time_new or heure_new,
-        "HEURE_VOL": heure_time_new or heure_new,
-        "HEURE_VOL_DT": heure_dt_new,
-        "HEURE_MIN": heure_min_new,
-        "Vol": vol_new,
-        "Numero_Vol": vol_new,
-        "VOL_AFF": _fmt_vol(vol_new),
-        "Vol_key": vol_norm_new,
-        "Routing": routing_new,
-        "Routing_VOL": routing_new,
-        "Routing_Str": routing_new,
-        "IATA": iata_new,
-        "Dest_IATA": iata_new,
-        "Destination": dest_iata or _get_val("Destination", "Dest_IATA", "Dest_Ville"),
-        "Destination_VOL": destination_vol_new,
-        "Dest_Ville": dest_ville_new,
-        "Ville": dest_ville_new,
-        "Benevole": bene_choice or (bene_meta.get("Benevole") if bene_meta else bene_choice),
-        "BENEVOLE_DISP": bene_short_val,
-        "BE_Numero": be_num,
-        "BE_NUM": be_num,
-        "BE_Key": _norm_be(be_num),
-        "BE_Nb_Colis": be_colis_new,
-        "BE_COLIS": be_colis_new,
-        "BE_Nb_Equiv": be_equiv_new,
-        "BE_Type": _get_val("BE_Type", "BE_Type_MAG", fallback=""),
-        "BE_Expediteur": _get_val("BE_Expediteur", "BE_Expediteur_MAG", "Expediteur_Nom"),
-        "BE_Destinataire": _get_val("BE_Destinataire"),
-        "ID": bene_id_new,
-        "Telephone": bene_tel_new,
-        "_STATUS": "new",
-    }
-    override_map_lower = {k.lower(): v for k, v in override_map.items()}
-
-    new_row = []
-    for h in headers:
-        h_low = str(h or "").lower()
-        if h in override_map:
-            base_val = override_map[h]
-        elif h_low in override_map_lower:
-            base_val = override_map_lower[h_low]
-        else:
-            base_val = plan_full_dict.get(h, merged.get(h, merged_lower.get(h_low, "")))
-        if "destination_vol" in h_low:
-            base_val = _if_empty(base_val, vol_info.get("Destination", ""))
-        elif "destination" in h_low and "exp" not in h_low:
-            base_val = dest_iata or _get_val("Destination", "Dest_IATA", "Dest_Ville")
-        elif h_low in ("date_key", "date_vol") or ("date" in h_low and "maj" not in h_low):
-            base_val = date_new_norm
-        elif "heure_vol_dt" in h_low:
-            base_val = _combine_dt(date_new_norm, time_new_parsed or vol_info.get("Heure_dt"))
-        elif h_low in ("heure_vol", "heure"):
-            base_val = _fmt_time(time_new_parsed or vol_info.get("Heure_dt") or heure_new)
-        elif "heure_min" in h_low:
-            t_ref = time_new_parsed or vol_info.get("Heure_dt")
-            base_val = t_ref.hour * 60 + t_ref.minute if isinstance(t_ref, _dt.time) else base_val
-        elif "vol_key" in h_low:
-            base_val = _norm_vol(vol_new)
-        elif "routing_vol" in h_low:
-            base_val = _if_empty(base_val, vol_info.get("Routing", ""))
-        elif "routing" in h_low:
-            base_val = _if_empty(base_val, vol_info.get("Routing", ""))
-        elif "vol" in h_low and "date" not in h_low and "heure" not in h_low and "bene" not in h_low:
-            base_val = vol_new
-        elif "benevole_disp" in h_low:
-            base_val = bene_short_val
-        elif "bene" in h_low and "up" not in h_low and "id" not in h_low:
-            base_val = (bene_meta.get(h, bene_choice) if bene_changed and bene_meta else (bene_choice or base_val))
-        elif "colis" in h_low:
-            base_val = _get_val("BE_Nb_Colis", "Nb_Colis", "BE_Nb_Colis_MAG")
-        elif "equiv" in h_low:
-            base_val = _get_val("BE_Nb_Equiv", "Equiv_Colis")
-        elif "type" in h_low and "bene" not in h_low:
-            base_val = _get_val("BE_Type", "BE_Type_MAG") or base_val
-        elif "expediteur" in h_low:
-            base_val = _if_empty(base_val, _get_val("BE_Expediteur", "BE_Expediteur_MAG", "Expediteur_Nom"))
-        elif "destinataire" in h_low:
-            base_val = _if_empty(base_val, _get_val("BE_Destinataire"))
-        elif "telephone" in h_low:
-            base_val = _if_empty(base_val, _get_val("Telephone", "Telephone_BEN_ID"))
-            if bene_changed and bene_meta:
-                base_val = bene_meta.get("Telephone", bene_meta.get("Telephone_BEN_ID", base_val))
-        elif "iata" == h_low.strip():
-            base_val = dest_iata or _if_empty(base_val, vol_info.get("IATA", _get_val("Dest_IATA", "IATA")))
-        elif h_low in ("dest_ville", "ville"):
-            base_val = _if_empty(base_val, _get_val("Dest_Ville", "Ville", fallback=dest_iata))
-        elif "be_dest" in h_low or "destinataire" in h_low:
-            base_val = _if_empty(base_val, _get_val("BE_Destinataire"))
-        elif "be_exp" in h_low or "expediteur" in h_low:
-            base_val = _if_empty(base_val, _get_val("BE_Expediteur", "Expediteur_Nom"))
-        elif h_low in ("id", "id_benevole", "id_ben_id"):
-            base_val = _if_empty(base_val, _get_val("ID", "ID_BENEVOLE", "ID_BEN_ID"))
-        elif "be_key" in h_low:
-            base_val = _norm_be(be_num)
-        elif h_low.strip() in ("_status", "status"):
-            base_val = "new"
-        elif ("numero be" in h_low) or (h_low.startswith("be_") and "nb" not in h_low and "exp" not in h_low and "dest" not in h_low and "type" not in h_low and "bene" not in h_low and "colis" not in h_low):
-            base_val = be_num
-        new_row.append(base_val)
-    ws_export.append(new_row)
-    last_row_idx = ws_export.max_row
-    for cell in ws_export[last_row_idx]:
-        cell.fill = fill_blue
-
-    # Ajout nouvelle ligne planning (approx)
-    target_row = ws_plan.max_row + 1
-    # Copier première ligne existante du planning si trouvée
-    base_plan_vals = [None] * ws_plan.max_column
-    if plan_rows_red:
-        base_plan_vals = [c.value for c in plan_rows_red[0]] + [None] * max(0, ws_plan.max_column - len(plan_rows_red[0]))
-    ws_plan.cell(row=target_row, column=4).value = (bene_meta.get("Benevole") if bene_changed and bene_meta else bene_choice) or (base_plan_vals[3] if len(base_plan_vals) >= 4 else None)  # D
-    ws_plan.cell(row=target_row, column=6).value = dest_iata or (base_plan_vals[5] if len(base_plan_vals) >= 6 else None)    # F
-    ws_plan.cell(row=target_row, column=7).value = dest_iata or (base_plan_vals[6] if len(base_plan_vals) >= 7 else None)    # G
-    ws_plan.cell(row=target_row, column=9).value = _fmt_vol(vol_new) or (base_plan_vals[8] if len(base_plan_vals) >= 9 else None)  # I
-    ws_plan.cell(row=target_row, column=10).value = _fmt_time(heure_new) or (base_plan_vals[9] if len(base_plan_vals) >= 10 else None)  # J
-    ws_plan.cell(row=target_row, column=11).value = be_num or (base_plan_vals[10] if len(base_plan_vals) >= 11 else None)      # K
-    be_colis_new = _get_val("BE_Nb_Colis", "Nb_Colis", "BE_Nb_Colis_MAG", fallback="")
-    ws_plan.cell(row=target_row, column=12).value = be_colis_new or (base_plan_vals[11] if len(base_plan_vals) >= 12 else None)
-    ws_plan.cell(row=target_row, column=13).value = _get_val("BE_Type", "BE_Type_MAG", fallback="") or (base_plan_vals[12] if len(base_plan_vals) >= 13 else None)
-    ws_plan.cell(row=target_row, column=16).value = _get_val("BE_Expediteur", "BE_Expediteur_MAG") or (base_plan_vals[15] if len(base_plan_vals) >= 16 else None)
-    ws_plan.cell(row=target_row, column=17).value = _get_val("BE_Destinataire") or (base_plan_vals[16] if len(base_plan_vals) >= 17 else None)
-    for c in range(4, 18):  # D à Q uniquement
-        ws_plan.cell(row=target_row, column=c).fill = fill_blue
+    # Planning : reprendre uniquement les colonnes utiles et appliquer couleurs
+    if "Planning" in wb.sheetnames:
+        del wb["Planning"]
+    ws_plan_new = wb.create_sheet("Planning", 0)
+    planning_cols = [
+        "Benevole", "unusedE", "unusedF", "Destination", "IATA", "Routing",
+        "Numero_Vol", "Heure_Vol", "BE_Numero", "BE_Nb_Colis", "BE_Type",
+        "unusedN", "BE_Expediteur", "BE_Destinataire"
+    ]
+    # Squelettes colonnes D..Q (4..17)
+    headers_plan = ["", "", "", "Benevole", "", "Destination", "IATA", "Routing", "Numero_Vol", "Heure_Vol", "BE_Numero", "BE_Nb_Colis", "BE_Type", "", "BE_Expediteur", "BE_Destinataire"]
+    ws_plan_new.append(headers_plan)
+    fill_red = PatternFill(fill_type="solid", fgColor="F8CBAD")
+    fill_blue = PatternFill(fill_type="solid", fgColor="BDD7EE")
+    for _, r in df_export.iterrows():
+        status = str(r.get("_STATUS", "normal")).lower()
+        row_vals = ["", "", "", r.get("Benevole", ""), "", r.get("Destination", ""), r.get("IATA", ""), r.get("Routing", ""), r.get("Numero_Vol", ""), normalize_hour_str(pd.Series([r.get("Heure_Vol", "")])).iloc[0], r.get("BE_Numero", ""), "" if status.startswith("old") else r.get("BE_Nb_Colis", ""), r.get("BE_Type", ""), "", r.get("BE_Expediteur", ""), r.get("BE_Destinataire", "")]
+        ws_plan_new.append(row_vals)
+        if status.startswith("old") or status.startswith("new"):
+            fill = fill_red if status.startswith("old") else fill_blue
+            row_idx = ws_plan_new.max_row
+            for c in range(4, 18):
+                ws_plan_new.cell(row=row_idx, column=c).fill = fill
 
     wb.save(path)
 
@@ -919,13 +690,19 @@ def render_tab_shipments_update():
     st.title("🚚 Mise à Jour expéditions")
 
     planning_state = get_planning_state()
-    df_planning = planning_state.planning if planning_state else pd.DataFrame()
+    df_planning = (
+        normalize_planning_df(planning_state.planning)
+        if planning_state and planning_state.planning is not None
+        else pd.DataFrame()
+    )
 
     with st.spinner("Chargement des paramètres…"):
         df_paramdest, df_paramexpediteur, df_parambenev, _ = load_parameters()
     df_vols = get_vols_df_cached()
     df_dispos_raw = get_benevoles_cached()
     df_dispos = _prepare_dispo(df_dispos_raw)
+
+    dest_city_map, city_to_iata_map = build_iata_city_maps(df_paramdest)
 
     # Sélecteur semaine (tri décroissant)
     weeks_set = _available_weeks_from_exports()
@@ -1077,7 +854,7 @@ def render_tab_shipments_update():
     if plan_row is not None:
         date_initial = plan_row.get("Date_Vol", date_initial)
         date_initial_long = _fmt_date_long(date_initial)
-        current_vol = plan_row.get("Vol", plan_row.get("Numero_Vol", ""))
+        current_vol = plan_row.get("Numero_Vol", "")
         current_heure = plan_row.get("Heure_Vol", plan_row.get("Heure", ""))
         current_bene = plan_row.get("Benevole", "")
         bene_prenom_court = plan_row.get("Benevole_Prenom_Court", plan_row.get("Prenom_Court", ""))
@@ -1239,22 +1016,6 @@ def render_tab_shipments_update():
                 bene_changed=bene_changed,
             )
             st.success("Planning Excel mis à jour.")
-            try:
-                from openpyxl import load_workbook
-                wb_ver = load_workbook(Path(preview_path))
-                ws_ver = wb_ver.worksheets[0]
-                try:
-                    cur_ver = ws_ver["Q1"].value
-                except Exception:
-                    cur_ver = None
-                try:
-                    cur_int = int(cur_ver) if cur_ver not in (None, "") else 0
-                except Exception:
-                    cur_int = 0
-                ws_ver["Q1"].value = cur_int + 1
-                wb_ver.save(Path(preview_path))
-            except Exception as e_ver:
-                st.warning(f"Version non incrémentée : {e_ver}")
             try:
                 pdf_path = export_first_sheet_to_pdf(Path(preview_path))
                 st.success(f"PDF généré : {pdf_path.name}")

@@ -3,6 +3,7 @@
 
 from datetime import datetime, date, time
 from typing import List, Dict, Any
+from pathlib import Path
 import pandas as pd
 
 from scheduler.config_paths import (
@@ -12,6 +13,7 @@ from scheduler.config_paths import (
     SHEET_PARAM_DEST,
     SHEET_VOLS,
 )
+import scheduler.config_paths as cp
 
 from loaders.universal_loader import load_and_normalize
 from scheduler.column_map import (
@@ -98,7 +100,11 @@ def clean_city(v: str) -> str:
 # CHARGEMENT DES VOLS — VERSION STABLE
 # =====================================================================
 
-def load_vols() -> List[Dict[str, Any]]:
+def load_vols(
+    *,
+    vols_path: Path | None = None,
+    param_dest_df: pd.DataFrame | None = None,
+) -> List[Dict[str, Any]]:
     """
     Charge les vols normalisés.
     Retourne TOUJOURS une liste (jamais None).
@@ -109,7 +115,7 @@ def load_vols() -> List[Dict[str, Any]]:
     # --------------------------------------------------------------
     # 1) ParamDest → ville → IATA / capacité
     # --------------------------------------------------------------
-    df_param = get_param_dest().copy()
+    df_param = (param_dest_df.copy() if param_dest_df is not None else get_param_dest().copy())
     # Remplir uniquement les colonnes non numériques avec ""
     obj_cols = df_param.select_dtypes(exclude=["number"]).columns
     for c in obj_cols:
@@ -142,7 +148,7 @@ def load_vols() -> List[Dict[str, Any]]:
     # 2) Vols.xlsx (onglet Vols) — source principale
     # --------------------------------------------------------------
     df_vols = load_and_normalize(
-        path=VOLS,
+        path=(vols_path or VOLS),
         sheet_name=SHEET_VOLS,
         mapping=column_map_vols,
         header=0,
@@ -281,10 +287,11 @@ def load_vols() -> List[Dict[str, Any]]:
                     }
 
     # Ingestion des feuilles API du source
-    _ingest_api_sheets(VOLS_SRC)
+    vols_src_path = vols_path or cp.VOLS_SRC
+    _ingest_api_sheets(vols_src_path)
     # Fallback : si aucun vol retenu après le sheet principal, on lit aussi les feuilles API de la copie TMP
     if not vols_dict:
-        _ingest_api_sheets(VOLS)
+        _ingest_api_sheets(vols_path or cp.VOLS)
 
     print(f"➡ Vols retenus : {len(vols_dict)}")
 
@@ -308,13 +315,17 @@ def load_vols() -> List[Dict[str, Any]]:
 # VERSION DATAFRAME — audit & communication
 # =====================================================================
 
-def load_vols_df() -> pd.DataFrame:
-    vols = load_vols()
+def load_vols_df(
+    *,
+    vols_path: Path | None = None,
+    param_dest_df: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    vols = load_vols(vols_path=vols_path, param_dest_df=param_dest_df)
     if not vols:
         return pd.DataFrame()
 
     # mapping IATA -> ville depuis ParamDest
-    df_param = get_param_dest()
+    df_param = param_dest_df if param_dest_df is not None else get_param_dest()
     iata_to_city = {str(r.get("Dest_IATA", "")).upper(): str(r.get("Dest_Ville", "")).upper() for _, r in df_param.iterrows()}
 
     rows = []
@@ -368,3 +379,12 @@ try:
 except Exception:
     def get_vols_df_cached() -> pd.DataFrame:
         return load_vols_df()
+
+
+def clear_vols_cache() -> None:
+    cached = globals().get("get_vols_df_cached")
+    if cached is not None and hasattr(cached, "clear"):
+        try:
+            cached.clear()
+        except Exception:
+            pass
