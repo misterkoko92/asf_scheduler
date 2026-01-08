@@ -76,21 +76,25 @@ Les chemins des fichiers Excel (Tableau de Bord, Planning, Param) sont configur�
 
 ---
 
-## 🔌 Sources de données (préparation intégrations)
+## 🔌 Sources de données (connecteurs API)
 
-Par défaut, le moteur utilise les fichiers Excel locaux. Une couche `DataSource` est en place pour préparer l’intégration future de :
-- `asf-wms` (BE / expéditions)
-- `asf-benev` (disponibilités bénévoles)
+Par défaut, le moteur utilise les fichiers Excel locaux. Une couche `DataSource` permet
+maintenant de se brancher aux APIs `asf-wms` (expéditions) et `asf-benev` (bénévoles).
 
 Variables d’environnement supportées :
 - `ASF_DATA_SOURCE=excel|composite|asf-wms|asf-benev`
-- `ASF_WMS_ROOT` (défaut: `~/asf-wms`)
-- `ASF_BENEV_ROOT` (défaut: `~/asf-benev`)
-- `ASF_WMS_ENABLE=1` / `ASF_BENEV_ENABLE=1` pour activer les sources externes quand elles seront implémentées.
+- `ASF_WMS_ENABLE=1` / `ASF_BENEV_ENABLE=1`
+- `ASF_WMS_API_URL` (ex: `https://wms.example.org/api/v1`)
+- `ASF_WMS_API_KEY`
+- `ASF_WMS_API_TIMEOUT` (optionnel, secondes)
+- `ASF_BENEV_API_URL` (ex: `https://benev.example.org/api`)
+- `ASF_BENEV_API_KEY` ou `ASF_BENEV_API_TOKEN`
+- `ASF_BENEV_API_TIMEOUT` (optionnel, secondes)
+- `ASF_BENEV_API_START` / `ASF_BENEV_API_END` (optionnel, filtre des disponibilités)
 
-⚠️ Les connecteurs `asf-wms` / `asf-benev` sont volontairement des stubs pour l’instant : ils doivent être branchés sur les APIs ou exports locaux des projets concernés.
-
----
+Mode recommandé :
+- `ASF_DATA_SOURCE=composite` pour garder les vols via Excel, et lire les expéditions
+  depuis `asf-wms` + les bénévoles depuis `asf-benev`.
 
 ## 🧪 Tests
 
