@@ -7,6 +7,7 @@ from scheduler.config_paths import PLANNING_BENEVOLES, SHEET_BENEV_DISPO
 from loaders.universal_loader import load_and_normalize
 from scheduler.column_map import column_map_benev_dispo
 from utils.datetime_utils import parse_date_series, normalize_hour_str, parse_time_series
+from utils.cache_utils import file_mtime
 
 def load_benevoles(*, planning_path: Path | None = None) -> pd.DataFrame:
     """
@@ -78,16 +79,20 @@ try:
     import streamlit as st
 
     @st.cache_data(show_spinner=False)
-    def get_benevoles_cached() -> pd.DataFrame:
-        return load_benevoles()
+    def _get_benevoles_cached(planning_path: str, planning_mtime: float) -> pd.DataFrame:
+        return load_benevoles(planning_path=Path(planning_path))
+
+    def get_benevoles_cached(planning_path: Path | None = None) -> pd.DataFrame:
+        path = planning_path or PLANNING_BENEVOLES
+        return _get_benevoles_cached(str(path), file_mtime(path))
 
 except Exception:
-    def get_benevoles_cached() -> pd.DataFrame:
-        return load_benevoles()
+    def get_benevoles_cached(planning_path: Path | None = None) -> pd.DataFrame:
+        return load_benevoles(planning_path=planning_path)
 
 
 def clear_benevoles_cache() -> None:
-    cached = globals().get("get_benevoles_cached")
+    cached = globals().get("_get_benevoles_cached") or globals().get("get_benevoles_cached")
     if cached is not None and hasattr(cached, "clear"):
         try:
             cached.clear()

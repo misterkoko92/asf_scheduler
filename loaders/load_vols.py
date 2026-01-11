@@ -27,6 +27,8 @@ from utils.datetime_utils import (
     normalize_hour_str,
     hour_min_from_series,
 )
+from utils.cache_utils import file_mtime
+from utils.ui_notifications import warn_ui
 
 # =====================================================================
 # PARSING UNIFIÉ : DATES, HEURES, ROUTING
@@ -237,6 +239,7 @@ def load_vols(
         try:
             api_book = pd.read_excel(path_excel, sheet_name=None, dtype=str, engine="openpyxl")
         except Exception:
+            warn_ui(f"Impossible de lire les onglets API dans {path_excel}.")
             return
         for sheet_name, df_api in api_book.items():
             if not str(sheet_name).upper().startswith("API-"):
@@ -373,16 +376,21 @@ try:
     import streamlit as st
 
     @st.cache_data(show_spinner=False)
-    def get_vols_df_cached() -> pd.DataFrame:
-        return load_vols_df()
+    def _get_vols_df_cached(vols_path: str, vols_mtime: float, tdb_path: str, tdb_mtime: float) -> pd.DataFrame:
+        return load_vols_df(vols_path=Path(vols_path))
+
+    def get_vols_df_cached(vols_path: Path | None = None, tdb_path: Path | None = None) -> pd.DataFrame:
+        vpath = vols_path or VOLS
+        tpath = tdb_path or TABLEAU_DE_BORD
+        return _get_vols_df_cached(str(vpath), file_mtime(vpath), str(tpath), file_mtime(tpath))
 
 except Exception:
-    def get_vols_df_cached() -> pd.DataFrame:
-        return load_vols_df()
+    def get_vols_df_cached(vols_path: Path | None = None, tdb_path: Path | None = None) -> pd.DataFrame:
+        return load_vols_df(vols_path=vols_path)
 
 
 def clear_vols_cache() -> None:
-    cached = globals().get("get_vols_df_cached")
+    cached = globals().get("_get_vols_df_cached") or globals().get("get_vols_df_cached")
     if cached is not None and hasattr(cached, "clear"):
         try:
             cached.clear()

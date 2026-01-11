@@ -17,6 +17,7 @@ from scheduler.config_paths import (
     SHEET_PARAM_BENEV,
 )
 from scheduler.column_map import column_map_param_be, column_map_param_dest, column_map_param_expediteur, column_map_param_benev
+from utils.cache_utils import file_mtime
 
 try:
     import streamlit as st
@@ -89,35 +90,50 @@ def _load_param_benev(planning_benevoles_path: Path | None = None):
 
 
 if st is not None and hasattr(st, "cache_data"):
-    _param_be = st.cache_data(show_spinner=False)(_load_param_be)
-    _param_dest = st.cache_data(show_spinner=False)(_load_param_dest)
-    _param_exp = st.cache_data(show_spinner=False)(_load_param_exp)
-    _param_benev = st.cache_data(show_spinner=False)(_load_param_benev)
+    @st.cache_data(show_spinner=False)
+    def _param_be_cached(path: str, mtime: float):
+        return _load_param_be(tableau_de_bord_path=Path(path))
 
-    def get_param_be():
-        return _param_be()
+    @st.cache_data(show_spinner=False)
+    def _param_dest_cached(path: str, mtime: float):
+        return _load_param_dest(tableau_de_bord_path=Path(path))
 
-    def get_param_dest():
-        return _param_dest()
+    @st.cache_data(show_spinner=False)
+    def _param_exp_cached(path: str, mtime: float):
+        return _load_param_exp(tableau_de_bord_path=Path(path))
 
-    def get_param_exp():
-        return _param_exp()
+    @st.cache_data(show_spinner=False)
+    def _param_benev_cached(path: str, mtime: float):
+        return _load_param_benev(planning_benevoles_path=Path(path))
 
-    def get_param_benev():
-        return _param_benev()
+    def get_param_be(tableau_de_bord_path: Path | None = None):
+        path = tableau_de_bord_path or TABLEAU_DE_BORD
+        return _param_be_cached(str(path), file_mtime(path))
+
+    def get_param_dest(tableau_de_bord_path: Path | None = None):
+        path = tableau_de_bord_path or TABLEAU_DE_BORD
+        return _param_dest_cached(str(path), file_mtime(path))
+
+    def get_param_exp(tableau_de_bord_path: Path | None = None):
+        path = tableau_de_bord_path or TABLEAU_DE_BORD
+        return _param_exp_cached(str(path), file_mtime(path))
+
+    def get_param_benev(planning_benevoles_path: Path | None = None):
+        path = planning_benevoles_path or PLANNING_BENEVOLES
+        return _param_benev_cached(str(path), file_mtime(path))
 
 else:
-    def get_param_be():
-        return _load_param_be()
+    def get_param_be(tableau_de_bord_path: Path | None = None):
+        return _load_param_be(tableau_de_bord_path=tableau_de_bord_path)
 
-    def get_param_dest():
-        return _load_param_dest()
+    def get_param_dest(tableau_de_bord_path: Path | None = None):
+        return _load_param_dest(tableau_de_bord_path=tableau_de_bord_path)
 
-    def get_param_exp():
-        return _load_param_exp()
+    def get_param_exp(tableau_de_bord_path: Path | None = None):
+        return _load_param_exp(tableau_de_bord_path=tableau_de_bord_path)
 
-    def get_param_benev():
-        return _load_param_benev()
+    def get_param_benev(planning_benevoles_path: Path | None = None):
+        return _load_param_benev(planning_benevoles_path=planning_benevoles_path)
 
 
 def load_param_be_from_path(tableau_de_bord_path: Path) -> pd.DataFrame:
@@ -139,7 +155,7 @@ def load_param_benev_from_path(planning_benevoles_path: Path) -> pd.DataFrame:
 def clear_param_caches() -> None:
     if st is None:
         return
-    for name in ("_param_be", "_param_dest", "_param_exp", "_param_benev"):
+    for name in ("_param_be_cached", "_param_dest_cached", "_param_exp_cached", "_param_benev_cached"):
         cached = globals().get(name)
         if cached is not None and hasattr(cached, "clear"):
             try:

@@ -16,6 +16,8 @@ from loaders.universal_loader import load_and_normalize
 from scheduler.column_map import column_map_mag_central
 from scheduler.format_rules import format_be_numero
 from loaders.load_params import get_param_be
+from utils.cache_utils import file_mtime
+from utils.ui_notifications import warn_ui
 
 try:
     import streamlit as st
@@ -81,6 +83,7 @@ def load_shipments_df(
             print(f"ParamBE charge automatiquement : {len(param_be_raw)} lignes")
         except Exception:
             print("ParamBE introuvable ou illisible - valeurs par defaut.")
+            warn_ui("ParamBE introuvable ou illisible - valeurs par defaut.")
             param_be_raw = pd.DataFrame(columns=["Type", "Priorite", "Coeff_Equiv"])
 
     param_be = be_manager.normalize_param_be(param_be_raw)
@@ -222,17 +225,21 @@ def load_shipments_df(
 if st is not None and hasattr(st, "cache_data"):
 
     @st.cache_data(show_spinner=False)
-    def get_shipments_df_cached(planifiables_only: bool = True) -> pd.DataFrame:
-        return load_shipments_df(planifiables_only=planifiables_only)
+    def _get_shipments_df_cached(planifiables_only: bool, tdb_path: str, tdb_mtime: float) -> pd.DataFrame:
+        return load_shipments_df(planifiables_only=planifiables_only, tdb_path=Path(tdb_path))
+
+    def get_shipments_df_cached(planifiables_only: bool = True, tdb_path: Path | None = None) -> pd.DataFrame:
+        path = tdb_path or TABLEAU_DE_BORD
+        return _get_shipments_df_cached(planifiables_only, str(path), file_mtime(path))
 
 else:
 
-    def get_shipments_df_cached(planifiables_only: bool = True) -> pd.DataFrame:
-        return load_shipments_df(planifiables_only=planifiables_only)
+    def get_shipments_df_cached(planifiables_only: bool = True, tdb_path: Path | None = None) -> pd.DataFrame:
+        return load_shipments_df(planifiables_only=planifiables_only, tdb_path=tdb_path)
 
 
 def clear_shipments_cache() -> None:
-    cached = globals().get("get_shipments_df_cached")
+    cached = globals().get("_get_shipments_df_cached") or globals().get("get_shipments_df_cached")
     if cached is not None and hasattr(cached, "clear"):
         try:
             cached.clear()
