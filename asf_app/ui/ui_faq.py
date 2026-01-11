@@ -127,6 +127,6 @@ def render_tab_faq():
     st.markdown(
         """
 - PDF : nécessite Excel pilotable (AppleScript/COM). Sinon aucun PDF généré (pas de fallback).  
-- MAG CENTRAL : écrit en direct (col J/L) mais openpyxl supprime les validations de données ; préservation des validations à prévoir en V2 via Excel automation.
+- Écritures Excel : Excel automation si dispo (préserve validations + mises en forme conditionnelles). Fallback openpyxl peut supprimer validations / mises en forme conditionnelles.
         """
     )

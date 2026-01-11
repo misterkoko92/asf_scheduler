@@ -208,6 +208,7 @@ def overwrite_tmp_file(uploaded_file, state, key_name, reload_func):
     try:
         with open(tmp_path, "wb") as f:
             f.write(uploaded_file.read())
+        cp.sync_local_file_to_onedrive(tmp_path)
 
         # Invalidate dataframes
         if key_name == "tdb":
@@ -239,7 +240,17 @@ def refresh_from_onedrive(state, src_path, key_name, reload_func):
             "vols": VOLS.name,
         }
         dst_name = name_map.get(key_name, Path(src_path).name)
-        dst = ensure_tmp_file(src_path, dst_name, overwrite=True)
+        if cp.is_graph_onedrive():
+            remote_map = {
+                "tdb": cp.TABLEAU_DE_BORD_REMOTE,
+                "benev": cp.PLANNING_BENEVOLES_REMOTE,
+                "vols": cp.VOLS_REMOTE,
+            }
+            remote_path = remote_map.get(key_name, "")
+            dst = get_tmp_dir() / dst_name
+            cp.download_onedrive_file(remote_path, dst, interactive=False)
+        else:
+            dst = ensure_tmp_file(src_path, dst_name, overwrite=True)
         setattr(state, f"{key_name}_tmp", dst)
 
         # reset dfs
@@ -285,8 +296,31 @@ def render_tab_inputs():
     state = get_state()
 
     cloud_mode = IS_STREAMLIT_CLOUD
-    if cloud_mode:
+    if cloud_mode and not cp.is_graph_onedrive():
         st.warning(CLOUD_MESSAGE)
+
+    if cp.is_graph_onedrive():
+        st.info("Mode OneDrive Graph actif. Connexion requise pour charger/écrire les fichiers.")
+        client = cp.get_graph_client()
+        if client is None:
+            st.error("Graph non configuré : vérifier ASF_GRAPH_CLIENT_ID / ASF_GRAPH_TENANT_ID.")
+        else:
+            token_ok = client.acquire_token_silent() is not None
+            if token_ok:
+                st.success("Connexion OneDrive active.")
+            else:
+                flow_key = "graph_device_flow"
+                if flow_key not in st.session_state and st.button("🔑 Se connecter à OneDrive"):
+                    st.session_state[flow_key] = cp.begin_onedrive_device_flow()
+                flow = st.session_state.get(flow_key)
+                if flow and flow.get("message"):
+                    st.info(flow["message"])
+                    if st.button("✅ J'ai terminé l'authentification"):
+                        ok = cp.complete_onedrive_device_flow(flow)
+                        if ok:
+                            st.success("Connexion OneDrive validée.")
+                            st.session_state.pop(flow_key, None)
+                            st.rerun()
 
     # Initialisation TMP si besoin (copies déjà préparées côté moteur)
     if state.tdb_tmp is None:
@@ -298,15 +332,15 @@ def render_tab_inputs():
     sync_state_paths_to_engine(state)
 
     # Chargements (évite d'afficher des erreurs sur Cloud si fichiers vides)
-    if not cloud_mode or state.tdb_tmp.stat().st_size > 0:
+    if not cloud_mode or cp.is_graph_onedrive() or state.tdb_tmp.stat().st_size > 0:
         load_tdb_file(state)
-    if not cloud_mode or state.benev_tmp.stat().st_size > 0:
+    if not cloud_mode or cp.is_graph_onedrive() or state.benev_tmp.stat().st_size > 0:
         load_benev_file(state)
-    if not cloud_mode or state.vols_tmp.stat().st_size > 0:
+    if not cloud_mode or cp.is_graph_onedrive() or state.vols_tmp.stat().st_size > 0:
         load_vols_file(state)
 
     # ----- bouton refresh global ----
-    if not cloud_mode and st.button("🔄 Recharger TOUS les fichiers depuis OneDrive"):
+    if (not cloud_mode or cp.is_graph_onedrive()) and st.button("🔄 Recharger TOUS les fichiers depuis OneDrive"):
         refresh_all(state)
 
     # Sélecteur de période
@@ -344,7 +378,7 @@ def render_tab_inputs():
         except Exception as e:
             st.error(f"❌ Erreur BE : {e}")
 
-        if (not cloud_mode) and st.button("🔄 Recharger TDB depuis OneDrive"):
+        if (not cloud_mode or cp.is_graph_onedrive()) and st.button("🔄 Recharger TDB depuis OneDrive"):
             refresh_from_onedrive(state, TABLEAU_DE_BORD_SRC, "tdb", load_tdb_file)
 
         file = st.file_uploader("Importer TABLEAU_DE_BORD.xlsx", type=["xlsx"], key="up_tdb")
@@ -360,7 +394,7 @@ def render_tab_inputs():
         st.write(f"🕒 Modifié : {pretty_mtime(state.benev_tmp)}")
         st.write(f"Dernier message traité : {benev_last_message(state.benev_tmp)}")
 
-        if (not cloud_mode) and st.button("🔄 Recharger Bénévoles depuis OneDrive"):
+        if (not cloud_mode or cp.is_graph_onedrive()) and st.button("🔄 Recharger Bénévoles depuis OneDrive"):
             refresh_from_onedrive(state, PLANNING_BENEVOLES_SRC, "benev", load_benev_file)
 
         file = st.file_uploader("Importer Planning Bénévoles.xlsx", type=["xlsx"], key="up_benev")
@@ -447,7 +481,7 @@ def render_tab_inputs():
             else:
                 st.warning("Sélectionne une période avant d'appeler l'API.")
         else:
-            if (not cloud_mode) and st.button("🔄 Recharger Vols depuis OneDrive"):
+            if (not cloud_mode or cp.is_graph_onedrive()) and st.button("🔄 Recharger Vols depuis OneDrive"):
                 refresh_from_onedrive(state, VOLS_SRC, "vols", load_vols_file)
 
             file = st.file_uploader("Importer Vols.xlsx", type=["xlsx"], key="up_vols")

@@ -14,7 +14,12 @@ from datetime import datetime
 from typing import Any, Dict, List
 
 import requests
-from dotenv import load_dotenv
+
+try:
+    from dotenv import load_dotenv
+except Exception:  # pragma: no cover - optional dependency for local .env loading
+    def load_dotenv(*args: Any, **kwargs: Any) -> bool:
+        return False
 
 try:
     import streamlit as st

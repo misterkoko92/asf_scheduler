@@ -37,29 +37,56 @@ def render_tab_update():
 
     st.subheader("📆 Sélection du planning validé")
 
-    # Dossier des plannings validés : par défaut dossier ASFmm (OneDrive),
-    # fallback sur le dossier de sortie du moteur.
-    planning_dir = cp.ASF_ONEDRIVE / "Planning MAB" / "ASFmm PLANNING 2025"
-    if not planning_dir.exists():
-        planning_dir = cp.OUTPUT_PLANNING_DIR
+    if cp.is_graph_onedrive():
+        items = cp.list_onedrive_files(
+            "Planning MAB",
+            recursive=True,
+            suffixes=[".xls", ".xlsx", ".xlsm"],
+        )
+        remote_files = [
+            i.get("path", "")
+            for i in items
+            if i.get("name", "").upper().startswith("ASFMM - PLANNING SEMAINE N°")
+        ]
+        if not remote_files:
+            st.error("❌ Aucun planning trouvé dans OneDrive (Graph).")
+            st.stop()
 
-    # On travaille dans planning_dir, sur tous les formats Excel
-    all_files = sorted(
-        [
-            f
-            for f in planning_dir.glob("ASFmm - PLANNING SEMAINE N° *.xls*")
-            if f.is_file()
-        ],
-        key=lambda f: f.stat().st_mtime,
-        reverse=True,
-    )
+        def _filter_latest_remote(paths):
+            latest = {}
+            for p in paths:
+                wk, ver = extract_week_version(Path(p).name)
+                if wk is None:
+                    continue
+                if wk not in latest or ver > latest[wk][0]:
+                    latest[wk] = (ver, p)
+            return [x[1] for x in latest.values()]
 
-    if not all_files:
-        st.error(f"❌ Aucun planning trouvé dans :\n{planning_dir}")
-        st.stop()
+        files = _filter_latest_remote(remote_files)
+    else:
+        # Dossier des plannings validés : par défaut dossier ASFmm (OneDrive),
+        # fallback sur le dossier de sortie du moteur.
+        planning_dir = cp.ASF_ONEDRIVE / "Planning MAB" / "ASFmm PLANNING 2025"
+        if not planning_dir.exists():
+            planning_dir = cp.OUTPUT_PLANNING_DIR
 
-    # On garde uniquement la dernière version par semaine
-    files = filter_latest(all_files)
+        # On travaille dans planning_dir, sur tous les formats Excel
+        all_files = sorted(
+            [
+                f
+                for f in planning_dir.glob("ASFmm - PLANNING SEMAINE N° *.xls*")
+                if f.is_file()
+            ],
+            key=lambda f: f.stat().st_mtime,
+            reverse=True,
+        )
+
+        if not all_files:
+            st.error(f"❌ Aucun planning trouvé dans :\n{planning_dir}")
+            st.stop()
+
+        # On garde uniquement la dernière version par semaine
+        files = filter_latest(all_files)
 
     if not files:
         st.error("❌ Aucun planning validé trouvé (après filtrage par version).")
@@ -70,7 +97,8 @@ def render_tab_update():
     week_map = {}
 
     for f in files:
-        wk, _ = extract_week_version(f.name)
+        name = Path(f).name if isinstance(f, str) else f.name
+        wk, _ = extract_week_version(name)
         if wk is None:
             continue
         label = f"Semaine {wk:02d}"
@@ -86,18 +114,26 @@ def render_tab_update():
     choice_week = st.selectbox("Par semaine :", week_labels)
 
     # ---- Sélecteur fichier brut ----
+    file_map = {Path(f).name if isinstance(f, str) else f.name: f for f in files}
     choice_file = st.selectbox(
         "Ou sélectionner un fichier :",
-        [f.name for f in files],
+        list(file_map.keys()),
     )
 
     # ---- Fichier retenu ----
     if choice_week and choice_week in week_map:
         planning_path = week_map[choice_week]
     else:
-        planning_path = planning_dir / choice_file
+        planning_path = file_map.get(choice_file)
 
-    st.success(f"✔ Planning sélectionné : {planning_path.name}")
+    if isinstance(planning_path, str):
+        remote_path = planning_path
+        local_path = cp.TMP_DIR / "onedrive_cache" / "planning_exports" / remote_path
+        if not local_path.exists():
+            cp.download_onedrive_file(remote_path, local_path, interactive=False)
+        planning_path = local_path
+
+    st.success(f"✔ Planning sélectionné : {Path(planning_path).name}")
 
     # ------------------------------------------------------------------
     # 2) Lecture du fichier XLSX / XLSM via loader hybride index-based

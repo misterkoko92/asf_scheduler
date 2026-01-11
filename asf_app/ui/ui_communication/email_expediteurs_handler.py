@@ -7,10 +7,16 @@
 # - Tableau HTML commun (même que destinations)
 # --------------------------------------------------
 
+from pathlib import Path
+
 import pandas as pd
 from asf_app.ui.ui_communication.outlook import create_outlook_draft
 
 from asf_app.ui.ui_communication.helpers_email_tables import build_comm_table_html
+from asf_app.ui.ui_communication.pdf_attachments import (
+    find_be_pdf_attachments,
+    index_pdfs_by_be,
+)
 
 
 
@@ -127,6 +133,7 @@ def generate_expediteur_email_for_pair(
     year: int,
     custom_subject: str | None = None,
     custom_body: str | None = None,
+    pdf_index: dict[str, list[Path]] | None = None,
 ):
     """
     Génère un mail brouillon pour un couple (Expéditeur, Destination),
@@ -166,6 +173,8 @@ def generate_expediteur_email_for_pair(
         coord_correspondant=coord_corr
     )
 
+    attachments = find_be_pdf_attachments(df_subset, pdf_index=pdf_index)
+
     # Création du brouillon Outlook
     result = create_outlook_draft(
         to_list=to_list,
@@ -173,7 +182,7 @@ def generate_expediteur_email_for_pair(
         bcc_list=None,
         subject=subject,
         body_html=body,
-        attachments=None,
+        attachments=attachments or None,
         use_signature=True
     )
 
@@ -211,6 +220,7 @@ def generate_all_expediteurs_emails(
         .itertuples(index=False, name=None)
     )
 
+    pdf_index = index_pdfs_by_be()
     count = 0
     for exp_up, dest_up in pairs:
         # récupérer labels originaux (tels qu'affichés dans df_comm)
@@ -225,6 +235,7 @@ def generate_all_expediteurs_emails(
             destination=dest_label,
             week=week,
             year=year,
+            pdf_index=pdf_index,
         )
         if ok:
             count += 1

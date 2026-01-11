@@ -6,6 +6,7 @@ de préparer les brouillons Outlook associés.
 """
 
 import re
+import fnmatch
 import datetime as dt
 from typing import Optional, Tuple, List
 from pathlib import Path
@@ -152,38 +153,53 @@ def _load_planning_preview(week: int, year: int) -> tuple[pd.DataFrame | None, s
 
 
 def _load_planning_preview_with_path(
-    week: int, year: int, path_override: Optional[Path]
+    week: int, year: int, path_override: Optional[Path | str]
 ) -> tuple[pd.DataFrame | None, str, Path | None]:
     """
     Variante : accepte un chemin explicite si déjà sélectionné.
     """
-    base_dir = cp.ASF_ONEDRIVE / "Planning MAB" / f"ASFmm PLANNING {year}"
     msg_missing = None
-    if path_override:
-        path = Path(path_override)
-    else:
-        filename = f"ASFmm - PLANNING SEMAINE N° {week:02d} - {year}.xlsx"
-        path = base_dir / filename
-        if not path.exists():
-            # tolérance sur nom : espaces, tirets, xlsm/xlsx
-            patterns = [
-                f"ASFmm*{week:02d}*{year}.xls*",
-                f"*PLANNING*{week:02d}*{year}.xls*",
-            ]
-            candidates = []
-            for pat in patterns:
-                candidates.extend(base_dir.glob(pat))
-            if candidates:
-                # garder ceux qui contiennent la semaine précise
-                def _score(p):
-                    name_up = p.name.upper()
-                    return int(f"{name_up.count(str(week).zfill(2))}{name_up.count(str(year))}")
-                path = sorted(candidates, key=_score, reverse=True)[0]
-                msg_missing = f"Fichier exact introuvable, utilisation de : {path.name}"
-            else:
-                return None, f"Fichier introuvable : {path}", None
+    if cp.is_graph_onedrive():
+        if path_override:
+            remote_path = str(path_override)
         else:
-            msg_missing = None
+            candidates = _find_planning_files_for_week(week, year)
+            if not candidates:
+                return None, f"Fichier introuvable : S{week:02d}-{year}", None
+            remote_path = str(candidates[0])
+        local_path = cp.TMP_DIR / "onedrive_cache" / "planning_exports" / remote_path
+        if not local_path.exists():
+            cp.download_onedrive_file(remote_path, local_path, interactive=False)
+        if not local_path.exists():
+            return None, f"Fichier introuvable : {remote_path}", None
+        path = local_path
+    else:
+        base_dir = cp.ASF_ONEDRIVE / "Planning MAB" / f"ASFmm PLANNING {year}"
+        if path_override:
+            path = Path(path_override)
+        else:
+            filename = f"ASFmm - PLANNING SEMAINE N° {week:02d} - {year}.xlsx"
+            path = base_dir / filename
+            if not path.exists():
+                # tolérance sur nom : espaces, tirets, xlsm/xlsx
+                patterns = [
+                    f"ASFmm*{week:02d}*{year}.xls*",
+                    f"*PLANNING*{week:02d}*{year}.xls*",
+                ]
+                candidates = []
+                for pat in patterns:
+                    candidates.extend(base_dir.glob(pat))
+                if candidates:
+                    # garder ceux qui contiennent la semaine précise
+                    def _score(p):
+                        name_up = p.name.upper()
+                        return int(f"{name_up.count(str(week).zfill(2))}{name_up.count(str(year))}")
+                    path = sorted(candidates, key=_score, reverse=True)[0]
+                    msg_missing = f"Fichier exact introuvable, utilisation de : {path.name}"
+                else:
+                    return None, f"Fichier introuvable : {path}", None
+            else:
+                msg_missing = None
 
     sheet_candidates = [f"Planning S{week:02d}", "Export planning"]
     for sh in sheet_candidates:
@@ -206,6 +222,22 @@ def _available_weeks_from_exports() -> set[tuple[int, int]]:
     dans OneDrive (ASFmm PLANNING YYYY).
     """
     weeks: set[tuple[int, int]] = set()
+    if cp.is_graph_onedrive():
+        items = cp.list_onedrive_files("Planning MAB", recursive=True, suffixes=[".xls", ".xlsx", ".xlsm"])
+        for item in items:
+            name = item.get("name", "")
+            m_week = re.search(r"N°\s*(\d+)", name)
+            m_year = re.search(r"(20\\d{2})", name)
+            if not (m_week and m_year):
+                continue
+            try:
+                wk = int(m_week.group(1))
+                yr = int(m_year.group(1))
+                weeks.add((wk, yr))
+            except Exception:
+                continue
+        return weeks
+
     base_dir = cp.ASF_ONEDRIVE / "Planning MAB"
     if not base_dir.exists():
         return weeks
@@ -217,11 +249,11 @@ def _available_weeks_from_exports() -> set[tuple[int, int]]:
         if not name_up.startswith("ASFMM PLANNING "):
             continue
         try:
-            year = int(re.sub(r"\D", "", sub.name)[-4:])
+            year = int(re.sub(r"\\D", "", sub.name)[-4:])
         except Exception:
             continue
         for f in sub.glob("ASFmm - PLANNING SEMAINE N° *.xls*"):
-            m = re.search(r"N°\s*(\d+)", f.name)
+            m = re.search(r"N°\\s*(\\d+)", f.name)
             if not m:
                 continue
             try:
@@ -248,11 +280,24 @@ def _parse_version_from_name(path: Path) -> tuple[int, int]:
     return 1, 0
 
 
-def _find_planning_files_for_week(week: int, year: int) -> List[Path]:
+def _find_planning_files_for_week(week: int, year: int) -> List[Path | str]:
     """
     Liste les fichiers de planning correspondant à la semaine/année,
     triés par version décroissante (vXX[-YY]) puis date de modif.
     """
+    if cp.is_graph_onedrive():
+        remote_dir = cp.get_output_remote_dir(year)
+        pattern = f"ASFmm - PLANNING SEMAINE N° {week:02d} - {year}*.xls*"
+        items = cp.list_onedrive_files(remote_dir, recursive=False, suffixes=[".xls", ".xlsx", ".xlsm"])
+        files = [i.get("path", "") for i in items if fnmatch.fnmatch(i.get("name", ""), pattern)]
+
+        def _sort_key(p: str):
+            major, minor = _parse_version_from_name(Path(p))
+            return (major, minor, 0)
+
+        files.sort(key=_sort_key, reverse=True)
+        return files
+
     base_dir = cp.ASF_ONEDRIVE / "Planning MAB" / f"ASFmm PLANNING {year}"
     if not base_dir.exists():
         return []
@@ -647,19 +692,33 @@ def _apply_planning_update(
     except Exception:
         pass
 
+    def _clear_values(ws, max_row: int, max_col: int):
+        for row in ws.iter_rows(min_row=1, max_row=max_row, min_col=1, max_col=max_col):
+            for cell in row:
+                cell.value = None
+
     # Export planning
-    if "Export planning" in wb.sheetnames:
-        del wb["Export planning"]
-    ws_exp = wb.create_sheet("Export planning", 1)
+    ws_exp = (
+        wb["Export planning"]
+        if "Export planning" in wb.sheetnames
+        else wb.create_sheet("Export planning", 1)
+    )
     headers = list(df_export.columns)
-    ws_exp.append(headers)
-    for _, r in df_export.iterrows():
-        ws_exp.append([r.get(h, "") for h in headers])
+    max_row = max(ws_exp.max_row, len(df_export) + 1)
+    max_col = max(ws_exp.max_column, len(headers))
+    _clear_values(ws_exp, max_row, max_col)
+    for c_idx, h in enumerate(headers, start=1):
+        ws_exp.cell(row=1, column=c_idx, value=h)
+    for r_idx, (_, r) in enumerate(df_export.iterrows(), start=2):
+        for c_idx, h in enumerate(headers, start=1):
+            ws_exp.cell(row=r_idx, column=c_idx, value=r.get(h, ""))
 
     # Planning : reprendre uniquement les colonnes utiles et appliquer couleurs
-    if "Planning" in wb.sheetnames:
-        del wb["Planning"]
-    ws_plan_new = wb.create_sheet("Planning", 0)
+    ws_plan_new = (
+        wb["Planning"]
+        if "Planning" in wb.sheetnames
+        else wb.create_sheet("Planning", 0)
+    )
     planning_cols = [
         "Benevole", "unusedE", "unusedF", "Destination", "IATA", "Routing",
         "Numero_Vol", "Heure_Vol", "BE_Numero", "BE_Nb_Colis", "BE_Type",
@@ -667,20 +726,28 @@ def _apply_planning_update(
     ]
     # Squelettes colonnes D..Q (4..17)
     headers_plan = ["", "", "", "Benevole", "", "Destination", "IATA", "Routing", "Numero_Vol", "Heure_Vol", "BE_Numero", "BE_Nb_Colis", "BE_Type", "", "BE_Expediteur", "BE_Destinataire"]
-    ws_plan_new.append(headers_plan)
+    max_row = max(ws_plan_new.max_row, len(df_export) + 1)
+    max_col = max(ws_plan_new.max_column, len(headers_plan))
+    _clear_values(ws_plan_new, max_row, max_col)
+    for row in ws_plan_new.iter_rows(min_row=2, max_row=max_row, min_col=4, max_col=17):
+        for cell in row:
+            cell.fill = PatternFill()
+    for c_idx, val in enumerate(headers_plan, start=1):
+        ws_plan_new.cell(row=1, column=c_idx, value=val)
     fill_red = PatternFill(fill_type="solid", fgColor="F8CBAD")
     fill_blue = PatternFill(fill_type="solid", fgColor="BDD7EE")
-    for _, r in df_export.iterrows():
+    for r_idx, (_, r) in enumerate(df_export.iterrows(), start=2):
         status = str(r.get("_STATUS", "normal")).lower()
         row_vals = ["", "", "", r.get("Benevole", ""), "", r.get("Destination", ""), r.get("IATA", ""), r.get("Routing", ""), r.get("Numero_Vol", ""), normalize_hour_str(pd.Series([r.get("Heure_Vol", "")])).iloc[0], r.get("BE_Numero", ""), "" if status.startswith("old") else r.get("BE_Nb_Colis", ""), r.get("BE_Type", ""), "", r.get("BE_Expediteur", ""), r.get("BE_Destinataire", "")]
-        ws_plan_new.append(row_vals)
+        for c_idx, val in enumerate(row_vals, start=1):
+            ws_plan_new.cell(row=r_idx, column=c_idx, value=val)
         if status.startswith("old") or status.startswith("new"):
             fill = fill_red if status.startswith("old") else fill_blue
-            row_idx = ws_plan_new.max_row
             for c in range(4, 18):
-                ws_plan_new.cell(row=row_idx, column=c).fill = fill
+                ws_plan_new.cell(row=r_idx, column=c).fill = fill
 
     wb.save(path)
+    cp.sync_local_file_to_onedrive(path)
 
 
 # ---------------------------------------------------------------------------
@@ -734,9 +801,10 @@ def render_tab_shipments_update():
         labels = []
         path_map = {}
         for p in planning_candidates:
-            major, minor = _parse_version_from_name(p)
+            p_path = Path(p) if isinstance(p, str) else p
+            major, minor = _parse_version_from_name(p_path)
             ver_label = f"v{major}" + (f"-{minor}" if minor else "")
-            label = f"{ver_label} — {p.name}"
+            label = f"{ver_label} — {p_path.name}"
             labels.append(label)
             path_map[label] = p
         # ordre déjà décroissant, on garde index 0

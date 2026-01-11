@@ -8,6 +8,7 @@ import pandas as pd
 import streamlit as st
 
 from asf_app.state import get_state
+from asf_app.services.files_service import save_excel_sheet
 
 from scheduler.config_paths import (
     TABLEAU_DE_BORD_SRC,
@@ -57,20 +58,8 @@ def write_excel_sheet(path: Path, sheet_name: str, df: pd.DataFrame):
     """
     Réécriture propre d’une feuille dans un Excel.
     """
-    from openpyxl import load_workbook
-
     try:
-        wb = load_workbook(path)
-        if sheet_name in wb.sheetnames:
-            wb.remove(wb[sheet_name])
-
-        ws = wb.create_sheet(title=sheet_name)
-
-        ws.append(list(df.columns))
-        for row in df.itertuples(index=False, name=None):
-            ws.append(list(row))
-
-        wb.save(path)
+        save_excel_sheet(path, sheet_name, df)
         return True
 
     except Exception as e:

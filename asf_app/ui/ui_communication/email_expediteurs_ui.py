@@ -13,6 +13,7 @@ from asf_app.ui.ui_communication.email_expediteurs_handler import (
     build_subject_expediteur,
     DEFAULT_BODY_EXPEDITEUR,
 )
+from asf_app.ui.ui_communication.pdf_attachments import index_pdfs_by_be
 from asf_app.ui.ui_planning.state_planning import get_planning_state
 
 def render_email_expediteurs_ui(
@@ -104,6 +105,7 @@ def render_email_expediteurs_ui(
         if st.button(f"📤 Générer les mails pour {exp_selected}", type="primary"):
             # On génère un mail par destination de cet expéditeur
             count = 0
+            pdf_index = index_pdfs_by_be()
             for dest in dests:
                 ok = generate_expediteur_email_for_pair(
                     df_comm=df_comm,
@@ -113,6 +115,7 @@ def render_email_expediteurs_ui(
                     destination=dest,
                     week=week,
                     year=year,
+                    pdf_index=pdf_index,
                 )
                 if ok:
                     count += 1

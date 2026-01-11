@@ -13,11 +13,11 @@ from pathlib import Path
 import pandas as pd
 
 from openpyxl import load_workbook
-from openpyxl.utils.dataframe import dataframe_to_rows
 
 from asf_app.services.airfrance_api import fetch_multiple
 from scheduler.column_map import column_map_param_dest
 from scheduler.config_paths import TABLEAU_DE_BORD, SHEET_PARAM_DEST, VOLS_SRC, VOLS
+import scheduler.config_paths as cp
 from loaders.universal_loader import load_and_normalize
 from loaders.load_shipments import load_shipments_df
 from utils.datetime_utils import parse_date_series, parse_time_series, normalize_hour_str, hour_min_from_series
@@ -155,20 +155,35 @@ def store_vols_api_sheet(df: pd.DataFrame, start_date: date, path: Path = VOLS_S
         df_to_save = df_to_save.applymap(lambda v: "" if pd.isna(v) else v)
     except Exception:
         pass
+    table = [list(df_to_save.columns)]
+    table.extend([list(row) for row in df_to_save.itertuples(index=False, name=None)])
 
     if not path.exists():
         with pd.ExcelWriter(path, engine="openpyxl") as writer:
             df_to_save.to_excel(writer, sheet_name=sheet_name, index=False)
+        cp.sync_local_file_to_onedrive(path)
         return sheet_name
 
-    wb = load_workbook(path)
-    if sheet_name in wb.sheetnames:
-        del wb[sheet_name]
+    try:
+        from utils.excel_automation import write_sheet_table
 
-    ws = wb.create_sheet(sheet_name)
-    # Insère les données
-    for r in dataframe_to_rows(df_to_save, index=False, header=True):
-        ws.append(r)
+        if write_sheet_table(path, sheet_name, table):
+            cp.sync_local_file_to_onedrive(path)
+            return sheet_name
+    except Exception:
+        pass
+
+    wb = load_workbook(path)
+    ws = wb[sheet_name] if sheet_name in wb.sheetnames else wb.create_sheet(sheet_name)
+    max_row = max(ws.max_row, len(table))
+    max_col = max(ws.max_column, len(table[0]) if table else 0)
+    if max_row and max_col:
+        for row in ws.iter_rows(min_row=1, max_row=max_row, min_col=1, max_col=max_col):
+            for cell in row:
+                cell.value = None
+    for r_idx, row in enumerate(table, start=1):
+        for c_idx, val in enumerate(row, start=1):
+            ws.cell(row=r_idx, column=c_idx, value=val)
     # Ajuste la largeur des colonnes (sans wrap)
     for col_cells in ws.columns:
         max_len = 0
@@ -183,6 +198,14 @@ def store_vols_api_sheet(df: pd.DataFrame, start_date: date, path: Path = VOLS_S
             cell.alignment = cell.alignment.copy(wrap_text=False)
     # Applique un tableau pour activer les filtres
     try:
+        try:
+            tbls = ws._tables
+            if isinstance(tbls, dict):
+                tbls.clear()
+            else:
+                ws._tables = []
+        except Exception:
+            pass
         from openpyxl.worksheet.table import Table, TableStyleInfo
 
         last_row = ws.max_row
@@ -203,6 +226,7 @@ def store_vols_api_sheet(df: pd.DataFrame, start_date: date, path: Path = VOLS_S
         pass
 
     wb.save(path)
+    cp.sync_local_file_to_onedrive(path)
     return sheet_name
 
 
@@ -230,16 +254,22 @@ def copy_api_sheet_to_tmp(sheet_name: str, src_path: Path = VOLS_SRC, dst_path: 
             if wb_dst.active and wb_dst.active.title == "Sheet":
                 del wb_dst[wb_dst.active.title]
 
-        # Supprimer si déjà présent
-        if sheet_name in wb_dst.sheetnames:
-            del wb_dst[sheet_name]
+        ws_src = wb_src[sheet_name]
+        ws_new = wb_dst[sheet_name] if sheet_name in wb_dst.sheetnames else wb_dst.create_sheet(sheet_name)
+
+        max_row = max(ws_new.max_row, ws_src.max_row)
+        max_col = max(ws_new.max_column, ws_src.max_column)
+        if max_row and max_col:
+            for row in ws_new.iter_rows(min_row=1, max_row=max_row, min_col=1, max_col=max_col):
+                for cell in row:
+                    cell.value = None
 
         # Copier les valeurs (sans styles) pour rester simple
-        ws_src = wb_src[sheet_name]
-        ws_new = wb_dst.create_sheet(sheet_name)
-        for row in ws_src.values:
-            ws_new.append(list(row))
+        for r_idx, row in enumerate(ws_src.values, start=1):
+            for c_idx, val in enumerate(row, start=1):
+                ws_new.cell(row=r_idx, column=c_idx, value=val)
 
         wb_dst.save(dst_path)
+        cp.sync_local_file_to_onedrive(dst_path)
     except Exception:
         pass

@@ -5,12 +5,12 @@ import datetime
 from typing import Dict
 
 import pandas as pd
-
 from .files_service import read_excel_sheet, save_excel_sheet
 from scheduler.config_paths import (
     SHEET_PARAM_DEST,
     SHEET_PARAM_BE,
     SHEET_PARAM_BENEV,
+    SHEET_VOLS,
 )
 
 
@@ -146,4 +146,4 @@ def add_vol(path_vols: str, form_data: Dict) -> None:
 
     # Ajout
     df2 = pd.concat([df_vols, pd.DataFrame([new_row])], ignore_index=True)
-    df2.to_excel(path_vols, index=False)
+    save_excel_sheet(path_vols, SHEET_VOLS, df2)

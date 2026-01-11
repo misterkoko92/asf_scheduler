@@ -61,6 +61,20 @@ from scheduler.column_map import (
 # State
 from asf_app.ui.ui_planning.state_planning import get_planning_state
 
+
+def show_mag_central_status():
+    method = st.session_state.get("mag_central_write_method")
+    if method == "excel":
+        st.info("MAG CENTRAL mis à jour via Excel (validations préservées).")
+    elif method == "openpyxl":
+        st.warning("MAG CENTRAL mis à jour via openpyxl : validations de données possibles supprimées.")
+    elif method == "no_updates":
+        st.info("MAG CENTRAL : aucune cellule à mettre à jour.")
+    elif method == "missing":
+        st.warning("MAG CENTRAL non mis à jour : fichier introuvable.")
+    elif method == "read_error":
+        st.warning("MAG CENTRAL non mis à jour : erreur d’ouverture.")
+
 # Communication DF
 from asf_app.ui.ui_communication.clean_planning_df import build_df_comm
 
@@ -446,7 +460,11 @@ def export_excel_planning(
 
     # Nom et dossier de sortie par année (année mise à jour plus bas avec le lundi)
     filename = f"ASFmm - PLANNING SEMAINE N° {week:02d} - {year}.xlsx"
-    planning_dir = cp.ASF_ONEDRIVE / "Planning MAB" / f"ASFmm PLANNING {year}"
+    planning_dir = (
+        cp.OUTPUT_PLANNING_DIR
+        if cp.is_graph_onedrive()
+        else cp.ASF_ONEDRIVE / "Planning MAB" / f"ASFmm PLANNING {year}"
+    )
     if not planning_dir.exists():
         planning_dir.mkdir(parents=True, exist_ok=True)
     out_path = planning_dir / filename
@@ -617,14 +635,18 @@ def export_excel_planning(
             return None
 
     def update_mag_central_dates():
+        nonlocal mag_write_method
         path = cp.TABLEAU_DE_BORD_SRC
         if not path.exists():
+            mag_write_method = "missing"
             return {}
         try:
             from openpyxl import load_workbook
             wb_mag = load_workbook(path)
             ws_mag = wb_mag.active
+            sheet_name = ws_mag.title
         except Exception:
+            mag_write_method = "read_error"
             return {}
 
         # indexer MAG par clé BE (valeur brute + zfill)
@@ -641,6 +663,17 @@ def export_excel_planning(
 
         prev_friday = _friday_previous_week(week, year)
         used_dates = {}
+        updates = {}
+
+        def _safe_text(val: object) -> str:
+            if val is None:
+                return ""
+            try:
+                if pd.isna(val):
+                    return ""
+            except Exception:
+                pass
+            return str(val).strip()
 
         for _, r in dfp.iterrows():
             be_key = r.get("BE_KEY", "")
@@ -651,24 +684,68 @@ def export_excel_planning(
                 continue
             # Depart MAG col J (10) : si vide, écrire vendredi précédent
             if prev_friday:
-                dm_cell = ws_mag.cell(row=row_idx, column=10)
+                dm_cell = ws_mag.cell(row=row_idx, column=cp.MAG_CENTRAL_COL_DEPART_MAG)
                 if dm_cell.value in (None, ""):
-                    dm_cell.value = prev_friday
-                used_dates[be_key] = dm_cell.value or prev_friday
+                    updates.setdefault(row_idx, {})[cp.MAG_CENTRAL_COL_DEPART_MAG] = prev_friday
+                    used_dates[be_key] = prev_friday
+                else:
+                    used_dates[be_key] = dm_cell.value
             # Depart VOL col L (12) : date du vol du planning
-            dv_cell = ws_mag.cell(row=row_idx, column=12)
             date_vol = r.get("DATE")
             if isinstance(date_vol, (pd.Timestamp, date)):
-                dv_cell.value = date_vol.date() if isinstance(date_vol, pd.Timestamp) else date_vol
+                dv_value = date_vol.date() if isinstance(date_vol, pd.Timestamp) else date_vol
+                updates.setdefault(row_idx, {})[cp.MAG_CENTRAL_COL_DEPART_VOL] = dv_value
+
+            # Colonnes W/X/Y/Z : ID bénév, Bénévole, Num Vol, Heure Vol
+            bene_id = _safe_text(r.get("ID", ""))
+            if bene_id.endswith(".0"):
+                bene_id = bene_id[:-2]
+            bene_disp = _safe_text(r.get("BENEVOLE_DISP", r.get("Benevole", "")))
+            vol_aff = _safe_text(r.get("VOL_AFF", r.get("Numero_Vol", "")))
+            heure_aff = _safe_text(r.get("HEURE_AFF", ""))
+            if bene_id or bene_disp or vol_aff or heure_aff:
+                row_updates = updates.setdefault(row_idx, {})
+                row_updates[cp.MAG_CENTRAL_COL_ID_BENEV] = bene_id
+                row_updates[cp.MAG_CENTRAL_COL_BENEV] = bene_disp
+                row_updates[cp.MAG_CENTRAL_COL_VOL] = vol_aff
+                row_updates[cp.MAG_CENTRAL_COL_HEURE] = heure_aff
+
+        update_items = []
+        for row_idx, cols in updates.items():
+            for col_idx, val in cols.items():
+                update_items.append((row_idx, col_idx, val))
+
+        if not update_items:
+            mag_write_method = "no_updates"
+            return used_dates
+
+        try:
+            from utils.excel_automation import update_excel_cells
+            if update_excel_cells(path, sheet_name, update_items):
+                mag_write_method = "excel"
+                cp.sync_local_file_to_onedrive(path)
+                return used_dates
+        except Exception:
+            pass
+
+        mag_write_method = "openpyxl"
+        for row_idx, col_idx, val in update_items:
+            ws_mag.cell(row=row_idx, column=col_idx).value = val
 
         try:
             wb_mag.save(path)
+            cp.sync_local_file_to_onedrive(path)
         except Exception:
             pass
         return used_dates
 
     # Ecriture optionnelle vers MAG CENTRAL source
+    mag_write_method = "disabled"
     map_depart_mag = update_mag_central_dates() if write_source_excel else {}
+    if write_source_excel:
+        st.session_state["mag_central_write_method"] = mag_write_method
+    else:
+        st.session_state.pop("mag_central_write_method", None)
 
     # Date départ MAG issue de MAG central ou fallback vendredi précédent
     def _depart_mag_for(be_key):
@@ -924,7 +1001,11 @@ def export_excel_planning(
         version_str = "01"
 
     base_name = f"ASFmm - PLANNING SEMAINE N° {week_final:02d} - {year_final} - v{version_str}"
-    planning_dir_final = cp.ASF_ONEDRIVE / "Planning MAB" / f"ASFmm PLANNING {year_final}"
+    planning_dir_final = (
+        cp.OUTPUT_PLANNING_DIR
+        if cp.is_graph_onedrive()
+        else cp.ASF_ONEDRIVE / "Planning MAB" / f"ASFmm PLANNING {year_final}"
+    )
     planning_dir_final.mkdir(parents=True, exist_ok=True)
     target_path = planning_dir_final / f"{base_name}.xlsx"
     counter = 2
@@ -934,6 +1015,9 @@ def export_excel_planning(
 
     # Sauvegarder dans le chemin final (déplacement si besoin)
     wb.save(out_path)
+    if cp.is_graph_onedrive():
+        remote_path = cp.get_output_remote_path(year_final, out_path.name)
+        cp.sync_local_file_to_onedrive(out_path, remote_path=remote_path, conflict_behavior="rename")
     if out_path != target_path:
         try:
             shutil.move(out_path, target_path)
@@ -945,16 +1029,17 @@ def export_excel_planning(
     wb.save(out_path)
 
     # Export PDF (1ère feuille) via AppleScript helper
-    pdf_target = out_path.with_suffix(".pdf")
-    try:
-        pdf_path = export_first_sheet_to_pdf(out_path, pdf_target)
-        if not pdf_path.exists():
-            raise RuntimeError("PDF non généré.")
-    except Exception:
+    if not cp.is_graph_onedrive():
+        pdf_target = out_path.with_suffix(".pdf")
         try:
-            st.warning("PDF non généré : Excel non accessible pour l’export automatique.")
+            pdf_path = export_first_sheet_to_pdf(out_path, pdf_target)
+            if not pdf_path.exists():
+                raise RuntimeError("PDF non généré.")
         except Exception:
-            pass
+            try:
+                st.warning("PDF non généré : Excel non accessible pour l’export automatique.")
+            except Exception:
+                pass
 
     return out_path
 
@@ -1740,7 +1825,7 @@ def render_tab_planning():
         planning_state.set_last_export_path(out_path)
 
         st.success(f"✔ Planning exporté : {out_path.name}")
-        st.info("MAG CENTRAL mis à jour (Date départ Mag et Date de Vol).")
+        show_mag_central_status()
 
         st.download_button(
             "⬇ Télécharger le fichier",

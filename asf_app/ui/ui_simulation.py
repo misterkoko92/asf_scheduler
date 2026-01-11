@@ -782,6 +782,8 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
             try:
                 out_path = Path(_export_simulation_excel(write_source_excel=write_source_excel))
                 st.success(f"Planning simulé exporté : {out_path}")
+                from asf_app.ui.ui_planning.ui_planning import show_mag_central_status
+                show_mag_central_status()
                 _open_file(out_path)
                 # Export PDF 1ère feuille + ouvrir le PDF
                 try:

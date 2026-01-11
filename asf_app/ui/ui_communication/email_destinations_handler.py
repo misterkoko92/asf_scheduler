@@ -9,9 +9,15 @@
 # - outlook.create_outlook_draft()
 # --------------------------------------------------
 
+from pathlib import Path
+
 import pandas as pd
 from asf_app.ui.ui_communication.outlook import create_outlook_draft
 from asf_app.ui.ui_communication.helpers_email_tables import build_comm_table_html
+from asf_app.ui.ui_communication.pdf_attachments import (
+    find_be_pdf_attachments,
+    index_pdfs_by_be,
+)
 
 
 
@@ -89,6 +95,7 @@ def generate_destination_email_for_destination(
     year: int,
     custom_subject: str | None = None,
     custom_body: str | None = None,
+    pdf_index: dict[str, list[Path]] | None = None,
 ):
     """
     Génère un mail en brouillon pour une destination donnée,
@@ -123,6 +130,8 @@ def generate_destination_email_for_destination(
         table_html=table_html
     )
 
+    attachments = find_be_pdf_attachments(df_subset, pdf_index=pdf_index)
+
     # Envoi brouillon Outlook
     result = create_outlook_draft(
         to_list=to_list,
@@ -130,7 +139,7 @@ def generate_destination_email_for_destination(
         bcc_list=None,
         subject=subject,
         body_html=body,
-        attachments=None,
+        attachments=attachments or None,
         use_signature=True
     )
 
@@ -162,6 +171,7 @@ def generate_all_destination_emails(
         .unique()
     )
 
+    pdf_index = index_pdfs_by_be()
     count = 0
     for dest in destinations:
         ok = generate_destination_email_for_destination(
@@ -170,6 +180,7 @@ def generate_all_destination_emails(
             destination=dest,
             week=week,
             year=year,
+            pdf_index=pdf_index,
         )
         if ok:
             count += 1

@@ -1,10 +1,11 @@
 {
   "mode": "real",
   "simulation_id": null,
-  "rarity_mode": 1,
-  "total_be": 16,
-  "be_planned": 13,
-  "be_unplanned": 3,
-  "vols_with_be": 7,
-  "benevoles_used": 6
+  "priority_mode": "colis",
+  "status": "OPTIMAL",
+  "total_be": 1,
+  "be_planned": 1,
+  "be_unplanned": 0,
+  "vols_with_be": 1,
+  "benevoles_used": 1
 }

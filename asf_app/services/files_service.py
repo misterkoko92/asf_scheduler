@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Dict
 
 import pandas as pd
+import scheduler.config_paths as cp
 
 
 # ============================================================
@@ -45,34 +46,53 @@ def read_excel_sheet(path: str | Path, sheet_name: str, dtype=str) -> pd.DataFra
 
 def save_excel_sheet(path: str | Path, sheet_name: str, df: pd.DataFrame) -> None:
     """
-    Sauvegarde un onglet en remplaçant proprement son contenu.
-    - Ouvre le fichier avec openpyxl
-    - Remplace la feuille
+    Sauvegarde un onglet en remplaçant son contenu.
+    - Excel automation si dispo pour préserver validations + mises en forme
+    - Fallback openpyxl in-place (sans supprimer la feuille)
     - Ne détruit pas les autres onglets
     """
-    from openpyxl import load_workbook
-
     path = Path(path)
 
     # Si le fichier n'existe pas → on crée un workbook
     if not path.exists():
         with pd.ExcelWriter(path, engine="openpyxl") as writer:
             df.to_excel(writer, sheet_name=sheet_name, index=False)
+        cp.sync_local_file_to_onedrive(path)
         return
 
-    # Sinon → on charge et on remplace
+    df_clean = df.where(pd.notna(df), "")
+    table = [list(df_clean.columns)]
+    table.extend([list(row) for row in df_clean.itertuples(index=False, name=None)])
+
+    # Sinon → tentative Excel automation pour préserver validations + mises en forme
+    try:
+        from utils.excel_automation import write_sheet_table
+
+        if write_sheet_table(path, sheet_name, table):
+            cp.sync_local_file_to_onedrive(path)
+            return
+    except Exception:
+        pass
+
+    # Fallback openpyxl : réécriture in-place (sans supprimer la feuille)
+    from openpyxl import load_workbook
+
     wb = load_workbook(path)
-    if sheet_name in wb.sheetnames:
-        del wb[sheet_name]
+    ws = wb[sheet_name] if sheet_name in wb.sheetnames else wb.create_sheet(sheet_name)
 
-    ws = wb.create_sheet(sheet_name)
-    # Export pandas → openpyxl
-    from openpyxl.utils.dataframe import dataframe_to_rows
+    max_row = max(ws.max_row, len(table))
+    max_col = max(ws.max_column, len(table[0]) if table else 0)
+    if max_row and max_col:
+        for row in ws.iter_rows(min_row=1, max_row=max_row, min_col=1, max_col=max_col):
+            for cell in row:
+                cell.value = None
 
-    for r in dataframe_to_rows(df, index=False, header=True):
-        ws.append(r)
+    for r_idx, row in enumerate(table, start=1):
+        for c_idx, val in enumerate(row, start=1):
+            ws.cell(row=r_idx, column=c_idx, value=val)
 
     wb.save(path)
+    cp.sync_local_file_to_onedrive(path)
 
 
 # ============================================================

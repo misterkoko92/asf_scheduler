@@ -9,6 +9,9 @@ import os
 import sys
 from datetime import datetime
 import shutil
+import io
+import zipfile
+import platform
 import scheduler.config_paths as cp
 
 
@@ -95,6 +98,46 @@ def read_log_file(path: pathlib.Path) -> str:
         st.error(f"⚠️ Erreur lors de la lecture des logs : {e}")
         return ""
 
+def build_logs_export_bundle(log_path: pathlib.Path) -> bytes:
+    """
+    Create a zip bundle containing logs + minimal context info.
+    Avoids dumping sensitive environment variables.
+    """
+    logs = read_log_file(log_path) if log_path.exists() else ""
+    version_path = cp.BASE_DIR / "VERSION"
+    app_version = "unknown"
+    try:
+        if version_path.exists():
+            app_version = version_path.read_text(encoding="utf-8").strip()
+    except Exception:
+        app_version = "unknown"
+    info_lines = [
+        f"timestamp={datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"python={sys.version}",
+        f"platform={platform.platform()}",
+        f"streamlit_version={getattr(st, '__version__', 'unknown')}",
+        f"app_version={app_version}",
+        f"cwd={os.getcwd()}",
+        f"streamlit_cloud={cp.IS_STREAMLIT_CLOUD}",
+        f"onedrive_mode_graph={cp.is_graph_onedrive()}",
+        f"onedrive_mode={cp.ONEDRIVE_MODE}",
+        f"graph_configured={bool(cp.GRAPH_CLIENT_ID and cp.GRAPH_TENANT_ID)}",
+        f"tmp_dir={cp.TMP_DIR}",
+        f"output_dir={cp.OUTPUT_PLANNING_DIR}",
+        f"tdb_remote={cp.TABLEAU_DE_BORD_REMOTE}",
+        f"benev_remote={cp.PLANNING_BENEVOLES_REMOTE}",
+        f"vols_remote={cp.VOLS_REMOTE}",
+        f"colisage_remote_dir={cp.LISTES_COLISAGE_REMOTE_DIR}",
+        f"output_remote_template={cp.OUTPUT_PLANNING_REMOTE_DIR_TEMPLATE}",
+        f"log_file={log_path}",
+        f"log_exists={log_path.exists()}",
+    ]
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("asf_scheduler.log", logs)
+        zf.writestr("context.txt", "\n".join(info_lines))
+    return payload.getvalue()
+
 
 # =============================================================================
 # 🖥️ INTERFACE
@@ -126,7 +169,7 @@ def render_tab_logs():
     # ----------------------------------------------------------------------
     # ACTIONS
     # ----------------------------------------------------------------------
-    col1, col2, col3 = st.columns([1, 1, 1])
+    col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
 
     with col1:
         reload_now = st.button("🔄 Recharger", width="stretch")
@@ -136,6 +179,14 @@ def render_tab_logs():
 
     with col3:
         download = st.button("⬇ Télécharger le log", width="stretch")
+    with col4:
+        export_bundle = st.download_button(
+            "📤 Exporter logs",
+            data=build_logs_export_bundle(LOG_FILE),
+            file_name="asf_logs_export.zip",
+            mime="application/zip",
+            use_container_width=True,
+        )
 
     # ----------------------------------------------------------------------
     # Vidage du fichier

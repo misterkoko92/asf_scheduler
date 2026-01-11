@@ -5,9 +5,9 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 from pathlib import Path
-import shutil
 
 from asf_app.state import get_state, sync_state_paths_to_engine
+from asf_app.services.files_service import save_excel_sheet
 
 from scheduler.config_paths import (
     SHEET_BENEV_DISPO,
@@ -41,21 +41,8 @@ def load_df(path, sheet, mapping, header=0):
 
 def write_excel_sheet(path: Path, sheet_name: str, df: pd.DataFrame):
     """Réécriture propre d’une feuille Excel."""
-    from openpyxl import load_workbook
-
     try:
-        wb = load_workbook(path)
-
-        if sheet_name in wb.sheetnames:
-            wb.remove(wb[sheet_name])
-
-        ws = wb.create_sheet(title=sheet_name)
-
-        ws.append(list(df.columns))
-        for row in df.itertuples(index=False, name=None):
-            ws.append(list(row))
-
-        wb.save(path)
+        save_excel_sheet(path, sheet_name, df)
         return True
 
     except Exception as e:
@@ -72,7 +59,7 @@ def render_tab_manual():
     state = get_state()
 
     st.header("➕ Ajouts manuels (Vol / Disponibilité / BE)")
-    st.caption("Toutes les écritures se font sur les fichiers TMP. (Pas d’écriture OneDrive dans cette version)")
+    st.caption("Toutes les écritures se font sur les fichiers TMP (sync OneDrive si mode Graph activé).")
 
     # ==========================================================================
     # Chemins TMP uniquement (car l’AppState ne stocke PAS les chemins OneDrive)

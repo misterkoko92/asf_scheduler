@@ -8,6 +8,7 @@ Compatible avec enrich_planning() (planning enrichi complet).
 import streamlit as st
 import pandas as pd
 import re
+import fnmatch
 from pathlib import Path
 
 # PlanningState
@@ -215,19 +216,40 @@ def render_tab_communication():
     # Recherche du PDF dans OneDrive (format avec versions)
     pdf_attach_path = None
     try:
-        base_pdf_dir = cp.ASF_ONEDRIVE / "Planning MAB" / f"ASFmm PLANNING {year}"
-        if base_pdf_dir.exists():
-            pattern = f"ASFmm - PLANNING SEMAINE N° {week:02d} - {year}*.pdf"
-            candidates = sorted(base_pdf_dir.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+        pattern = f"ASFmm - PLANNING SEMAINE N° {week:02d} - {year}*.pdf"
+        if cp.is_graph_onedrive():
+            remote_dir = cp.get_output_remote_dir(year)
+            items = cp.list_onedrive_files(remote_dir, recursive=False, suffixes=[".pdf"])
+            candidates = [i for i in items if fnmatch.fnmatch(i.get("name", ""), pattern)]
             if candidates:
-                labels = [c.name for c in candidates]
+                labels = [c.get("name", "") for c in candidates]
                 pdf_choice = st.radio(
                     "Choisir la version PDF à utiliser",
                     options=labels,
                     index=0,
                     horizontal=True,
                 )
-                pdf_attach_path = candidates[labels.index(pdf_choice)]
+                chosen = candidates[labels.index(pdf_choice)]
+                remote_path = chosen.get("path", "")
+                if remote_path:
+                    local_path = cp.TMP_DIR / "onedrive_cache" / "planning_pdf" / remote_path
+                    if not local_path.exists():
+                        cp.download_onedrive_file(remote_path, local_path, interactive=False)
+                    if local_path.exists():
+                        pdf_attach_path = local_path
+        else:
+            base_pdf_dir = cp.ASF_ONEDRIVE / "Planning MAB" / f"ASFmm PLANNING {year}"
+            if base_pdf_dir.exists():
+                candidates = sorted(base_pdf_dir.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+                if candidates:
+                    labels = [c.name for c in candidates]
+                    pdf_choice = st.radio(
+                        "Choisir la version PDF à utiliser",
+                        options=labels,
+                        index=0,
+                        horizontal=True,
+                    )
+                    pdf_attach_path = candidates[labels.index(pdf_choice)]
     except Exception:
         pdf_attach_path = None
 
