@@ -32,6 +32,27 @@ def test_normalize_planning_df_canonical():
     assert norm.loc[0, "_STATUS"] == "normal"
 
 
+def test_normalize_planning_df_be_and_vol_rules():
+    df = pd.DataFrame(
+        [
+            {
+                "Date_Vol": "01/01/2025",
+                "Heure_Vol": "10h00",
+                "Numero_Vol": "AF 0007",
+                "Destination": "dss",
+                "BE_Numero": "1234",
+                "BE_Nb_Colis": "1",
+                "BE_Nb_Equiv": "1",
+                "Benevole": "Jean",
+                "ID": "1",
+            }
+        ]
+    )
+    norm = normalize_planning_df(df)
+    assert norm.loc[0, "Numero_Vol"] == "7"
+    assert norm.loc[0, "BE_Numero"] == "001234"
+
+
 def test_build_export_view_preserves_routing():
     planning = pd.DataFrame(
         [

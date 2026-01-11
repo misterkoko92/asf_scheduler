@@ -7,13 +7,8 @@ import pandas as pd
 
 from scheduler.planning_schema import normalize_planning_df
 from utils.datetime_utils import parse_date_series
+from utils.identifiers import normalize_be_number, normalize_vol_number
 
-
-def _strip_af_prefix(value: object) -> str:
-    s = str(value or "").strip()
-    if s.upper().startswith("AF"):
-        s = s.replace("AF", "").strip()
-    return s.replace(".0", "").strip()
 
 def _build_dest_city_map(df_paramdest: pd.DataFrame | None) -> Dict[str, str]:
     if df_paramdest is None or getattr(df_paramdest, "empty", True):
@@ -46,7 +41,8 @@ def build_export_view(
 
     df_out = df.copy()
     df_out["Date_Vol"] = parse_date_series(df_out["Date_Vol"]).dt.date
-    df_out["Numero_Vol"] = df_out["Numero_Vol"].apply(_strip_af_prefix)
+    df_out["Numero_Vol"] = df_out["Numero_Vol"].apply(normalize_vol_number)
+    df_out["BE_Numero"] = df_out["BE_Numero"].apply(normalize_be_number)
 
     dest_raw = df_out["Destination"].astype(str).str.strip()
     dest_up = dest_raw.str.upper()
@@ -66,7 +62,7 @@ def build_export_view(
     if df_vols is not None and not getattr(df_vols, "empty", True):
         vols = df_vols.copy()
         vols["Date_Vol"] = parse_date_series(vols.get("Date_Vol", "")).dt.date
-        vols["Numero_Vol"] = vols.get("Numero_Vol", "").apply(_strip_af_prefix)
+        vols["Numero_Vol"] = vols.get("Numero_Vol", "").apply(normalize_vol_number)
         vols["IATA"] = vols.get("IATA", "").astype(str).str.strip().str.upper()
         vols["Destination"] = vols.get("Destination", "").astype(str).str.strip()
         # Fallback ville depuis vols si ParamDest absent

@@ -3,6 +3,14 @@
 
 import pandas as pd
 
+
+def _warn_user(message: str) -> None:
+    try:
+        import streamlit as st
+        st.warning(message)
+    except Exception:
+        pass
+
 def _warn_unmapped_columns(df: pd.DataFrame, mapping: dict, context: str = ""):
     """Log en console les colonnes non mappées pour diagnostic."""
     source_cols = set(df.columns)
@@ -121,6 +129,7 @@ def load_and_normalize(path, sheet_name, mapping: dict, header=0):
     try:
         df = pd.read_excel(path, sheet_name=sheet_name, header=header)
     except Exception as e:
+        _warn_user(f"Impossible de lire le fichier Excel : {path} (onglet: {sheet_name}).")
         print(f"[ERROR] load_and_normalize : impossible de lire {path}\n{e}")
         return pd.DataFrame()
 

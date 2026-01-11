@@ -8,6 +8,7 @@ from uuid import uuid4
 import pandas as pd
 
 from utils.datetime_utils import parse_date_series, parse_time_series
+from utils.identifiers import normalize_be_number, normalize_vol_number
 
 
 @dataclass(frozen=True)
@@ -73,24 +74,6 @@ def _first_existing(df: pd.DataFrame, candidates: Iterable[str]) -> str | None:
     return None
 
 
-def _strip_af_prefix(value: str) -> str:
-    s = str(value or "").strip()
-    s = s.replace("AF ", "").replace("AF", "").strip() if s.upper().startswith("AF") else s
-    return s.replace(".0", "").strip()
-
-
-def _normalize_be_num(value: object) -> str:
-    s = str(value or "").strip()
-    if s.endswith(".0"):
-        s = s[:-2]
-    digits = "".join(ch for ch in s if ch.isdigit())
-    if not digits:
-        return s
-    if len(digits) >= 6:
-        return digits[-6:]
-    return digits.zfill(6)
-
-
 def normalize_planning_df(df: pd.DataFrame | None) -> pd.DataFrame:
     """
     Normalise un planning pour respecter le schéma canonique unique.
@@ -119,11 +102,11 @@ def normalize_planning_df(df: pd.DataFrame | None) -> pd.DataFrame:
         .fillna("")
     )
 
-    df_norm["Numero_Vol"] = df_norm["Numero_Vol"].apply(_strip_af_prefix)
+    df_norm["Numero_Vol"] = df_norm["Numero_Vol"].apply(normalize_vol_number)
     df_norm["Destination"] = (
         df_norm["Destination"].astype(str).str.strip().str.upper().replace("NAN", "")
     )
-    df_norm["BE_Numero"] = df_norm["BE_Numero"].apply(_normalize_be_num)
+    df_norm["BE_Numero"] = df_norm["BE_Numero"].apply(normalize_be_number)
 
     df_norm["BE_Nb_Colis"] = (
         pd.to_numeric(df_norm["BE_Nb_Colis"], errors="coerce")

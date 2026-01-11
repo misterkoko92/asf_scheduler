@@ -1,3 +1,6 @@
+from utils.identifiers import format_vol_display, normalize_be_number
+
+
 def build_iata_city_maps(df_paramdest):
     """
     Construit deux dictionnaires :
@@ -21,10 +24,12 @@ def format_be_label(dest: str, be_num: str, nb_colis: str | int, be_type: str, s
     Formattage standard d'un BE pour les listes déroulantes.
     """
     dest_up = (dest or "").upper()
+    be_key = normalize_be_number(be_num)
+    be_display = be_key or str(be_num)
     nb_txt = f"{nb_colis} colis" if nb_colis not in ("", None) else "Nb ?"
     type_txt = (be_type or "").upper()
     date_txt = date_str or "A planifier"
-    return f"{dest_up} - BE {str(be_num).zfill(6)} - {nb_txt} - {type_txt} - {date_txt} ({status})"
+    return f"{dest_up} - BE {be_display} - {nb_txt} - {type_txt} - {date_txt} ({status})"
 
 
 def format_vol_label(date_dt, iata: str, vol_num: str, heure_str: str, routing: str, status: str) -> str:
@@ -40,7 +45,8 @@ def format_vol_label(date_dt, iata: str, vol_num: str, heure_str: str, routing: 
         pass
     date_txt = f"{jour} {date_dt.strftime('%d/%m/%y')}" if getattr(date_dt, "strftime", None) else str(date_dt)
     routing_txt = routing or ""
-    return f"{date_txt} — {iata or ''} — {vol_num} — {heure_str} — {routing_txt} — {status}"
+    vol_display = format_vol_display(vol_num) or str(vol_num)
+    return f"{date_txt} — {iata or ''} — {vol_display} — {heure_str} — {routing_txt} — {status}"
 
 
 def sort_planning_df(df, date_col="Date_Vol", time_col="Heure_Vol", be_col="BE_Numero"):

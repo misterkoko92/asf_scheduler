@@ -27,7 +27,8 @@ from asf_app.ui.ui_communication.whatsapp_handler import (
     generate_whatsapp_messages,
     open_whatsapp_for_benevole
 )
-from scheduler.format_rules import format_be_number, format_vol_number
+from scheduler.format_rules import format_be_number, format_vol_display
+from utils.identifiers import normalize_be_number
 from loaders.load_shipments import get_shipments_df_cached
 from scheduler.planning_schema import normalize_planning_df
 
@@ -146,13 +147,7 @@ def render_tab_communication():
         df_be = pd.DataFrame()
 
     def _norm_be(val):
-        s = str(val).strip()
-        if s.endswith(".0"):
-            s = s[:-2]
-        digits = re.sub(r"\\D", "", s)
-        if len(digits) >= 6:
-            return digits[-6:]
-        return digits or s
+        return normalize_be_number(val) or str(val).strip()
 
     def _keys_from_be(val):
         d = _norm_be(val)
@@ -270,20 +265,7 @@ def render_tab_communication():
         df_display["Numero_BE_Aff"] = (
             df_display.get("Numero_BE_Aff", df_display.get("NUMERO BE", df_display.get("BE_Numero", ""))))
         df_display["Numero_BE_Aff"] = df_display["Numero_BE_Aff"].apply(format_be_number)
-        def _format_vol_display(v):
-            num = pd.to_numeric(v, errors="coerce")
-            if pd.notna(num):
-                base = format_vol_number(int(num))
-            else:
-                base = format_vol_number(str(v))
-            base = base.strip()
-            if not base:
-                return ""
-            if base.upper().startswith("AF"):
-                suffix = base[2:].lstrip()
-                return f"AF {suffix}"
-            return f"AF {base}"
-        df_display["Numero_Vol_Aff"] = df_display.get("Numero_Vol_Aff", df_display.get("NUMERO VOL", "")).apply(_format_vol_display)
+        df_display["Numero_Vol_Aff"] = df_display.get("Numero_Vol_Aff", df_display.get("NUMERO VOL", "")).apply(format_vol_display)
         df_display["Heure_Vol_Aff"] = (
             df_display.get("Heure_Vol_Aff", df_display.get("HEURE VOL", ""))
             .astype(str)

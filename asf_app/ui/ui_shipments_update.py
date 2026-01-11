@@ -29,24 +29,14 @@ from utils.datetime_utils import parse_date_series, parse_time_series, normalize
 from utils.ui_helpers import build_iata_city_maps, format_be_label
 from utils.export_pdf import export_first_sheet_to_pdf
 from scheduler.planning_schema import normalize_planning_df
+from utils.identifiers import format_vol_display, normalize_be_number
 
 
 # ---------------------------------------------------------------------------
 # Helpers format
 # ---------------------------------------------------------------------------
-def _digits(val: object) -> str:
-    s = str(val).strip()
-    if s.endswith(".0"):
-        s = s[:-2]
-    digits = re.sub(r"\D", "", s)
-    return digits or s
-
-
 def _norm_be(val: object) -> str:
-    d = _digits(val)
-    if len(d) >= 6:
-        return d[-6:]
-    return d
+    return normalize_be_number(val)
 
 
 def _fmt_date_long(val: object) -> str:
@@ -76,11 +66,7 @@ def _fmt_time(val: object) -> str:
 
 
 def _fmt_vol(val: object) -> str:
-    try:
-        v = int(float(val))
-    except Exception:
-        return str(val)
-    return f"AF {v}"
+    return format_vol_display(val) or str(val)
 
 
 def _wrap_body(lines: list[str]) -> str:
@@ -621,8 +607,7 @@ def _apply_planning_update(
     from openpyxl.styles import PatternFill
 
     def _norm_be(val: str) -> str:
-        digits = "".join(ch for ch in str(val) if ch.isdigit())
-        return digits.zfill(6) if digits else str(val)
+        return normalize_be_number(val) or str(val)
 
     # Lecture Export planning en DF
     try:
@@ -865,7 +850,8 @@ def render_tab_shipments_update():
         return _dest_to_iata(val, df_paramdest)
     df_be_all["Dest_IATA_Label"] = df_be_all.get("Destination", "").apply(_dest_iata)
     # Normalisation BE : clé unique sur 6 chiffres, priorité aux lignes issues du planning et aux clés non "00xxxx"
-    df_be_all["BE_Key"] = df_be_all["BE_Numero_Str"].apply(_norm_be).str.zfill(6)
+    df_be_all["BE_Key"] = df_be_all["BE_Numero_Str"].apply(_norm_be)
+    df_be_all = df_be_all[df_be_all["BE_Key"] != ""]
     df_be_all["BE_Num_Display"] = df_be_all["BE_Key"]  # pour affichage unique
     df_be_all["Source_rank"] = df_be_all.get("Source", "").astype(str).str.lower().eq("planning").astype(int)
     df_be_all["Prefix_rank"] = (~df_be_all["BE_Key"].str.startswith("00")).astype(int)

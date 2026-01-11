@@ -31,7 +31,8 @@ from utils.export_pdf import export_first_sheet_to_pdf
 
 # Chemins
 import scheduler.config_paths as cp
-from scheduler.format_rules import format_vol_number, format_be_number
+from scheduler.format_rules import format_vol_display
+from utils.identifiers import normalize_be_number
 from scheduler.config_paths import (
     TABLEAU_DE_BORD,
     VOLS,
@@ -102,21 +103,7 @@ def _date_longue_fr(series_date):
 
 def _format_vol_display(v):
     """Formatte un numéro de vol en 'AF XXX'."""
-    try:
-        num = pd.to_numeric(v, errors="coerce")
-    except Exception:
-        num = None
-    if num is not None and pd.notna(num):
-        base = format_vol_number(int(num))
-    else:
-        base = format_vol_number(str(v))
-    base = str(base).strip()
-    if not base:
-        return ""
-    if base.startswith("AF"):
-        suffix = base[2:].lstrip()
-        return f"AF {suffix}"
-    return f"AF {base}"
+    return format_vol_display(v)
 
 
 def build_preview(df_planning: pd.DataFrame, df_paramdest: pd.DataFrame) -> pd.DataFrame:
@@ -151,32 +138,14 @@ def build_preview(df_planning: pd.DataFrame, df_paramdest: pd.DataFrame) -> pd.D
     df_preview["Destination_UP"] = df_preview["Destination"].astype(str).str.strip().str.upper()
     df_preview["Ville"] = df_preview["Destination_UP"].map(map_iata_to_ville).fillna(df_preview["Destination_UP"])
 
-    # Format BE en YYNNNN (prefix année du vol si nécessaire)
-    def _fmt_be(val, year_hint=None):
-        digits = "".join(ch for ch in str(val) if ch.isdigit())
-        if not digits:
-            return ""
-        if len(digits) >= 6:
-            return digits[-6:]
-        if year_hint is None:
-            return digits.zfill(6)
-        return f"{int(year_hint)%100:02d}" + digits.zfill(4)
-
     # Format numéro de vol en AFXXX
     df_preview["Numero_Vol"] = df_preview.get("Numero_Vol", "").apply(_format_vol_display)
     # Nombre de colis (entier)
     df_preview["BE_Nb_Colis"] = pd.to_numeric(df_preview.get("BE_Nb_Colis", 0), errors="coerce").fillna(0).astype(int)
     # Heure format HHhMM
     df_preview["Heure_Vol"] = pd.to_datetime(df_preview.get("Heure_Vol", ""), errors="coerce").dt.strftime("%Hh%M")
-    # BE formaté avec année
-    try:
-        df_preview["Date_tmp"] = pd.to_datetime(df_preview.get("Date_Vol", ""), errors="coerce")
-    except Exception:
-        df_preview["Date_tmp"] = pd.NaT
-    df_preview["BE_Numero"] = df_preview.apply(
-        lambda r: _fmt_be(r.get("BE_Numero", ""), r.get("Date_tmp", pd.NaT).year if pd.notna(r.get("Date_tmp", pd.NaT)) else None),
-        axis=1,
-    )
+    # BE formaté en YYNNNN
+    df_preview["BE_Numero"] = df_preview.get("BE_Numero", "").apply(normalize_be_number)
     # Tri par date + heure
     try:
         df_preview["Date_Vol"] = pd.to_datetime(df_preview["Date_Vol"], errors="coerce")
@@ -603,24 +572,15 @@ def export_excel_planning(
             )
         dfp = dfp.drop(columns=["_DATE_KEY", "_VOL_KEY"], errors="ignore")
 
-    dfp["VOL_AFF"] = dfp.get("Numero_Vol", dfp.get("Numero_Vol_Aff", "")).astype(str)
-    dfp["VOL_AFF"] = dfp["VOL_AFF"].str.replace(r"\.0$", "", regex=True).apply(lambda x: f"AF {x}" if x and not str(x).upper().startswith("AF") else x)
+    dfp["VOL_AFF"] = dfp.get("Numero_Vol", dfp.get("Numero_Vol_Aff", "")).apply(format_vol_display)
     dfp["ROUTING"] = dfp.get("Routing", dfp.get("ROUTING", "")).astype(str).str.replace(",", "-").str.upper()
     dfp["HEURE_AFF"] = dfp["HEURE_VOL_DT"].dt.strftime("%Hh%M")
-    dfp["BE_NUM"] = dfp.get("BE_Numero", dfp.get("NUMERO BE", dfp.get("BE_Num", ""))).astype(str).str.replace(r"\.0$", "", regex=True)
-    # Garder seulement YYNNNN (sans préfixe BE)
-    # Normalisation numéro BE
-    def _norm_be(val: str) -> str:
-        s = "".join(ch for ch in str(val) if ch.isdigit())
-        if len(s) >= 6:
-            return s[-6:]
-        return s
-    dfp["BE_NUM"] = dfp["BE_NUM"].str.replace(r"^BE\s*", "", regex=True)
+    dfp["BE_NUM"] = dfp.get("BE_Numero", dfp.get("NUMERO BE", dfp.get("BE_Num", ""))).apply(normalize_be_number)
     dfp["BE_COLIS"] = pd.to_numeric(dfp.get("BE_Nb_Colis", 0), errors="coerce").fillna(0).astype(int)
     dfp["BE_TYPE"] = dfp.get("BE_Type", "")
     dfp["BE_EXP"] = dfp.get("BE_Expediteur", "")
     dfp["BE_DEST"] = dfp.get("BE_Destinataire", "")
-    dfp["BE_KEY"] = dfp["BE_NUM"].apply(_norm_be)
+    dfp["BE_KEY"] = dfp["BE_NUM"]
     dfp["_STATUS"] = dfp.get("_STATUS", "normal")
 
     # ------------------------------------------------------------------
@@ -649,15 +609,17 @@ def export_excel_planning(
             mag_write_method = "read_error"
             return {}
 
-        # indexer MAG par clé BE (valeur brute + zfill)
+        # indexer MAG par clé BE (valeur brute + normalisée)
         mag_index = {}
         for row in ws_mag.iter_rows(min_row=1, max_row=ws_mag.max_row, min_col=1, max_col=20):
             val = row[0].value
             if val is None:
                 continue
             sval = str(int(val)) if isinstance(val, (int, float)) else str(val).strip()
-            key = _norm_be(sval)
-            keys = {key, key.zfill(6), sval}
+            key = normalize_be_number(sval)
+            if not key:
+                continue
+            keys = {key, sval, key.lstrip("0")}
             for k in keys:
                 mag_index[k] = row[0].row
 
@@ -679,7 +641,11 @@ def export_excel_planning(
             be_key = r.get("BE_KEY", "")
             if not be_key:
                 continue
-            row_idx = mag_index.get(be_key) or mag_index.get(be_key.zfill(6)) or mag_index.get(be_key[-3:] if len(be_key) > 3 else be_key)
+            row_idx = (
+                mag_index.get(be_key)
+                or mag_index.get(be_key.lstrip("0"))
+                or mag_index.get(be_key[-3:] if len(be_key) > 3 else be_key)
+            )
             if not row_idx:
                 continue
             # Depart MAG col J (10) : si vide, écrire vendredi précédent
@@ -1070,21 +1036,6 @@ def render_tab_planning():
 
     st.success("✔ Fichiers chargés")
 
-    # Helper numéro de vol (AF xxx)
-    def _format_vol_display(v):
-        num = pd.to_numeric(v, errors="coerce")
-        if pd.notna(num):
-            base = format_vol_number(int(num))
-        else:
-            base = format_vol_number(str(v))
-        base = base.strip()
-        if not base:
-            return ""
-        if base.startswith("AF"):
-            suffix = base[2:].lstrip()
-            return f"AF {suffix}"
-        return f"AF {base}"
-
     # -------------------------------------------------------------------
     # Génération planning
     # -------------------------------------------------------------------
@@ -1166,15 +1117,6 @@ def render_tab_planning():
         else:
             from loaders.load_shipments import load_shipments_df
 
-            def _norm_be(x: typing.Any) -> str:
-                s = str(x).strip()
-                if s.lower() == "nan" or s == "":
-                    return ""
-                s = s.replace(".0", "")
-                if len(s) <= 4 and s.isdigit():
-                    return f"25{s.zfill(4)}"
-                return s
-
             df_plan = df_planning.copy()
             be_col_planning = (
                 "BE_Numero"
@@ -1185,17 +1127,17 @@ def render_tab_planning():
             if isinstance(df_plan["_MANUEL"], bool):
                 df_plan["_MANUEL"] = pd.Series([df_plan["_MANUEL"]] * len(df_plan))
             df_plan["_MANUEL"] = df_plan["_MANUEL"].fillna(False)
-            df_plan["BE_KEY"] = df_plan[be_col_planning].apply(_norm_be)
+            df_plan["BE_KEY"] = df_plan[be_col_planning].apply(normalize_be_number)
 
             df_ship = load_shipments_df().copy()
-            df_ship["BE_KEY"] = df_ship["BE_Numero"].apply(_norm_be)
+            df_ship["BE_KEY"] = df_ship["BE_Numero"].apply(normalize_be_number)
             df_ship = df_ship.drop_duplicates(subset=["BE_KEY"])
 
             planned_set = set(df_plan["BE_KEY"].tolist())
             manual_set = set(df_plan.loc[df_plan["_MANUEL"], "BE_KEY"])
 
             df_be_view = df_ship[["Destination", "BE_Numero", "BE_Nb_Colis", "BE_KEY"]].copy()
-            df_be_view["BE_Numero"] = df_be_view["BE_Numero"].apply(_norm_be)
+            df_be_view["BE_Numero"] = df_be_view["BE_Numero"].apply(normalize_be_number)
             df_be_view["BE_Nb_Colis"] = (
                 pd.to_numeric(df_be_view.get("BE_Nb_Colis", 0), errors="coerce").fillna(0).astype(int)
             )
@@ -1344,26 +1286,12 @@ def render_tab_planning():
     if df_be_mod.empty:
         st.info("Aucun BE en statut D disponible.")
     else:
-        def _digits(val):
-            s = str(val).strip()
-            if s.endswith(".0"):
-                s = s[:-2]
-            # extraire uniquement les chiffres si possible (format YYNNNN)
-            import re
-            digits = re.sub(r"\D", "", s)
-            return digits or s
-
         def _norm_full(val):
-            digits = _digits(val)
-            if len(digits) >= 6:
-                return digits[-6:]
-            return digits
+            return normalize_be_number(val)
 
         def _norm_short(val):
-            digits = _digits(val)
-            if len(digits) >= 3:
-                return digits[-3:]
-            return digits
+            full = normalize_be_number(val)
+            return full[-3:] if full else ""
 
         # BE présents dans le planning (toutes variantes de colonne)
         be_col_planning = None
@@ -1406,11 +1334,7 @@ def render_tab_planning():
             return t.strftime("%Hh%M")
 
         def _fmt_vol(val):
-            try:
-                v = int(float(val))
-            except Exception:
-                return str(val)
-            return f"AF {v}"
+            return format_vol_display(val) or str(val)
 
         def _fmt_date_long(val):
             try:

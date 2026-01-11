@@ -8,7 +8,7 @@ from datetime import datetime
 
 from scheduler.format_rules import (
     format_be_number,
-    format_vol_number,
+    format_vol_display,
     format_date_fr_long_slash,
     format_date_fr_words
 )
@@ -277,28 +277,8 @@ def build_df_comm(df_planning: pd.DataFrame,
     df["Date_Affichage"] = df["DATE"].apply(format_date_fr_long_slash)
     df["Date_Affichage_WA"] = df["DATE"].apply(format_date_fr_words)
 
-    def _fmt_be_with_date(val, date_val):
-        digits = "".join(c for c in str(val) if c.isdigit())
-        if not digits:
-            return ""
-        if len(digits) >= 6:
-            return digits[-6:]
-        year_hint = None
-        try:
-            year_hint = pd.to_datetime(date_val, errors="coerce").year
-        except Exception:
-            year_hint = None
-        prefix = f"{int(year_hint)%100:02d}" if year_hint else ""
-        return f"{prefix}{digits.zfill(4)}"
-
-    df["Numero_BE_Aff"] = df.apply(
-        lambda r: _fmt_be_with_date(
-            r.get("NUMERO BE", r.get("BE_Numero", "")),
-            r.get("DATE", r.get("Date_Vol", "")),
-        ),
-        axis=1,
-    )
-    df["Numero_Vol_Aff"] = df["NUMERO VOL"].apply(format_vol_number)
+    df["Numero_BE_Aff"] = df.get("NUMERO BE", df.get("BE_Numero", "")).apply(format_be_number)
+    df["Numero_Vol_Aff"] = df.get("NUMERO VOL", "").apply(format_vol_display)
 
     # Destination (ville + IATA)
     df["Destination"] = df["Dest_Ville"].fillna("").astype(str).str.upper()

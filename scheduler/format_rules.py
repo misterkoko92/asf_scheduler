@@ -11,6 +11,13 @@ from datetime import datetime
 import math
 from typing import Any, Optional, Tuple
 
+from utils.identifiers import (
+    digits_only,
+    format_be_display as _format_be_display,
+    format_vol_display as _format_vol_display,
+    normalize_be_number,
+    normalize_vol_number,
+)
 
 # ============================================================
 # Helpers génériques
@@ -26,7 +33,7 @@ def _to_str(v: Any) -> str:
 
 
 def _digits(v: Any) -> str:
-    return "".join(ch for ch in _to_str(v) if ch.isdigit())
+    return digits_only(v)
 
 
 def _to_datetime(x):
@@ -192,9 +199,7 @@ def format_be_number(value):
     Format BE en YYNNNN.
     Garde uniquement les chiffres.
     """
-    if value is None:
-        return ""
-    return "".join(c for c in str(value) if c.isdigit())
+    return normalize_be_number(value)
 
 
 # ============================================================
@@ -206,10 +211,17 @@ def format_vol_number(value):
     Format numéro de vol :
     AF768, AF918
     """
-    if value is None:
-        return ""
-    s = str(value).strip().upper().replace(" ", "")
-    return s
+    return normalize_vol_number(value)
+
+
+def format_be_display(value):
+    """Affichage BE : 'BE YYNNNN'."""
+    return _format_be_display(value)
+
+
+def format_vol_display(value):
+    """Affichage vol : 'AF XXX'."""
+    return _format_vol_display(value)
 
 
 # ============================================================
