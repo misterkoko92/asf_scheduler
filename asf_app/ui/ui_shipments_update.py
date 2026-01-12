@@ -64,7 +64,7 @@ def _load_be_status(status_code: str) -> pd.DataFrame:
     )
 
     if df is None or df.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=["Week", "Year"])
 
     df = df.copy()
     df["BE_Statut"] = df.get("BE_Statut", "").astype(str).str.upper().str.strip()

@@ -76,6 +76,18 @@ def load_shipments_df(
     )
 
     print(f"-> BE bruts charges : {len(df_raw)}")
+    if not isinstance(df_raw, pd.DataFrame):
+        warn_ui("MAG CENTRAL illisible (format invalide).")
+        df_raw = pd.DataFrame()
+
+    expected_cols = [
+        col
+        for col in column_map_mag_central.values()
+        if col and not str(col).startswith("_IGNORE")
+    ]
+    for col in expected_cols:
+        if col not in df_raw.columns:
+            df_raw[col] = ""
 
     if param_be_raw is None:
         try:
@@ -89,7 +101,9 @@ def load_shipments_df(
     param_be = be_manager.normalize_param_be(param_be_raw)
 
     df = df_raw.copy()
-    df["BE_Statut"] = df.get("BE_Statut", "").astype(str).str.strip().str.upper()
+    if "BE_Statut" not in df.columns:
+        df["BE_Statut"] = ""
+    df["BE_Statut"] = df["BE_Statut"].astype(str).str.strip().str.upper()
     if planifiables_only:
         df = df[df["BE_Statut"] == "D"].copy()
 
@@ -173,10 +187,10 @@ def load_shipments_df(
     ]:
         _coerce_int(col)
 
-    if "BE_Statut" in df.columns:
-        df["BE_Statut"] = df["BE_Statut"].astype(str).str.strip().str.upper()
-    if "Destination" in df.columns:
-        df["Destination"] = df["Destination"].astype(str).str.strip().str.upper()
+    df["BE_Statut"] = df["BE_Statut"].astype(str).str.strip().str.upper()
+    if "Destination" not in df.columns:
+        df["Destination"] = ""
+    df["Destination"] = df["Destination"].astype(str).str.strip().str.upper()
 
     latest_impr_date = None
     if "BE_Date_Impression" in df.columns:
