@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import pandas as pd
+import re
 
 from utils.ui_notifications import warn_ui
 
@@ -14,6 +15,30 @@ def _warn_unmapped_columns(df: pd.DataFrame, mapping: dict, context: str = ""):
         prefix = f"[UNMAPPED {context}] " if context else "[UNMAPPED] "
         print(prefix + ", ".join(map(str, unmapped)))
 import unicodedata
+
+
+def _resolve_sheet_name(path, sheet_name: str) -> str:
+    if not isinstance(sheet_name, str):
+        return sheet_name
+    try:
+        xls = pd.ExcelFile(path)
+    except Exception:
+        return sheet_name
+    names = xls.sheet_names
+    target = sheet_name.strip().lower()
+    for name in names:
+        if name.strip().lower() == target:
+            return name
+    candidates = [name for name in names if name.strip().lower().startswith(target)]
+    if not candidates:
+        return sheet_name
+
+    def _rank(name: str) -> tuple[int, str]:
+        match = re.search(r"(20\\d{2})", name)
+        year = int(match.group(1)) if match else -1
+        return (year, name)
+
+    return sorted(candidates, key=_rank, reverse=True)[0]
 
 
 # -------------------------------------------------------------------
@@ -123,9 +148,21 @@ def load_and_normalize(path, sheet_name, mapping: dict, header=0):
     try:
         df = pd.read_excel(path, sheet_name=sheet_name, header=header)
     except Exception as e:
-        warn_ui(f"Impossible de lire le fichier Excel : {path} (onglet: {sheet_name}).")
-        print(f"[ERROR] load_and_normalize : impossible de lire {path}\n{e}")
-        return pd.DataFrame()
+        resolved_sheet = _resolve_sheet_name(path, sheet_name)
+        if isinstance(sheet_name, str) and resolved_sheet != sheet_name:
+            try:
+                df = pd.read_excel(path, sheet_name=resolved_sheet, header=header)
+                print(
+                    f"[INFO] Feuille '{sheet_name}' introuvable — utilisation de '{resolved_sheet}'."
+                )
+            except Exception as e2:
+                warn_ui(f"Impossible de lire le fichier Excel : {path} (onglet: {sheet_name}).")
+                print(f"[ERROR] load_and_normalize : impossible de lire {path}\n{e}\n{e2}")
+                return pd.DataFrame()
+        else:
+            warn_ui(f"Impossible de lire le fichier Excel : {path} (onglet: {sheet_name}).")
+            print(f"[ERROR] load_and_normalize : impossible de lire {path}\n{e}")
+            return pd.DataFrame()
 
     # Retire les colonnes vides type "Unnamed: xx"
     df = df.loc[:, [c for c in df.columns if not str(c).lower().startswith("unnamed")]]
