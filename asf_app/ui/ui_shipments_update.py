@@ -70,10 +70,11 @@ def _load_be_status(status_code: str) -> pd.DataFrame:
         sheets = [SHEET_MAG_CENTRAL]
 
     def _rank(name: str) -> tuple[int, str]:
-        match = re.search(r"(20\\d{2})", name)
+        match = re.search(r"(20\d{2})", name)
         year = int(match.group(1)) if match else -1
         return (year, name)
 
+    sheets = [name for name in sheets if _rank(name)[0] >= 2025]
     sheets = sorted(sheets, key=_rank)
     frames = []
     for sheet in sheets:

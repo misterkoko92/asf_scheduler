@@ -34,7 +34,7 @@ def _resolve_sheet_name(path, sheet_name: str) -> str:
         return sheet_name
 
     def _rank(name: str) -> tuple[int, str]:
-        match = re.search(r"(20\\d{2})", name)
+        match = re.search(r"(20\d{2})", name)
         year = int(match.group(1)) if match else -1
         return (year, name)
 

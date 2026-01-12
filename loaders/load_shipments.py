@@ -51,7 +51,7 @@ def _parse_time_generic(val) -> dt.time | None:
         return None
 
 
-def _list_mag_central_sheets(path: Path) -> list[str]:
+def _list_mag_central_sheets(path: Path, *, min_year: int | None = None) -> list[str]:
     try:
         xls = pd.ExcelFile(path)
     except Exception:
@@ -65,11 +65,14 @@ def _list_mag_central_sheets(path: Path) -> list[str]:
         return []
 
     def _rank(name: str) -> tuple[int, str]:
-        match = re.search(r"(20\\d{2})", name)
+        match = re.search(r"(20\d{2})", name)
         year = int(match.group(1)) if match else -1
         return (year, name)
 
-    return sorted(names, key=_rank)
+    ranked = sorted(names, key=_rank)
+    if min_year is None:
+        return ranked
+    return [name for name in ranked if _rank(name)[0] >= min_year]
 
 
 # ======================================================================
@@ -90,7 +93,7 @@ def load_shipments_df(
     print("\n=== LOAD_SHIPMENTS_DF ===")
 
     tableau_de_bord = tdb_path or TABLEAU_DE_BORD
-    mag_sheets = _list_mag_central_sheets(tableau_de_bord)
+    mag_sheets = _list_mag_central_sheets(tableau_de_bord, min_year=2025)
     if mag_sheets:
         frames = []
         for sheet in mag_sheets:
