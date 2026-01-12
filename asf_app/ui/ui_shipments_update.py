@@ -56,18 +56,46 @@ def _dest_to_iata(dest_raw: str, df_paramdest: pd.DataFrame) -> str:
 # Chargement BE statut P
 # ---------------------------------------------------------------------------
 def _load_be_status(status_code: str) -> pd.DataFrame:
-    df = load_and_normalize(
-        path=TABLEAU_DE_BORD,
-        sheet_name=SHEET_MAG_CENTRAL,
-        mapping=column_map_mag_central,
-        header=5,
-    )
+    try:
+        xls = pd.ExcelFile(TABLEAU_DE_BORD)
+        sheets = [
+            name
+            for name in xls.sheet_names
+            if str(name).strip().upper().startswith("MAG CENTRAL")
+        ]
+    except Exception:
+        sheets = []
 
+    if not sheets:
+        sheets = [SHEET_MAG_CENTRAL]
+
+    def _rank(name: str) -> tuple[int, str]:
+        match = re.search(r"(20\\d{2})", name)
+        year = int(match.group(1)) if match else -1
+        return (year, name)
+
+    sheets = sorted(sheets, key=_rank)
+    frames = []
+    for sheet in sheets:
+        df_sheet = load_and_normalize(
+            path=TABLEAU_DE_BORD,
+            sheet_name=sheet,
+            mapping=column_map_mag_central,
+            header=5,
+        )
+        if df_sheet is None or df_sheet.empty:
+            continue
+        df_sheet["_MAG_CENTRAL_SHEET"] = sheet
+        frames.append(df_sheet)
+
+    df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     if df is None or df.empty:
         return pd.DataFrame(columns=["Week", "Year"])
 
     df = df.copy()
-    df["BE_Statut"] = df.get("BE_Statut", "").astype(str).str.upper().str.strip()
+    if "BE_Statut" not in df.columns:
+        df["BE_Statut"] = ""
+    df["BE_Statut"] = df["BE_Statut"].astype(str).str.upper().str.strip()
     df = df[df["BE_Statut"] == status_code.upper()].copy()
 
     df["BE_Numero_Str"] = df.get("BE_Numero", "").astype(str).str.replace(r"\.0$", "", regex=True).str.strip()

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import datetime as dt
+import re
 import numpy as np
 import pandas as pd
 
@@ -50,6 +51,27 @@ def _parse_time_generic(val) -> dt.time | None:
         return None
 
 
+def _list_mag_central_sheets(path: Path) -> list[str]:
+    try:
+        xls = pd.ExcelFile(path)
+    except Exception:
+        return []
+    names = [
+        name
+        for name in xls.sheet_names
+        if str(name).strip().upper().startswith("MAG CENTRAL")
+    ]
+    if not names:
+        return []
+
+    def _rank(name: str) -> tuple[int, str]:
+        match = re.search(r"(20\\d{2})", name)
+        year = int(match.group(1)) if match else -1
+        return (year, name)
+
+    return sorted(names, key=_rank)
+
+
 # ======================================================================
 # VERSION DATAFRAME — Chargement complet MAG CENTRAL + ParamBE
 # ======================================================================
@@ -68,12 +90,28 @@ def load_shipments_df(
     print("\n=== LOAD_SHIPMENTS_DF ===")
 
     tableau_de_bord = tdb_path or TABLEAU_DE_BORD
-    df_raw = load_and_normalize(
-        path=tableau_de_bord,
-        sheet_name=SHEET_MAG_CENTRAL,
-        mapping=column_map_mag_central,
-        header=5,
-    )
+    mag_sheets = _list_mag_central_sheets(tableau_de_bord)
+    if mag_sheets:
+        frames = []
+        for sheet in mag_sheets:
+            df_sheet = load_and_normalize(
+                path=tableau_de_bord,
+                sheet_name=sheet,
+                mapping=column_map_mag_central,
+                header=5,
+            )
+            if df_sheet is None or df_sheet.empty:
+                continue
+            df_sheet["_MAG_CENTRAL_SHEET"] = sheet
+            frames.append(df_sheet)
+        df_raw = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    else:
+        df_raw = load_and_normalize(
+            path=tableau_de_bord,
+            sheet_name=SHEET_MAG_CENTRAL,
+            mapping=column_map_mag_central,
+            header=5,
+        )
 
     print(f"-> BE bruts charges : {len(df_raw)}")
     if not isinstance(df_raw, pd.DataFrame):
