@@ -211,11 +211,16 @@ def render_tab_communication():
     # Recherche du PDF dans OneDrive (format avec versions)
     pdf_attach_path = None
     try:
-        pattern = f"ASFmm - PLANNING SEMAINE N° {week:02d} - {year}*.pdf"
+        pattern_old = f"ASFmm - PLANNING SEMAINE N° {week:02d} - {year}*.pdf"
+        pattern_new = f"ASFmm - PLANNING SEMAINE {year}-{week:02d}-*.pdf"
         if cp.is_graph_onedrive():
             remote_dir = cp.get_output_remote_dir(year)
             items = cp.list_onedrive_files(remote_dir, recursive=False, suffixes=[".pdf"])
-            candidates = [i for i in items if fnmatch.fnmatch(i.get("name", ""), pattern)]
+            candidates = [
+                i for i in items
+                if fnmatch.fnmatch(i.get("name", ""), pattern_old)
+                or fnmatch.fnmatch(i.get("name", ""), pattern_new)
+            ]
             if candidates:
                 labels = [c.get("name", "") for c in candidates]
                 pdf_choice = st.radio(
@@ -235,7 +240,11 @@ def render_tab_communication():
         else:
             base_pdf_dir = cp.ASF_ONEDRIVE / "Planning MAB" / f"ASFmm PLANNING {year}"
             if base_pdf_dir.exists():
-                candidates = sorted(base_pdf_dir.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+                candidates = sorted(
+                    list(base_pdf_dir.glob(pattern_old)) + list(base_pdf_dir.glob(pattern_new)),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
+                )
                 if candidates:
                     labels = [c.name for c in candidates]
                     pdf_choice = st.radio(

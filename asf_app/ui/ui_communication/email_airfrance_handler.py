@@ -4,7 +4,7 @@
 # compatible Windows (COM) et macOS (AppleScript),
 # avec signature automatique Outlook.
 #
-# Le texte, le sujet, les adresses TO/CC sont fournis par l’UI.
+# Le texte, le sujet, les adresses TO/CC/BCC sont fournis par l’UI.
 # --------------------------------------------------------
 
 import platform
@@ -41,6 +41,7 @@ def generate_airfrance_email(
     cc_list,
     week,
     year,
+    bcc_list=None,
     custom_subject=None,
     custom_body=None,
     attachments=None,
@@ -50,6 +51,7 @@ def generate_airfrance_email(
     cc_list : liste d’adresses email
     week    : numéro de semaine (int)
     year    : année (int)
+    bcc_list : liste d’adresses email
     custom_subject : sujet custom, sinon sujet par défaut
     custom_body    : corps HTML custom, sinon texte par défaut
     """
@@ -66,6 +68,7 @@ def generate_airfrance_email(
     result = create_outlook_draft(
         to_list=to_list,
         cc_list=cc_list,
+        bcc_list=bcc_list,
         subject=subject,
         body_html=body,
         attachments=attachments or None,

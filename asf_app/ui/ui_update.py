@@ -46,7 +46,7 @@ def render_tab_update():
         remote_files = [
             i.get("path", "")
             for i in items
-            if i.get("name", "").upper().startswith("ASFMM - PLANNING SEMAINE N°")
+            if i.get("name", "").upper().startswith("ASFMM - PLANNING SEMAINE")
         ]
         if not remote_files:
             st.error("❌ Aucun planning trouvé dans OneDrive (Graph).")
@@ -74,7 +74,7 @@ def render_tab_update():
         all_files = sorted(
             [
                 f
-                for f in planning_dir.glob("ASFmm - PLANNING SEMAINE N° *.xls*")
+                for f in planning_dir.glob("ASFmm - PLANNING SEMAINE *.xls*")
                 if f.is_file()
             ],
             key=lambda f: f.stat().st_mtime,

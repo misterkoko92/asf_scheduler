@@ -1,0 +1,10 @@
+airfrance:
+  to: nafontaine1@airfrance.fr; anchanet@airfrance.fr
+  cc: messmed@aviation-sans-frontieres-fr.org; f.cottence@samsic.aero; m.dorigny@gsf.fr;
+    a.joyeux@gsf.fr; s.chadli@samsic.aero; pestarland@airfrance.fr; barbara.dibat@aviation-sans-frontieres-fr.org
+  bcc: ''
+asf_interne:
+  to: messmed@aviation-sans-frontieres-fr.org
+  cc: ''
+  bcc: tousmessmed@asf-fr.net; michael.blanc@aviation-sans-frontieres-fr.org; myriam.devred@aviation-sans-frontieres-fr.org;
+    barbara.dibat@aviation-sans-frontieres-fr.org

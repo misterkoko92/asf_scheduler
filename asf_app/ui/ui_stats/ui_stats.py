@@ -39,19 +39,43 @@ WK_LABEL = re.compile(r"N[°o]?\s*([0-9]{1,2})\s*[- ]\s*([0-9]{2,4})?", re.IGNOR
 def extract_week_version(name: str):
     """
     Extrait (num_semaine, version) à partir d'un nom de fichier du type :
-    - ASFmm - PLANNING SEMAINE N° 47 - 2025.xlsm
+    - ASFmm - PLANNING SEMAINE 2026-47-02.xlsx
     - ASFmm - PLANNING SEMAINE N° 03-2025-MacBook Air (2).xlsx
     etc.
     """
-    # 1) Priorité : motif autour de "N° xx-aaaa"
-    m = WK_LABEL.search(name)
+    # 1) Nouveau format : "SEMAINE YYYY-XX-ZZ"
+    m = re.search(r"SEMAINE\s*(20\d{2})\D+(\d{1,2})\D+(\d+)", name, re.IGNORECASE)
     if m:
-        wk = int(m.group(1))
-        ver = int(m.group(2) or 0)
-        if 1 <= wk <= 53:
-            return wk, ver
+        try:
+            wk = int(m.group(2))
+            ver = int(m.group(3))
+            if 1 <= wk <= 53:
+                return wk, ver
+        except Exception:
+            pass
 
-    # 2) Fallback : premier couple de chiffres
+    # 2) Ancien format avec version explicite vXX
+    m = re.search(r"N[°o]?\s*(\d{1,2}).*?v(\d+)", name, re.IGNORECASE)
+    if m:
+        try:
+            wk = int(m.group(1))
+            ver = int(m.group(2))
+            if 1 <= wk <= 53:
+                return wk, ver
+        except Exception:
+            pass
+
+    # 3) Ancien format sans version : version par défaut = 1
+    m = re.search(r"N[°o]?\s*(\d{1,2})", name, re.IGNORECASE)
+    if m:
+        try:
+            wk = int(m.group(1))
+            if 1 <= wk <= 53:
+                return wk, 1
+        except Exception:
+            pass
+
+    # 4) Fallback : premier couple de chiffres
     m = WK.search(name)
     if m:
         wk = int(m.group(1))
@@ -1118,7 +1142,7 @@ def render_tab_stats():
         st.session_state["stats_planning_dir"] = str(default_dir)
 
     with st.expander("📂 Dossier plannings à analyser", expanded=False):
-        st.caption("Saisis le dossier contenant les fichiers 'ASFmm - PLANNING SEMAINE N° *.xlsx'")
+        st.caption("Saisis le dossier contenant les fichiers 'ASFmm - PLANNING SEMAINE YYYY-XX-ZZ.xlsx'")
         selected_dir = st.text_input(
             "Chemin du dossier plannings",
             value=st.session_state["stats_planning_dir"],

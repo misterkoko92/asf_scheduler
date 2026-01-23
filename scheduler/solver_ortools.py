@@ -301,6 +301,17 @@ def solve_planning_ortools_simulation(
         _log(f"[ORTOOLS] Bénévoles max utilisés = {max_b}")
         return max_b
 
+    def _phase_min_benev():
+        _log("[ORTOOLS] Phase — minimisation bénévoles affectés")
+        model.Minimize(sum(nb_benev.values()))
+        st = solver.Solve(model)
+        if st not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            return None
+        min_b = int(round(solver.ObjectiveValue()))
+        model.Add(sum(nb_benev.values()) <= min_b)
+        _log(f"[ORTOOLS] Bénévoles min affectés = {min_b}")
+        return min_b
+
     def _phase_min_excess_missions():
         _log("[ORTOOLS] Phase — minimisation surplus de missions (>1 par bénévole)")
         excess_vars = []
@@ -337,12 +348,12 @@ def solve_planning_ortools_simulation(
         mode = "colis"
 
     if mode == "colis":
-        # 1) Poids, 2) Vols min, 3) Bénévoles max, 4) Équilibrage + résolution finale
+        # 1) Poids, 2) Vols min, 3) Bénévoles min, 4) Équilibrage + résolution finale
         if _phase_max_weight() is None:
             return _empty_result("INFAISABLE")
         if _phase_min_vols() is None:
             return _empty_result("INFAISABLE")
-        if _phase_max_benev() is None:
+        if _phase_min_benev() is None:
             return _empty_result("INFAISABLE")
         _phase_min_excess_missions()
         _phase_min_weighted_availability()

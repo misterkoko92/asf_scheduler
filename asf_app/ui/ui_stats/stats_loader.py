@@ -4,6 +4,7 @@
 import pandas as pd
 from pathlib import Path
 from typing import List
+import re
 from asf_app.ui.ui_stats.ui_stats import load_planning_xlsx
 
 
@@ -16,7 +17,7 @@ def load_all_plannings(base_dir: Path) -> pd.DataFrame:
     """
 
     files = sorted(
-        list(base_dir.glob("ASFmm - PLANNING SEMAINE N° *.xls*")),
+        list(base_dir.glob("ASFmm - PLANNING SEMAINE *.xls*")),
         key=lambda f: f.stat().st_mtime,
     )
 
@@ -31,8 +32,15 @@ def load_all_plannings(base_dir: Path) -> pd.DataFrame:
             continue
 
         # Extraire SEMAINE depuis le nom
+        wk = None
         try:
-            wk = int(f.stem.split("N°")[1].split("-")[0].strip())
+            m_new = re.search(r"SEMAINE\s*20\d{2}\D+(\d{1,2})", f.stem, re.IGNORECASE)
+            if m_new:
+                wk = int(m_new.group(1))
+            else:
+                m_old = re.search(r"N[°o]?\s*(\d{1,2})", f.stem, re.IGNORECASE)
+                if m_old:
+                    wk = int(m_old.group(1))
         except Exception:
             wk = None
 

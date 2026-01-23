@@ -1,7 +1,7 @@
 # email_asf_ui.py — Communication 3.0
 # -----------------------------------
 # UI Streamlit pour le mail ASF Interne :
-# - TO / BCC modifiables
+# - TO / CC / BCC modifiables
 # - Sujet / Corps modifiables
 # - Utilise df_comm pour détecter la semaine / année
 
@@ -14,6 +14,7 @@ from asf_app.ui.ui_communication.email_asf_handler import (
     DEFAULT_BODY_ASF,
 )
 from asf_app.ui.ui_planning.state_planning import get_planning_state
+from asf_app.ui.email_defaults import get_email_defaults
 
 def _detect_week_year_from_df(df_comm: pd.DataFrame):
     if df_comm is None or df_comm.empty or "DATE" not in df_comm.columns:
@@ -45,23 +46,36 @@ def render_email_asf_ui(df_comm: pd.DataFrame, attachment_path=None, pdf_attachm
         st.error("Impossible de détecter la semaine / année.")
         return
 
+    defaults = get_email_defaults()
+    asf_defaults = defaults.get("asf_interne", {})
+
     col1, col2 = st.columns(2)
 
     with col1:
-        to_default = "messmed@aviation-sans-frontieres-fr.org"
+        to_default = asf_defaults.get("to", "")
         to_input = st.text_input(
             "Destinataires (To)",
             value=to_default,
+            key="asf_to",
             help="Sépare les adresses par ';' ou ','."
         )
 
     with col2:
-        bcc_default = "tousmessmed@asf-fr.net"
-        bcc_input = st.text_input(
-            "Copie cachée (Bcc)",
-            value=bcc_default,
+        cc_default = asf_defaults.get("cc", "")
+        cc_input = st.text_input(
+            "Copie (CC)",
+            value=cc_default,
+            key="asf_cc",
             help="Sépare les adresses par ';' ou ','."
         )
+
+    bcc_default = asf_defaults.get("bcc", "")
+    bcc_input = st.text_input(
+        "Copie cachée (CCI)",
+        value=bcc_default,
+        key="asf_bcc",
+        help="Sépare les adresses par ';' ou ','."
+    )
 
     subject_default = build_subject_asf(week, year)
     subject = st.text_input("Sujet", value=subject_default)
@@ -90,6 +104,7 @@ def render_email_asf_ui(df_comm: pd.DataFrame, attachment_path=None, pdf_attachm
     if st.button("📤 Générer le mail ASF Interne", type="primary"):
         ok = generate_asf_email(
             to_list=to_input,
+            cc_list=cc_input,
             bcc_list=bcc_input,
             week=week,
             year=year,

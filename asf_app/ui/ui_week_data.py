@@ -3,13 +3,14 @@
 
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, date
 
 from asf_app.state import get_state
 
 from loaders.load_shipments import load_shipments_df
 from utils.ui_helpers import build_iata_city_maps, format_be_label, format_vol_label
 from utils.datetime_utils import parse_date_series, parse_time_series, normalize_hour_str, hour_min_from_series
+from utils.identifiers import normalize_vol_number
 
 
 # ======================================================================
@@ -405,3 +406,240 @@ def render_tab_week_data():
             default_sort="Destination",
             min_height=50,
         )
+
+    # ------------------------------------------------------------------
+    # Vues détaillées (collapse)
+    # ------------------------------------------------------------------
+    def _week_dates():
+        if state.api_start_date:
+            ref = pd.to_datetime(state.api_start_date, errors="coerce")
+        else:
+            ref = None
+            for df in (df_benev, df_flights):
+                if df is None or df.empty:
+                    continue
+                col = "Date"
+                if col in df.columns:
+                    ser = parse_date_series(df[col])
+                    if not ser.dropna().empty:
+                        ref = ser.dropna().iloc[0]
+                        break
+        if ref is None or pd.isna(ref):
+            if week:
+                try:
+                    today_iso = pd.Timestamp.today().isocalendar()
+                    monday = datetime.fromisocalendar(int(today_iso.year), int(week), 1)
+                    return [monday + pd.Timedelta(days=i) for i in range(7)]
+                except Exception:
+                    pass
+            ref = pd.Timestamp.today()
+        iso = ref.isocalendar()
+        monday = datetime.fromisocalendar(int(iso.year), int(iso.week), 1)
+        return [monday + pd.Timedelta(days=i) for i in range(7)]
+
+    def _time_to_minutes(val: object) -> int | None:
+        if val is None or val == "" or pd.isna(val):
+            return None
+        sval = str(val).strip().lower().replace("h", ":").replace(" ", "")
+        try:
+            t = pd.to_datetime(sval, format="%H:%M", errors="coerce")
+            if pd.isna(t):
+                t = pd.to_datetime(sval, errors="coerce")
+            if pd.isna(t):
+                return None
+            return int(t.hour) * 60 + int(t.minute)
+        except Exception:
+            return None
+
+    def _minutes_to_hhmm(m: int | None) -> str:
+        if m is None:
+            return ""
+        h = int(m // 60)
+        mi = int(m % 60)
+        return f"{h:02d}h{mi:02d}"
+
+    day_names = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
+    week_dates = _week_dates()
+    day_labels = [f"{day_names[i]} {d.strftime('%d/%m')}" for i, d in enumerate(week_dates)]
+
+    # ---- Bloc bénévoles (disponibilités) ----
+    with st.expander("👥 Disponibilités bénévoles (vue semaine)", expanded=False):
+        if df_benev is None or df_benev.empty:
+            st.info("Aucune disponibilité bénévole sur la période.")
+        else:
+            df_b = df_benev.copy()
+            df_b["Date_dt"] = parse_date_series(df_b["Date"]).dt.date
+
+            avail: dict[tuple[str, date], tuple[int, int]] = {}
+            for _, r in df_b.iterrows():
+                name = str(r.get("Nom", "")).strip()
+                d = r.get("Date_dt")
+                if not name or pd.isna(d):
+                    continue
+                arr = _time_to_minutes(r.get("Arrivée", ""))
+                dep = _time_to_minutes(r.get("Départ", ""))
+                if arr is None or dep is None:
+                    continue
+                key = (name, d)
+                if key in avail:
+                    prev_arr, prev_dep = avail[key]
+                    arr = min(arr, prev_arr)
+                    dep = max(dep, prev_dep)
+                avail[key] = (arr, dep)
+
+            names = sorted({str(n).strip() for n in df_b.get("Nom", pd.Series(dtype=object)).tolist() if str(n).strip()})
+            if not names:
+                st.info("Aucune disponibilité bénévole sur la période.")
+            else:
+                name_days: dict[str, set[date]] = {}
+                for (n, d) in avail.keys():
+                    if not n:
+                        continue
+                    name_days.setdefault(n, set()).add(d)
+                name_counts = {n: len(days) for n, days in name_days.items()}
+                name_display = {n: f"{n} ({name_counts.get(n, 0)})" for n in names}
+                cols = pd.MultiIndex.from_product([day_labels, ["Début", "Fin"]])
+                table = pd.DataFrame("", index=[name_display[n] for n in names], columns=cols)
+                table.index.name = "Bénévole"
+                mask = pd.DataFrame(False, index=[name_display[n] for n in names], columns=cols)
+                for name in names:
+                    for d, label in zip(week_dates, day_labels):
+                        key = (name, d.date())
+                        if key in avail:
+                            arr, dep = avail[key]
+                            row_name = name_display.get(name, name)
+                            table.loc[row_name, (label, "Début")] = _minutes_to_hhmm(arr)
+                            table.loc[row_name, (label, "Fin")] = _minutes_to_hhmm(dep)
+                            mask.loc[row_name, (label, "Début")] = True
+                            mask.loc[row_name, (label, "Fin")] = True
+
+                def _style_mask(_):
+                    green = "background-color: #d9f2d9;"
+                    red = "background-color: #f7d6d6;"
+                    return pd.DataFrame(
+                        [[green if mask.iloc[i, j] else red for j in range(mask.shape[1])] for i in range(mask.shape[0])],
+                        index=mask.index,
+                        columns=mask.columns,
+                    )
+
+                header_styles = [
+                    {"selector": "th.col_heading.level0", "props": [("text-align", "center")]},
+                    {"selector": "th.col_heading.level1", "props": [("text-align", "center")]},
+                ]
+
+                styler = (
+                    table.style.apply(_style_mask, axis=None)
+                    .set_properties(**{"text-align": "center"})
+                    .set_table_styles(header_styles, overwrite=False)
+                )
+                st.dataframe(styler, use_container_width=True)
+
+    # ---- Bloc vols (disponibilités) ----
+    with st.expander("✈️ Vols disponibles (vue semaine)", expanded=False):
+        if df_flights is None or df_flights.empty:
+            st.info("Aucun vol disponible sur la période.")
+        else:
+            df_v = df_flights.copy()
+            df_v["Date_dt"] = parse_date_series(df_v["Date"]).dt.date
+
+            def _vol_display(num: object) -> str:
+                digits = normalize_vol_number(num)
+                return f"AF {digits}" if digits else str(num or "").strip()
+
+            # Disponibilités bénévoles par date (en minutes)
+            benev_by_date: dict[date, list[tuple[int, int]]] = {}
+            if df_benev is not None and not df_benev.empty:
+                tmp_b = df_benev.copy()
+                tmp_b["Date_dt"] = parse_date_series(tmp_b["Date"]).dt.date
+                for _, r in tmp_b.iterrows():
+                    d = r.get("Date_dt")
+                    if pd.isna(d):
+                        continue
+                    arr = _time_to_minutes(r.get("Arrivée", ""))
+                    dep = _time_to_minutes(r.get("Départ", ""))
+                    if arr is None or dep is None:
+                        continue
+                    benev_by_date.setdefault(d, []).append((arr, dep))
+
+            def _is_compatible(d: date, minute_val: int | None) -> bool:
+                if minute_val is None:
+                    return False
+                for s, e in benev_by_date.get(d, []):
+                    if s <= minute_val <= e:
+                        return True
+                return False
+
+            flights: dict[tuple[str, date], list[tuple[str, bool]]] = {}
+            for _, r in df_v.iterrows():
+                dest = str(r.get("Destination", "")).strip()
+                d = r.get("Date_dt")
+                if not dest or pd.isna(d):
+                    continue
+                heure = str(r.get("Heure", "")).strip()
+                hmin = _time_to_minutes(heure)
+                routing_raw = str(r.get("Routing", "")).strip().upper()
+                routing_parts = [p for p in routing_raw.replace(" ", "").split("-") if p and p != "CDG"]
+                routing = "-".join(routing_parts)
+                vol = _vol_display(r.get("Numero_Vol", ""))
+                parts = [p for p in [heure, vol, routing] if p]
+                label = " - ".join(parts)
+                key = (dest, d)
+                compatible = _is_compatible(d, hmin)
+                flights.setdefault(key, []).append((label, compatible))
+
+            dests = sorted({str(d).strip() for d in df_v.get("Destination", pd.Series(dtype=object)).tolist() if str(d).strip()})
+            if not dests:
+                st.info("Aucun vol disponible sur la période.")
+            else:
+                colis_counts: dict[str, int] = {}
+                if df_be is not None and not df_be.empty:
+                    tmp_be = df_be.copy()
+                    if "Destination" in tmp_be.columns:
+                        tmp_be["Destination"] = tmp_be["Destination"].astype(str).str.strip()
+                        tmp_be["Nb_Colis"] = pd.to_numeric(tmp_be.get("Nb_Colis", 0), errors="coerce").fillna(0).astype(int)
+                        colis_counts = (
+                            tmp_be.groupby("Destination")["Nb_Colis"].sum().astype(int).to_dict()
+                        )
+                dest_display = {d: f"{d} ({colis_counts.get(d, 0)})" for d in dests}
+
+                table = pd.DataFrame("", index=[dest_display[d] for d in dests], columns=day_labels)
+                table.index.name = "Escale"
+                status = pd.DataFrame("none", index=[dest_display[d] for d in dests], columns=day_labels)
+                for dest in dests:
+                    for d, label in zip(week_dates, day_labels):
+                        key = (dest, d.date())
+                        if key in flights:
+                            row_dest = dest_display.get(dest, dest)
+                            items = flights[key]
+                            table.loc[row_dest, label] = "\n".join([lab for lab, _ in items])
+                            if any(ok for _, ok in items):
+                                status.loc[row_dest, label] = "compatible"
+                            else:
+                                status.loc[row_dest, label] = "incompatible"
+
+                def _style_mask_flights(_):
+                    green = "background-color: #d9f2d9;"
+                    orange = "background-color: #f7e1b5;"
+                    red = "background-color: #f7d6d6;"
+                    color_map = {
+                        "compatible": green,
+                        "incompatible": orange,
+                        "none": red,
+                    }
+                    return pd.DataFrame(
+                        [[color_map.get(status.iloc[i, j], red) for j in range(status.shape[1])] for i in range(status.shape[0])],
+                        index=status.index,
+                        columns=status.columns,
+                    )
+
+                header_styles = [
+                    {"selector": "th.col_heading", "props": [("text-align", "center"), ("font-size", "0.7em")]},
+                    {"selector": "th.row_heading", "props": [("font-size", "0.7em")]},
+                ]
+
+                styler = (
+                    table.style.apply(_style_mask_flights, axis=None)
+                    .set_properties(**{"text-align": "left", "white-space": "pre-line", "font-size": "0.7em"})
+                    .set_table_styles(header_styles, overwrite=False)
+                )
+                st.dataframe(styler, use_container_width=True)

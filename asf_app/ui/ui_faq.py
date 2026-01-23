@@ -75,7 +75,7 @@ def render_tab_faq():
 - df_comm construit depuis le planning enrichi.  
 - Whatsapp : messages générés, envoi via lien.  
 - Emails Air France / ASF Interne :  
-  - Joint uniquement le PDF si trouvé dans `Planning MAB/ASFmm PLANNING YYYY/ASFmm - PLANNING SEMAINE N° XX - YYYY.pdf`.  
+  - Joint uniquement le PDF si trouvé dans `Planning MAB/ASFmm PLANNING YYYY/ASFmm - PLANNING SEMAINE YYYY-XX-ZZ.pdf`.  
   - Sinon, warning “Pas de planning PDF trouvé - ajouter le manuellement.”  
   - Brouillons Outlook s’ouvrent au premier plan (mac/Windows).  
 - Emails Destinataires / Expéditeurs : utilisent le planning enrichi, brouillons Outlook.
@@ -119,7 +119,8 @@ def render_tab_faq():
         """
 - Maquette utilisée : OneDrive `Planning MAB/ASFmm PLANNING 2025/aaSOURCE/Planning-maquette.xlsx` (fallback locale).  
 - Feuilles : Planning SXX-YYYY, Export planning (brut), Data Vols (tableau avec filtres).  
-- Suffixe version : si nom déjà existant, ajoute `-vXX` (cellule Q1) puis incrémente si collision.
+- Version : nomme le fichier `ASFmm - PLANNING SEMAINE YYYY-XX-ZZ.xlsx` (ZZ = version, écrit en Q1).  
+  Si l’incrément est désactivé, la version courante est déplacée dans le dossier `Historique`.
         """
     )
 

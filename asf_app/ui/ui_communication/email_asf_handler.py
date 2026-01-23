@@ -4,7 +4,7 @@
 # compatible Windows (COM) et macOS (AppleScript),
 # avec signature automatique.
 #
-# Le texte, le sujet, les adresses TO/BCC sont fournis par l’UI.
+# Le texte, le sujet, les adresses TO/CC/BCC sont fournis par l’UI.
 # --------------------------------------------------------
 
 from asf_app.ui.ui_communication.outlook import create_outlook_draft
@@ -41,10 +41,12 @@ def generate_asf_email(
     custom_subject=None,
     custom_body=None,
     attachments=None,
+    cc_list=None,
 ):
     """
     to_list : liste des adresses email destinataires
     bcc_list : liste BCC
+    cc_list : liste CC (optionnel)
     week : numéro de semaine
     year : année
     custom_subject : sujet custom si fourni par l'UI
@@ -62,7 +64,7 @@ def generate_asf_email(
     # ----------------------------------------------------
     result = create_outlook_draft(
         to_list=to_list,
-        cc_list=None,
+        cc_list=cc_list,
         bcc_list=bcc_list,
         subject=subject,
         body_html=body,

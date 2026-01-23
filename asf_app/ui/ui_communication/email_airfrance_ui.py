@@ -1,7 +1,7 @@
 # email_airfrance_ui.py — Communication 3.0
 # -----------------------------------------
 # UI Streamlit pour le mail Air France :
-# - TO / CC modifiables
+# - TO / CC / CCI modifiables
 # - Sujet modifiable (avec valeur par défaut dynamique Semaine XX)
 # - Corps modifiable (avec texte par défaut)
 # - Utilise df_comm pour récupérer semaine/année si besoin
@@ -16,6 +16,7 @@ from asf_app.ui.ui_communication.email_airfrance_handler import (
     DEFAULT_BODY_AIRFRANCE,
 )
 from asf_app.ui.ui_planning.state_planning import get_planning_state
+from asf_app.ui.email_defaults import get_email_defaults
 
 def _detect_week_year_from_df(df_comm: pd.DataFrame):
     """
@@ -51,29 +52,36 @@ def render_email_airfrance_ui(df_comm: pd.DataFrame, attachment_path=None, pdf_a
         st.error("Impossible de détecter la semaine / année. Vérifie le planning.")
         return
 
+    defaults = get_email_defaults()
+    air_defaults = defaults.get("airfrance", {})
+
     col1, col2 = st.columns(2)
 
     with col1:
-        to_default = (
-            "nafontaine1@airfrance.fr; anchanet@airfrance.fr"
-        )
+        to_default = air_defaults.get("to", "")
         to_input = st.text_input(
             "Destinataires (To)",
             value=to_default,
+            key="airfrance_to",
             help="Sépare les adresses par ';' ou ','."
         )
 
     with col2:
-        cc_default = (
-            "messmed@aviation-sans-frontieres-fr.org; "
-            "f.cottence@samsic.aero; m.dorigny@gsf.fr; "
-            "a.joyeux@gsf.fr; s.chadli@samsic.aero; pestarland@airfrance.fr"
-        )
+        cc_default = air_defaults.get("cc", "")
         cc_input = st.text_input(
             "Copie (CC)",
             value=cc_default,
+            key="airfrance_cc",
             help="Sépare les adresses par ';' ou ','."
         )
+
+    bcc_default = air_defaults.get("bcc", "")
+    bcc_input = st.text_input(
+        "Copie cachée (CCI)",
+        value=bcc_default,
+        key="airfrance_bcc",
+        help="Sépare les adresses par ';' ou ','."
+    )
 
     # Sujet & corps modifiables
     subject_default = build_subject_airfrance(week, year)
@@ -104,6 +112,7 @@ def render_email_airfrance_ui(df_comm: pd.DataFrame, attachment_path=None, pdf_a
         ok = generate_airfrance_email(
             to_list=to_input,
             cc_list=cc_input,
+            bcc_list=bcc_input,
             week=week,
             year=year,
             custom_subject=subject,

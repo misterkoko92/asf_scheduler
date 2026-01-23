@@ -152,7 +152,7 @@ def _load_planning_preview_with_path(
         if path_override:
             path = Path(path_override)
         else:
-            filename = f"ASFmm - PLANNING SEMAINE N° {week:02d} - {year}.xlsx"
+            filename = f"ASFmm - PLANNING SEMAINE {year}-{week:02d}-01.xlsx"
             path = base_dir / filename
             if not path.exists():
                 # tolérance sur nom : espaces, tirets, xlsm/xlsx
@@ -200,14 +200,18 @@ def _available_weeks_from_exports() -> set[tuple[int, int]]:
         items = cp.list_onedrive_files("Planning MAB", recursive=True, suffixes=[".xls", ".xlsx", ".xlsm"])
         for item in items:
             name = item.get("name", "")
+            m_new = re.search(r"SEMAINE\s*(20\d{2})\D+(\d{1,2})", name, re.IGNORECASE)
             m_week = re.search(r"N°\s*(\d+)", name)
-            m_year = re.search(r"(20\\d{2})", name)
-            if not (m_week and m_year):
-                continue
+            m_year = re.search(r"(20\d{2})", name)
             try:
-                wk = int(m_week.group(1))
-                yr = int(m_year.group(1))
-                weeks.add((wk, yr))
+                if m_new:
+                    yr = int(m_new.group(1))
+                    wk = int(m_new.group(2))
+                    weeks.add((wk, yr))
+                elif m_week and m_year:
+                    wk = int(m_week.group(1))
+                    yr = int(m_year.group(1))
+                    weeks.add((wk, yr))
             except Exception:
                 continue
         return weeks
@@ -223,16 +227,19 @@ def _available_weeks_from_exports() -> set[tuple[int, int]]:
         if not name_up.startswith("ASFMM PLANNING "):
             continue
         try:
-            year = int(re.sub(r"\\D", "", sub.name)[-4:])
+            year = int(re.sub(r"\D", "", sub.name)[-4:])
         except Exception:
             continue
-        for f in sub.glob("ASFmm - PLANNING SEMAINE N° *.xls*"):
-            m = re.search(r"N°\\s*(\\d+)", f.name)
-            if not m:
-                continue
+        for f in sub.glob("ASFmm - PLANNING SEMAINE *.xls*"):
+            m_new = re.search(r"SEMAINE\s*(20\d{2})\D+(\d{1,2})", f.name, re.IGNORECASE)
+            m_old = re.search(r"N°\s*(\d+)", f.name)
             try:
-                wk = int(m.group(1))
-                weeks.add((wk, year))
+                if m_new:
+                    wk = int(m_new.group(2))
+                    weeks.add((wk, year))
+                elif m_old:
+                    wk = int(m_old.group(1))
+                    weeks.add((wk, year))
             except Exception:
                 continue
     return weeks
@@ -243,6 +250,13 @@ def _parse_version_from_name(path: Path) -> tuple[int, int]:
     Extrait vXX[-YY] du nom de fichier. Par défaut retourne (1,0).
     """
     stem = path.stem.upper()
+    m = re.search(r"SEMAINE\s*20\d{2}\D+\d{1,2}\D+(\d+)", stem, re.IGNORECASE)
+    if m:
+        try:
+            major = int(m.group(1))
+            return major, 0
+        except Exception:
+            pass
     m = re.search(r"V(\d+)(?:-(\d+))?", stem)
     if m:
         try:
@@ -261,9 +275,15 @@ def _find_planning_files_for_week(week: int, year: int) -> List[Path | str]:
     """
     if cp.is_graph_onedrive():
         remote_dir = cp.get_output_remote_dir(year)
-        pattern = f"ASFmm - PLANNING SEMAINE N° {week:02d} - {year}*.xls*"
+        pattern_old = f"ASFmm - PLANNING SEMAINE N° {week:02d} - {year}*.xls*"
+        pattern_new = f"ASFmm - PLANNING SEMAINE {year}-{week:02d}-*.xls*"
         items = cp.list_onedrive_files(remote_dir, recursive=False, suffixes=[".xls", ".xlsx", ".xlsm"])
-        files = [i.get("path", "") for i in items if fnmatch.fnmatch(i.get("name", ""), pattern)]
+        files = [
+            i.get("path", "")
+            for i in items
+            if fnmatch.fnmatch(i.get("name", ""), pattern_old)
+            or fnmatch.fnmatch(i.get("name", ""), pattern_new)
+        ]
 
         def _sort_key(p: str):
             major, minor = _parse_version_from_name(Path(p))
@@ -275,8 +295,9 @@ def _find_planning_files_for_week(week: int, year: int) -> List[Path | str]:
     base_dir = cp.ASF_ONEDRIVE / "Planning MAB" / f"ASFmm PLANNING {year}"
     if not base_dir.exists():
         return []
-    pattern = f"ASFmm - PLANNING SEMAINE N° {week:02d} - {year}*.xls*"
-    files = list(base_dir.glob(pattern))
+    pattern_old = f"ASFmm - PLANNING SEMAINE N° {week:02d} - {year}*.xls*"
+    pattern_new = f"ASFmm - PLANNING SEMAINE {year}-{week:02d}-*.xls*"
+    files = list(base_dir.glob(pattern_old)) + list(base_dir.glob(pattern_new))
     files = [p for p in files if p.is_file()]
 
     def _sort_key(p: Path):

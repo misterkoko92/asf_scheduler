@@ -9,6 +9,7 @@ import streamlit as st
 
 from asf_app.state import get_state
 from asf_app.services.files_service import save_excel_sheet
+from asf_app.ui.email_defaults import get_email_defaults, set_email_defaults
 
 from scheduler.config_paths import (
     TABLEAU_DE_BORD_SRC,
@@ -77,8 +78,10 @@ def render_tab_params():
 
     st.header("⚙️ Paramètres & Tables de configuration")
 
-    st.info("⚠️ Toutes les modifications sont valables **uniquement pour la session**.\n"
-            "Aucune modification permanente n'est écrite dans le moteur ASF.")
+    st.info(
+        "⚠️ Les Param* sont valables **uniquement pour la session**.\n"
+        "ParaMail peut être enregistré pour la session ou en dur."
+    )
 
     st.divider()
 
@@ -109,7 +112,7 @@ def render_tab_params():
     def set_block(name):
         st.session_state.active_block = name if st.session_state.active_block != name else None
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
 
     with col1:
         if st.button("⚙️ Paramoteur", width="stretch"):
@@ -126,6 +129,10 @@ def render_tab_params():
     with col4:
         if st.button("👥 ParamBenev", width="stretch"):
             set_block("parambenev")
+
+    with col5:
+        if st.button("✉️ ParaMail", width="stretch"):
+            set_block("paramail")
 
     st.markdown("")
 
@@ -274,3 +281,77 @@ def render_tab_params():
 
         except Exception as e:
             st.error(f"❌ Erreur ParamBenev : {e}")
+
+    # ------------------------------------------------------------
+    # 5) PARAMAIL
+    # ------------------------------------------------------------
+    if st.session_state.active_block == "paramail":
+
+        st.subheader("✉️ ParaMail (Air France / ASF Interne)")
+        st.caption("Sépare les adresses par ';' ou ','.")
+
+        defaults = get_email_defaults()
+        air_defaults = defaults.get("airfrance", {})
+        asf_defaults = defaults.get("asf_interne", {})
+
+        colA, colB = st.columns(2)
+
+        with colA:
+            st.markdown("**Air France**")
+            air_to = st.text_area(
+                "Air France - To",
+                value=air_defaults.get("to", ""),
+                height=70,
+            )
+            air_cc = st.text_area(
+                "Air France - CC",
+                value=air_defaults.get("cc", ""),
+                height=70,
+            )
+            air_bcc = st.text_area(
+                "Air France - CCI",
+                value=air_defaults.get("bcc", ""),
+                height=70,
+            )
+
+        with colB:
+            st.markdown("**ASF Interne**")
+            asf_to = st.text_area(
+                "ASF Interne - To",
+                value=asf_defaults.get("to", ""),
+                height=70,
+            )
+            asf_cc = st.text_area(
+                "ASF Interne - CC",
+                value=asf_defaults.get("cc", ""),
+                height=70,
+            )
+            asf_bcc = st.text_area(
+                "ASF Interne - CCI",
+                value=asf_defaults.get("bcc", ""),
+                height=70,
+            )
+
+        payload = {
+            "airfrance": {
+                "to": air_to,
+                "cc": air_cc,
+                "bcc": air_bcc,
+            },
+            "asf_interne": {
+                "to": asf_to,
+                "cc": asf_cc,
+                "bcc": asf_bcc,
+            },
+        }
+
+        col_btn1, col_btn2 = st.columns(2)
+        with col_btn1:
+            if st.button("✅ Valider cette session uniquement"):
+                set_email_defaults(payload, persist=False)
+                st.success("✔ ParaMail mis à jour pour la session.")
+
+        with col_btn2:
+            if st.button("💾 Valider en dur"):
+                set_email_defaults(payload, persist=True)
+                st.success("✔ ParaMail enregistré en dur.")

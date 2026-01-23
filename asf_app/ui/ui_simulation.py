@@ -456,7 +456,7 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
         df_out = pd.DataFrame(rows).drop(columns=["__KEY"], errors="ignore")
         return df_out
 
-    def _export_simulation_excel(*, write_source_excel: bool):
+    def _export_simulation_excel(*, write_source_excel: bool, increment_version: bool):
         from asf_app.ui.ui_planning.ui_planning import export_excel_planning
         current_plan = st.session_state.sim_results.get(current_mode, {}).get("planning_df", plan_df)
         original_plan = st.session_state.get("sim_original_df", {}).get(current_mode)
@@ -507,6 +507,7 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
             df_paramdest=df_paramdest,
             create_tables=False,  # éviter les tables qui peuvent corrompre l'export en V2
             write_source_excel=write_source_excel,
+            increment_version=increment_version,
         )
         return out_path
 
@@ -770,17 +771,28 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
         except Exception:
             pass
 
-    col_export, col_write = st.columns([1, 2])
+    col_export, col_write, col_version = st.columns([1, 2, 2])
     with col_write:
         write_source_excel = st.toggle(
             "Activer / Désactiver l'écriture sur le excel source",
             value=True,
             key="sim_write_source_excel",
         )
+    with col_version:
+        increment_version = st.toggle(
+            "Incrémenter le numéro de version",
+            value=True,
+            key="sim_increment_planning_version",
+        )
     with col_export:
         if st.button("📤 Exporter le planning simulé (Excel)", type="primary"):
             try:
-                out_path = Path(_export_simulation_excel(write_source_excel=write_source_excel))
+                out_path = Path(
+                    _export_simulation_excel(
+                        write_source_excel=write_source_excel,
+                        increment_version=increment_version,
+                    )
+                )
                 st.success(f"Planning simulé exporté : {out_path}")
                 from asf_app.ui.ui_planning.ui_planning import show_mag_central_status
                 show_mag_central_status()

@@ -9,6 +9,7 @@ from pathlib import Path
 import platform
 import subprocess
 import shutil
+import re
 
 # Excel
 from openpyxl import load_workbook
@@ -326,6 +327,7 @@ def export_excel_planning(
     df_paramdest=None,
     create_tables: bool = True,
     write_source_excel: bool = False,
+    increment_version: bool = True,
 ):
     # Maquette : priorité OneDrive aaSOURCE/Planning-maquette.xlsx
     onedrive_maquette = (
@@ -340,7 +342,7 @@ def export_excel_planning(
         raise FileNotFoundError(f"❌ Maquette introuvable : {template}")
 
     # Nom et dossier de sortie par année (année mise à jour plus bas avec le lundi)
-    filename = f"ASFmm - PLANNING SEMAINE N° {week:02d} - {year}.xlsx"
+    filename = f"ASFmm - PLANNING SEMAINE {year}-{week:02d}-TMP.xlsx"
     planning_dir = (
         cp.OUTPUT_PLANNING_DIR
         if cp.is_graph_onedrive()
@@ -515,29 +517,62 @@ def export_excel_planning(
         try:
             from openpyxl import load_workbook
             wb_mag = load_workbook(path)
-            ws_mag = wb_mag.active
-            sheet_name = ws_mag.title
         except Exception:
             mag_write_method = "read_error"
             return {}
 
-        # indexer MAG par clé BE (valeur brute + normalisée)
-        mag_index = {}
-        for row in ws_mag.iter_rows(min_row=1, max_row=ws_mag.max_row, min_col=1, max_col=20):
-            val = row[0].value
-            if val is None:
+        def _sheet_year(name: str):
+            match = re.search(r"(20\d{2})", str(name))
+            return int(match.group(1)) if match else None
+
+        def _mag_sheet_names(wb):
+            names = [
+                name
+                for name in wb.sheetnames
+                if str(name).strip().upper().startswith("MAG CENTRAL")
+            ]
+            if names:
+                return names
+            if cp.SHEET_MAG_CENTRAL in wb.sheetnames:
+                return [cp.SHEET_MAG_CENTRAL]
+            return [wb.active.title]
+
+        mag_sheet_names = _mag_sheet_names(wb_mag)
+        mag_sheet_names = sorted(
+            mag_sheet_names,
+            key=lambda n: (_sheet_year(n) is None, _sheet_year(n) or 0, str(n)),
+        )
+
+        mag_sheets = {}
+        mag_indexes = {}
+        for sheet_name in mag_sheet_names:
+            try:
+                ws_mag = wb_mag[sheet_name]
+            except Exception:
                 continue
-            sval = str(int(val)) if isinstance(val, (int, float)) else str(val).strip()
-            key = normalize_be_number(sval)
-            if not key:
-                continue
-            keys = {key, sval, key.lstrip("0")}
-            for k in keys:
-                mag_index[k] = row[0].row
+            mag_sheets[sheet_name] = ws_mag
+            # indexer MAG par clé BE (valeur brute + normalisée)
+            mag_index = {}
+            for row in ws_mag.iter_rows(min_row=1, max_row=ws_mag.max_row, min_col=1, max_col=20):
+                val = row[0].value
+                if val is None:
+                    continue
+                sval = str(int(val)) if isinstance(val, (int, float)) else str(val).strip()
+                key = normalize_be_number(sval)
+                if not key:
+                    continue
+                keys = {key, sval, key.lstrip("0")}
+                for k in keys:
+                    mag_index[k] = row[0].row
+            mag_indexes[sheet_name] = mag_index
+
+        if not mag_indexes:
+            mag_write_method = "read_error"
+            return {}
 
         prev_friday = _friday_previous_week(week, year)
         used_dates = {}
-        updates = {}
+        updates_by_sheet = {}
 
         def _safe_text(val: object) -> str:
             if val is None:
@@ -549,22 +584,101 @@ def export_excel_planning(
                 pass
             return str(val).strip()
 
+        def _sheet_year_suffix(name: str) -> str | None:
+            yr = _sheet_year(name)
+            return str(yr)[-2:] if yr else None
+
+        def _sheet_order_for_be(be_key: str) -> list[str]:
+            preferred = []
+            if be_key:
+                for name in mag_sheet_names:
+                    suffix = _sheet_year_suffix(name)
+                    if suffix and be_key.startswith(suffix):
+                        preferred.append(name)
+            if isinstance(year, int):
+                for name in mag_sheet_names:
+                    if _sheet_year(name) == int(year) and name not in preferred:
+                        preferred.append(name)
+            return preferred + [n for n in mag_sheet_names if n not in preferred]
+
+        def _mag_lookup_keys(be_key: str) -> list[str]:
+            keys: list[str] = []
+            def _add(val: object) -> None:
+                if val is None:
+                    return
+                sval = str(val).strip()
+                if sval and sval not in keys:
+                    keys.append(sval)
+
+            base = str(be_key).strip()
+            if not base:
+                return keys
+            _add(base)
+            _add(base.lstrip("0"))
+            if base.isdigit():
+                if len(base) >= 4:
+                    suf4 = base[-4:]
+                    _add(suf4)
+                    _add(suf4.lstrip("0"))
+                    try:
+                        _add(str(int(suf4)))
+                    except Exception:
+                        pass
+                if len(base) >= 3:
+                    suf3 = base[-3:]
+                    _add(suf3)
+                    _add(suf3.lstrip("0"))
+                    try:
+                        _add(str(int(suf3)))
+                    except Exception:
+                        pass
+            return keys
+
+        def _alt_key_for_sheet(be_key: str, sheet_name: str) -> str | None:
+            # If BE looks yearless (00xxxx), rebuild key with sheet year prefix.
+            if not be_key or not be_key.isdigit() or len(be_key) < 4:
+                return None
+            if not be_key.startswith("00"):
+                return None
+            suffix = _sheet_year_suffix(sheet_name)
+            if not suffix:
+                return None
+            return f"{suffix}{be_key[-4:]}"
+
+        def _find_mag_row(be_key: str):
+            if not be_key:
+                return None, None
+            sheet_order = _sheet_order_for_be(be_key)
+            base_keys = _mag_lookup_keys(be_key)
+            for sheet_name in sheet_order:
+                idx = mag_indexes.get(sheet_name, {})
+                if not idx:
+                    continue
+                alt_key = _alt_key_for_sheet(be_key, sheet_name)
+                keys = ([alt_key] if alt_key else []) + base_keys
+                for key in keys:
+                    row_idx = idx.get(key)
+                    if row_idx:
+                        return sheet_name, row_idx
+            return None, None
+
         for _, r in dfp.iterrows():
             be_key = r.get("BE_KEY", "")
             if not be_key:
                 continue
-            row_idx = (
-                mag_index.get(be_key)
-                or mag_index.get(be_key.lstrip("0"))
-                or mag_index.get(be_key[-3:] if len(be_key) > 3 else be_key)
-            )
+            sheet_name, row_idx = _find_mag_row(be_key)
             if not row_idx:
+                continue
+            ws_mag = mag_sheets.get(sheet_name)
+            if ws_mag is None:
                 continue
             # Depart MAG col J (10) : si vide, écrire vendredi précédent
             if prev_friday:
                 dm_cell = ws_mag.cell(row=row_idx, column=cp.MAG_CENTRAL_COL_DEPART_MAG)
                 if dm_cell.value in (None, ""):
-                    updates.setdefault(row_idx, {})[cp.MAG_CENTRAL_COL_DEPART_MAG] = prev_friday
+                    updates_by_sheet.setdefault(sheet_name, {}).setdefault(row_idx, {})[
+                        cp.MAG_CENTRAL_COL_DEPART_MAG
+                    ] = prev_friday
                     used_dates[be_key] = prev_friday
                 else:
                     used_dates[be_key] = dm_cell.value
@@ -572,7 +686,9 @@ def export_excel_planning(
             date_vol = r.get("DATE")
             if isinstance(date_vol, (pd.Timestamp, date)):
                 dv_value = date_vol.date() if isinstance(date_vol, pd.Timestamp) else date_vol
-                updates.setdefault(row_idx, {})[cp.MAG_CENTRAL_COL_DEPART_VOL] = dv_value
+                updates_by_sheet.setdefault(sheet_name, {}).setdefault(row_idx, {})[
+                    cp.MAG_CENTRAL_COL_DEPART_VOL
+                ] = dv_value
 
             # Colonnes W/X/Y/Z : ID bénév, Bénévole, Num Vol, Heure Vol
             bene_id = _safe_text(r.get("ID", ""))
@@ -582,24 +698,33 @@ def export_excel_planning(
             vol_aff = _safe_text(r.get("VOL_AFF", r.get("Numero_Vol", "")))
             heure_aff = _safe_text(r.get("HEURE_AFF", ""))
             if bene_id or bene_disp or vol_aff or heure_aff:
-                row_updates = updates.setdefault(row_idx, {})
+                row_updates = updates_by_sheet.setdefault(sheet_name, {}).setdefault(row_idx, {})
                 row_updates[cp.MAG_CENTRAL_COL_ID_BENEV] = bene_id
                 row_updates[cp.MAG_CENTRAL_COL_BENEV] = bene_disp
                 row_updates[cp.MAG_CENTRAL_COL_VOL] = vol_aff
                 row_updates[cp.MAG_CENTRAL_COL_HEURE] = heure_aff
 
-        update_items = []
-        for row_idx, cols in updates.items():
-            for col_idx, val in cols.items():
-                update_items.append((row_idx, col_idx, val))
+        update_items_by_sheet = {}
+        for sheet_name, rows in updates_by_sheet.items():
+            sheet_items = []
+            for row_idx, cols in rows.items():
+                for col_idx, val in cols.items():
+                    sheet_items.append((row_idx, col_idx, val))
+            if sheet_items:
+                update_items_by_sheet[sheet_name] = sheet_items
 
-        if not update_items:
+        if not update_items_by_sheet:
             mag_write_method = "no_updates"
             return used_dates
 
         try:
             from utils.excel_automation import update_excel_cells
-            if update_excel_cells(path, sheet_name, update_items):
+            all_ok = True
+            for sheet_name, items in update_items_by_sheet.items():
+                if not update_excel_cells(path, sheet_name, items):
+                    all_ok = False
+                    break
+            if all_ok:
                 mag_write_method = "excel"
                 cp.sync_local_file_to_onedrive(path)
                 return used_dates
@@ -607,8 +732,12 @@ def export_excel_planning(
             pass
 
         mag_write_method = "openpyxl"
-        for row_idx, col_idx, val in update_items:
-            ws_mag.cell(row=row_idx, column=col_idx).value = val
+        for sheet_name, items in update_items_by_sheet.items():
+            ws_mag = mag_sheets.get(sheet_name)
+            if ws_mag is None:
+                continue
+            for row_idx, col_idx, val in items:
+                ws_mag.cell(row=row_idx, column=col_idx).value = val
 
         try:
             wb_mag.save(path)
@@ -864,32 +993,103 @@ def export_excel_planning(
 
     week_final, year_final = _week_year_from_a1()
 
-    # Construire nom final avec version Q1
-    try:
-        version_cell = ws_plan["Q1"].value
-    except Exception:
-        version_cell = ""
-    version_str = str(version_cell).strip()
-    try:
-        if version_str.isdigit():
-            version_str = f"{int(version_str):02d}"
-    except Exception:
-        pass
-    if not version_str:
-        version_str = "01"
-
-    base_name = f"ASFmm - PLANNING SEMAINE N° {week_final:02d} - {year_final} - v{version_str}"
+    # Déterminer version à utiliser (max existant +1 si demandé)
     planning_dir_final = (
         cp.OUTPUT_PLANNING_DIR
         if cp.is_graph_onedrive()
         else cp.ASF_ONEDRIVE / "Planning MAB" / f"ASFmm PLANNING {year_final}"
     )
     planning_dir_final.mkdir(parents=True, exist_ok=True)
+
+    def _extract_version_from_name(name: str, *, week: int, year: int) -> int | None:
+        stem = Path(name).stem
+        # Nouveau format : ... SEMAINE YYYY-XX-ZZ
+        m = re.search(r"SEMAINE\s*(20\d{2})\D+(\d{1,2})\D+(\d+)", stem, re.IGNORECASE)
+        if m:
+            try:
+                y, w, v = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                if y == year and w == week:
+                    return v
+            except Exception:
+                pass
+        # Ancien format : ... N° XX - YYYY - vZZ
+        m = re.search(r"N[°o]?\s*(\d{1,2}).*?(20\d{2}).*?v(\d+)", stem, re.IGNORECASE)
+        if m:
+            try:
+                w, y, v = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                if y == year and w == week:
+                    return v
+            except Exception:
+                pass
+        # Ancien format sans v (on considère version 1)
+        m = re.search(r"N[°o]?\s*(\d{1,2}).*?(20\d{2})", stem, re.IGNORECASE)
+        if m:
+            try:
+                w, y = int(m.group(1)), int(m.group(2))
+                if y == year and w == week:
+                    return 1
+            except Exception:
+                pass
+        return None
+
+    existing_files = [
+        p for p in planning_dir_final.glob("ASFmm - PLANNING SEMAINE *.xls*") if p.is_file()
+    ]
+    versions = []
+    for p in existing_files:
+        v = _extract_version_from_name(p.name, week=week_final, year=year_final)
+        if v is not None:
+            versions.append(v)
+    max_version = max(versions) if versions else 0
+
+    if increment_version:
+        version_num = max_version + 1 if max_version else 1
+    else:
+        version_num = max_version if max_version else 1
+        # Archiver la version actuelle si elle existe
+        if max_version:
+            history_dir = planning_dir_final / "Historique"
+            history_dir.mkdir(parents=True, exist_ok=True)
+            candidates = [
+                p for p in existing_files
+                if _extract_version_from_name(p.name, week=week_final, year=year_final) == max_version
+            ]
+            if candidates:
+                def _mtime(p: Path) -> float:
+                    try:
+                        return p.stat().st_mtime
+                    except Exception:
+                        return 0.0
+                current = sorted(candidates, key=_mtime, reverse=True)[0]
+                dest = history_dir / current.name
+                if dest.exists():
+                    base = dest.stem
+                    suffix = dest.suffix
+                    counter = 2
+                    while dest.exists():
+                        dest = history_dir / f"{base}-{counter}{suffix}"
+                        counter += 1
+                try:
+                    shutil.move(current, dest)
+                except Exception:
+                    pass
+
+    version_str = f"{int(version_num):02d}"
+    base_name = f"ASFmm - PLANNING SEMAINE {year_final}-{week_final:02d}-{version_str}"
     target_path = planning_dir_final / f"{base_name}.xlsx"
-    counter = 2
-    while target_path.exists():
-        target_path = planning_dir_final / f"{base_name}-{counter}.xlsx"
-        counter += 1
+    if increment_version:
+        while target_path.exists():
+            # Si la version existe déjà (conflit), on incrémente jusqu'à libre
+            version_num += 1
+            version_str = f"{int(version_num):02d}"
+            base_name = f"ASFmm - PLANNING SEMAINE {year_final}-{week_final:02d}-{version_str}"
+            target_path = planning_dir_final / f"{base_name}.xlsx"
+
+    # Reporter la version en Q1 (première feuille)
+    try:
+        ws_plan["Q1"].value = int(version_num)
+    except Exception:
+        pass
 
     # Sauvegarder dans le chemin final (déplacement si besoin)
     wb.save(out_path)
@@ -1641,7 +1841,14 @@ def render_tab_planning():
     # -------------------------------------------------------------------
     st.subheader("📤 Validation & Export Excel")
 
-    if st.button("📊 Valider & Exporter le planning Excel", type="primary"):
+    btn_export = st.button("📊 Valider & Exporter le planning Excel", type="primary")
+    increment_version = st.toggle(
+        "Incrémenter le numéro de version",
+        value=True,
+        key="increment_planning_version",
+    )
+
+    if btn_export:
 
         week, year = detect_week_year(df_planning)
         if week is None:
@@ -1657,6 +1864,7 @@ def render_tab_planning():
             df_parambenev=df_parambenev,
             df_dispos=df_dispos,
             df_paramdest=df_paramdest,
+            increment_version=increment_version,
         )
         planning_state.set_last_export_path(out_path)
 
