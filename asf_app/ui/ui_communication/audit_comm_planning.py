@@ -3,77 +3,59 @@
 audit_comm_planning.py — Audit complet du DF Communication
 """
 
+from pathlib import Path
+
 import pandas as pd
 from scheduler.planning_enrichment import enrich_planning
 from asf_app.ui.ui_communication.clean_planning_df import build_df_comm
 
-from scheduler.config_paths import (
-    TABLEAU_DE_BORD,
-    PLANNING_BENEVOLES,
-    VOLS,
-    SHEET_PARAM_DEST,
-    SHEET_PARAM_EXP,
-    SHEET_PARAM_BE,
-    SHEET_PARAM_BENEV,
-)
+from scheduler.data_sources import ExcelSourcePaths
+from asf_app.services.params_loader import load_parameters
 
 from loaders.load_shipments import load_shipments_df
-from loaders.load_vols import load_vols, get_vols_df_cached
+from loaders.load_vols import get_vols_df_cached
 from loaders.load_benevoles import get_benevoles_cached
-from loaders.universal_loader import load_and_normalize
-
-from scheduler.column_map import (
-    column_map_param_dest,
-    column_map_param_expediteur,
-    column_map_param_be,
-    column_map_param_benev,
-)
 
 
-def load_parameters():
-    df_paramdest = load_and_normalize(
-        TABLEAU_DE_BORD, SHEET_PARAM_DEST, column_map_param_dest
-    )
-    df_paramexp = load_and_normalize(
-        TABLEAU_DE_BORD, SHEET_PARAM_EXP, column_map_param_expediteur
-    )
-    df_parambe = load_and_normalize(
-        TABLEAU_DE_BORD, SHEET_PARAM_BE, column_map_param_be
-    )
-    df_parambenev = load_and_normalize(
-        PLANNING_BENEVOLES, SHEET_PARAM_BENEV, column_map_param_benev
-    )
-    return df_paramdest, df_paramexp, df_parambe, df_parambenev
-
-
-def audit():
+def audit(paths: ExcelSourcePaths | None = None):
     print("\n==============================================")
     print("🔍 AUDIT COMMUNICATION — Vérification complète")
     print("==============================================\n")
+
+    tdb_path = paths.tableau_de_bord if paths else None
+    benev_path = paths.planning_benevoles if paths else None
+    vols_path = paths.vols if paths else None
 
     # ----------------------
     # Chargement paramètres
     # ----------------------
     print("📒 Chargement paramètres…")
-    df_paramdest, df_paramexp, df_parambe, df_parambenev = load_parameters()
+    df_paramdest, df_paramexp, df_parambe, df_parambenev = load_parameters(
+        tdb_path=tdb_path,
+        benev_path=benev_path,
+    )
 
     # ----------------------
     # Chargement BE
     # ----------------------
     print("📘 Chargement BE (MAG CENTRAL)…")
-    df_be = load_shipments_df(param_be_raw=df_parambe, planifiables_only=True)
+    df_be = load_shipments_df(
+        param_be_raw=df_parambe,
+        planifiables_only=True,
+        tdb_path=tdb_path,
+    )
     print(f"✔ BE charges : {len(df_be)} lignes")
 
     # ----------------------
     # Chargement vols / bénévoles
     # ----------------------
     print("📗 Chargement vols…")
-    df_vols = get_vols_df_cached()
+    df_vols = get_vols_df_cached(vols_path=vols_path, tdb_path=tdb_path)
     print(f"✔ Vols chargés : {len(df_vols)} lignes\n")
 
 
     print("📙 Chargement disponibilités bénévoles…")
-    df_dispos = get_benevoles_cached()
+    df_dispos = get_benevoles_cached(planning_path=benev_path)
 
     # ----------------------
     # Construction d’un planning "raw"

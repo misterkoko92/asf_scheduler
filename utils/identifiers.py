@@ -52,3 +52,14 @@ def format_be_display(value: Any) -> str:
 def format_vol_display(value: Any) -> str:
     base = normalize_vol_number(value)
     return f"AF {base}" if base else ""
+
+
+def normalize_be_int(value: Any) -> int | None:
+    """
+    Normalise un BE en entier (ex: "250001.0" -> 250001).
+    Retourne None si non convertible.
+    """
+    try:
+        return int(float(str(value).strip()))
+    except Exception:
+        return None

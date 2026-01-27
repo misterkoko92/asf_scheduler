@@ -12,7 +12,6 @@ avec :
 """
 
 import pandas as pd
-from datetime import datetime
 
 from scheduler.config_paths import (
     TABLEAU_DE_BORD,
@@ -36,29 +35,14 @@ from scheduler.column_map import (
     column_map_param_benev,
 )
 from scheduler.format_rules import format_be_numero
+from utils.datetime_utils import format_date_long_fr, format_date_value
 
 
 # ----------------------------------------------------------
 #  Helper : Date longue FR
 # ----------------------------------------------------------
 def _date_longue(d):
-    if pd.isna(d):
-        return ""
-    try:
-        dt = pd.to_datetime(d)
-        jours = {
-            "Monday": "Lundi",
-            "Tuesday": "Mardi",
-            "Wednesday": "Mercredi",
-            "Thursday": "Jeudi",
-            "Friday": "Vendredi",
-            "Saturday": "Samedi",
-            "Sunday": "Dimanche",
-        }
-        jour = jours.get(dt.strftime("%A"), dt.strftime("%A"))
-        return f"{jour} {dt.strftime('%d/%m/%Y')}"
-    except Exception:
-        return ""
+    return format_date_long_fr(d, fmt="%d/%m/%Y", default="")
 
 
 # ----------------------------------------------------------
@@ -201,9 +185,7 @@ def enrich_planning(df_planning: pd.DataFrame) -> pd.DataFrame:
     # ==========================================================
     df["DATE LONGUE"] = df["Date_Vol"].apply(_date_longue)
 
-    df["ITEM"] = df["Date_Vol"].apply(
-        lambda d: pd.to_datetime(d).strftime("%A") if not pd.isna(d) else ""
-    )
+    df["ITEM"] = df["Date_Vol"].apply(lambda d: format_date_value(d, fmt="%A", default=""))
 
     df["NOM"] = df.apply(
         lambda r: (

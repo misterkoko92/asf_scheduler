@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import pandas as pd
-
+from utils.datetime_utils import format_date_long_fr, format_time_value
 from utils.identifiers import format_vol_display, normalize_be_number
 
 
@@ -12,29 +11,14 @@ def _norm_be(val: object) -> str:
 
 
 def _fmt_date_long(val: object) -> str:
-    try:
-        d = pd.to_datetime(val)
-    except Exception:
-        return str(val)
-    if pd.isna(d):
+    if val is None or str(val).strip() == "":
         return ""
-    jours = {
-        "Monday": "Lundi",
-        "Tuesday": "Mardi",
-        "Wednesday": "Mercredi",
-        "Thursday": "Jeudi",
-        "Friday": "Vendredi",
-        "Saturday": "Samedi",
-        "Sunday": "Dimanche",
-    }
-    return f"{jours.get(d.day_name(), d.strftime('%A'))} {d.strftime('%d/%m/%y')}"
+    return format_date_long_fr(val, default=None)
 
 
 def _fmt_time(val: object) -> str:
-    t = pd.to_datetime(str(val), errors="coerce")
-    if pd.isna(t):
-        return str(val)
-    return t.strftime("%Hh%M")
+    out = format_time_value(val, allow_general_fallback=True, default=None)
+    return out if out not in (None, "") else str(val)
 
 
 def _fmt_vol(val: object) -> str:

@@ -11,7 +11,17 @@ import pandas as pd
 import streamlit as st
 from typing import Optional, Dict, Any, List
 
+from scheduler.data_sources import ExcelSourcePaths
+
 import scheduler.config_paths as cp
+
+
+def _get_session_context():
+    try:
+        from asf_app.config.session_context import get_session_context
+        return get_session_context()
+    except Exception:
+        return None
 
 # ======================================================================
 # 🔹 1. Dossier TMP (unique pour tout le projet)
@@ -22,6 +32,10 @@ def get_tmp_dir() -> Path:
     Retourne le dossier TMP utilisé par l'application.
     Utilise le TMP du moteur (config_paths.TMP_DIR).
     """
+    ctx = _get_session_context()
+    if ctx is not None:
+        ctx.tmp_dir.mkdir(parents=True, exist_ok=True)
+        return ctx.tmp_dir
     cp.TMP_DIR.mkdir(parents=True, exist_ok=True)
     return cp.TMP_DIR
 
@@ -153,19 +167,17 @@ def reset_state():
 
 def sync_state_paths_to_engine(state: AppState) -> None:
     """
-    Aligne les chemins actifs de l'UI et du moteur, et nettoie les caches.
+    Aligne les chemins actifs de l'UI dans la session, et nettoie les caches.
+    (Ne modifie plus les variables globales du moteur.)
     """
-    if state.tdb_tmp is not None:
-        cp.TABLEAU_DE_BORD = Path(state.tdb_tmp).resolve()
-    if state.benev_tmp is not None:
-        cp.PLANNING_BENEVOLES = Path(state.benev_tmp).resolve()
-    if state.vols_tmp is not None:
-        cp.VOLS = Path(state.vols_tmp).resolve()
+    tdb = Path(state.tdb_tmp).resolve() if state.tdb_tmp is not None else cp.TABLEAU_DE_BORD
+    benev = Path(state.benev_tmp).resolve() if state.benev_tmp is not None else cp.PLANNING_BENEVOLES
+    vols = Path(state.vols_tmp).resolve() if state.vols_tmp is not None else cp.VOLS
 
     st.session_state["paths"] = {
-        "tdb": str(cp.TABLEAU_DE_BORD),
-        "benev": str(cp.PLANNING_BENEVOLES),
-        "vols": str(cp.VOLS),
+        "tdb": str(tdb),
+        "benev": str(benev),
+        "vols": str(vols),
     }
 
     try:
@@ -193,6 +205,19 @@ def sync_state_paths_to_engine(state: AppState) -> None:
         clear_vols_cache()
     except Exception:
         pass
+
+
+def get_excel_source_paths(state: AppState) -> ExcelSourcePaths:
+    """
+    Retourne les chemins Excel actifs pour la session (sans muter les globals).
+    """
+    ctx = _get_session_context()
+    if ctx is not None:
+        return ctx.source_paths
+    tdb = Path(state.tdb_tmp).resolve() if state.tdb_tmp is not None else cp.TABLEAU_DE_BORD
+    benev = Path(state.benev_tmp).resolve() if state.benev_tmp is not None else cp.PLANNING_BENEVOLES
+    vols = Path(state.vols_tmp).resolve() if state.vols_tmp is not None else cp.VOLS
+    return ExcelSourcePaths(tableau_de_bord=tdb, planning_benevoles=benev, vols=vols)
 
 
 # ======================================================================

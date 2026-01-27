@@ -21,7 +21,7 @@ from scheduler.config_paths import (
     ASF_ONEDRIVE,
 )
 
-from loaders.universal_loader import load_and_normalize
+from asf_app.services.input_service import load_normalized_sheet
 from scheduler.column_map import (
     column_map_param_dest,
     column_map_param_be,
@@ -39,7 +39,7 @@ def load_param_df(state, attr_name, path, sheet, mapping, header=0):
     """
     df = getattr(state, attr_name)
     if df is None:
-        df = load_and_normalize(path, sheet, mapping, header=header)
+        df = load_normalized_sheet(path, sheet, mapping, header=header)
         df = df.reset_index(drop=True)
         setattr(state, attr_name, df)
     return df
@@ -49,7 +49,7 @@ def reload_param_df(state, attr_name, path, sheet, mapping, header=0):
     """
     Recharge explicitement un DF Param* depuis Excel vers STATE.
     """
-    df = load_and_normalize(path, sheet, mapping, header=header)
+    df = load_normalized_sheet(path, sheet, mapping, header=header)
     df = df.reset_index(drop=True)
     setattr(state, attr_name, df)
     return df

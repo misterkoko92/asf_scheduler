@@ -41,8 +41,8 @@ pytest tests/test_core_scheduler.py
    - Load sources (tdb/benev/vols).
    - Refresh Graph files (if Graph mode on).
    - Verify warnings are shown for missing/invalid files.
-2) Planning tab
-   - Generate a week with BE status D.
+2) Planning V2 (OR-Tools) tab
+   - Run the OR-Tools simulation (2 modes).
    - Verify planning preview (BE YYNNNN, Vol AF XXX).
    - Export XLSX and PDF.
    - If "write to source Excel" enabled:
@@ -81,9 +81,9 @@ pytest tests/test_core_scheduler.py
    - Validate data still saved.
 
 ## Error Handling / Tolerance
-- Missing files, invalid sheet names, and read errors:
-  - UI shows warning.
-  - App continues without crash.
+- Missing source files:
+  - UI shows error (fail-fast).
+  - Session stops until sources are fixed.
 - Incorrect BE/Vol formats:
   - Normalize to BE YYNNNN and Vol AF XXX.
 

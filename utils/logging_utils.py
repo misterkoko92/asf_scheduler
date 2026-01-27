@@ -1,6 +1,7 @@
 import logging
 from pathlib import Path
 import scheduler.config_paths as cp
+from asf_app.config.runtime import get_tmp_dir
 
 
 def get_logger(
@@ -12,13 +13,13 @@ def get_logger(
 ) -> logging.Logger:
     """
     Crée/récupère un logger avec un FileHandler (et optionnellement un StreamHandler).
-    Le fichier par défaut est cp.TMP_DIR / f"{name}.log".
+    Le fichier par défaut est <tmp_dir> / f"{name}.log" (session si dispo).
     """
     logger = logging.getLogger(name)
     logger.setLevel(level)
 
     if log_path is None:
-        log_path = cp.TMP_DIR / f"{name}.log"
+        log_path = get_tmp_dir() / f"{name}.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
     # File handler unique

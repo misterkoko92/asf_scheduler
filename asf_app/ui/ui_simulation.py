@@ -2,8 +2,9 @@ import streamlit as st
 import pandas as pd
 
 from asf_app.services.simulation_runner import run_ortools_simulation_dual
-from asf_app.state import get_state
-from utils.datetime_utils import parse_date_series, parse_time_series
+from asf_app.state import get_state, get_excel_source_paths
+from scheduler.data_sources import ExcelDataSource
+from utils.datetime_utils import parse_date_series, parse_time_series, coerce_datetime
 from utils.ui_helpers import build_iata_city_maps, sort_planning_df, format_be_label, format_vol_label
 from pathlib import Path
 from utils.benevole_utils import count_benevoles_with_dispo
@@ -41,10 +42,13 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
 
     if st.button("Lancer la simulation OR-Tools (2 modes)", type="primary"):
         with st.spinner("Optimisation OR-Tools en cours…"):
+            paths = get_excel_source_paths(state)
+            data_source = ExcelDataSource(paths=paths)
             dual_res = run_ortools_simulation_dual(
                 timeout_seconds=int(timeout),
                 planifiables_only=True,
                 verbose=verbose,
+                data_source=data_source,
             )
             st.session_state.sim_results = dual_res.get("modes")
             st.session_state.sim_active_mode = dual_res.get("selected", "colis")
@@ -87,7 +91,7 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
     # Disponibilités bénévoles sur la semaine
     def _week_bounds():
         if state.api_start_date and state.api_end_date:
-            return pd.to_datetime(state.api_start_date), pd.to_datetime(state.api_end_date)
+            return coerce_datetime(state.api_start_date), coerce_datetime(state.api_end_date)
         if result.get("planning_df") is not None and not result.get("planning_df").empty:
             dates = parse_date_series(result["planning_df"]["Date_Vol"]).dropna()
             if not dates.empty:
@@ -107,9 +111,10 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
     from loaders.load_benevoles import load_benevoles
     from loaders.load_params import get_param_dest, get_param_benev
 
-    df_be = load_shipments_df(planifiables_only=True)
-    df_vols_all = load_vols_df()
-    df_dispo = load_benevoles()
+    paths = get_excel_source_paths(state)
+    df_be = load_shipments_df(planifiables_only=True, tdb_path=paths.tableau_de_bord)
+    df_vols_all = load_vols_df(vols_path=paths.vols, param_dest_df=state.df_param_dest)
+    df_dispo = load_benevoles(planning_path=paths.planning_benevoles)
     df_paramdest = get_param_dest()
     df_parambenev = get_param_benev()
 
@@ -250,7 +255,7 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
             df_tmp = df_dispo_src.copy()
             dates_col = df_tmp.get("Date_dt", df_tmp.get("Date", ""))
             # Parse robuste avec dayfirst
-            dt_parsed = pd.to_datetime(dates_col, errors="coerce", dayfirst=True)
+            dt_parsed = coerce_datetime(dates_col, errors="coerce", dayfirst=True)
             if dt_parsed.isna().all():
                 dt_parsed = parse_date_series(dates_col)
             df_tmp["_Date_dt"] = dt_parsed
@@ -271,8 +276,8 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
             df_tmp["Benevole"] = df_tmp.get("Benevole", "").astype(str).str.strip()
             arr_col = "Heure_Arrivee_time" if "Heure_Arrivee_time" in df_tmp.columns else "Heure_Arrivee"
             dep_col = "Heure_Depart_time" if "Heure_Depart_time" in df_tmp.columns else "Heure_Depart"
-            arr_parsed = pd.to_datetime(df_tmp.get(arr_col, ""), errors="coerce")
-            dep_parsed = pd.to_datetime(df_tmp.get(dep_col, ""), errors="coerce")
+            arr_parsed = coerce_datetime(df_tmp.get(arr_col, ""), errors="coerce")
+            dep_parsed = coerce_datetime(df_tmp.get(dep_col, ""), errors="coerce")
             df_tmp = df_tmp[arr_parsed.notna() & dep_parsed.notna()]
             dispo_counts = df_tmp.groupby("Benevole")["_Date_dt"].dt.date.nunique().to_dict()
         except Exception:
@@ -332,7 +337,7 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
             s_dt = start_dt
             e_dt = end_dt
             if df_plan is not None and not df_plan.empty:
-                dates_plan = pd.to_datetime(df_plan["Date_Vol"], errors="coerce")
+                dates_plan = coerce_datetime(df_plan["Date_Vol"], errors="coerce")
                 dates_plan = dates_plan.dropna()
                 if not dates_plan.empty:
                     s_dt = dates_plan.min()
@@ -393,7 +398,7 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
         if state.current_week and state.current_year:
             return state.current_week, state.current_year
         if df_plan is not None and not df_plan.empty:
-            first_date = pd.to_datetime(df_plan["Date_Vol"], errors="coerce", dayfirst=True).dropna()
+            first_date = coerce_datetime(df_plan["Date_Vol"], errors="coerce", dayfirst=True).dropna()
             if not first_date.empty:
                 iso = first_date.iloc[0].isocalendar()
                 return int(iso.week), int(iso.year)
@@ -457,7 +462,7 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
         return df_out
 
     def _export_simulation_excel(*, write_source_excel: bool, increment_version: bool):
-        from asf_app.ui.ui_planning.ui_planning import export_excel_planning
+        from asf_app.services.export_service import export_planning_excel
         current_plan = st.session_state.sim_results.get(current_mode, {}).get("planning_df", plan_df)
         original_plan = st.session_state.get("sim_original_df", {}).get(current_mode)
         # Export sans traçage des anciennes lignes : on prend uniquement le planning courant
@@ -481,11 +486,11 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
         # Filtrer les vols à la période du planning (si bornes dispo)
         vols_filtered = df_vols_all.copy()
         try:
-            start_dt = pd.to_datetime(state.api_start_date) if state.api_start_date else None
-            end_dt = pd.to_datetime(state.api_end_date) if state.api_end_date else None
+            start_dt = coerce_datetime(state.api_start_date) if state.api_start_date else None
+            end_dt = coerce_datetime(state.api_end_date) if state.api_end_date else None
             if start_dt is None or end_dt is None:
                 if df_export is not None and not df_export.empty:
-                    dates_plan = pd.to_datetime(df_export["Date_Vol"], errors="coerce", dayfirst=True).dropna()
+                    dates_plan = coerce_datetime(df_export["Date_Vol"], errors="coerce", dayfirst=True).dropna()
                     if not dates_plan.empty:
                         start_dt = dates_plan.min()
                         end_dt = dates_plan.max()
@@ -497,7 +502,8 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
             pass
         vols_clean = _clean_for_excel(vols_filtered)
         dispo_clean = _clean_for_excel(df_dispo)
-        out_path = export_excel_planning(
+        paths = get_excel_source_paths(state)
+        result = export_planning_excel(
             df_export,
             week,
             year,
@@ -508,8 +514,16 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
             create_tables=False,  # éviter les tables qui peuvent corrompre l'export en V2
             write_source_excel=write_source_excel,
             increment_version=increment_version,
+            benev_path=paths.planning_benevoles,
+            tdb_source_path=paths.tableau_de_bord,
         )
-        return out_path
+        if write_source_excel:
+            st.session_state["mag_central_write_method"] = result.mag_write_method
+        else:
+            st.session_state.pop("mag_central_write_method", None)
+        for msg in result.warnings:
+            st.warning(msg)
+        return result.output_path
 
     # ------------------------------------------------------------------
     # Edition manuelle du planning de simulation (sélecteurs alignés onglet Planning)
@@ -535,7 +549,7 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
             return val
         try:
             sval = str(val).replace("h", ":")
-            return pd.to_datetime(sval, errors="coerce").time()
+            return coerce_datetime(sval, errors="coerce").time()
         except Exception:
             return None
 
@@ -572,8 +586,8 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
     # Filtrer les vols sur la semaine du planning si dates connues
     try:
         if state.api_start_date and state.api_end_date:
-            start_dt = pd.to_datetime(state.api_start_date)
-            end_dt = pd.to_datetime(state.api_end_date)
+            start_dt = coerce_datetime(state.api_start_date)
+            end_dt = coerce_datetime(state.api_end_date)
             df_vols["Date_dt"] = parse_date_series(df_vols["Date_Vol"])
             df_vols = df_vols[(df_vols["Date_dt"] >= start_dt) & (df_vols["Date_dt"] <= end_dt)]
     except Exception:
@@ -643,7 +657,7 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
 
         # Disponibilité
         try:
-            d = pd.to_datetime(date_choice, dayfirst=True, errors="coerce").date()
+            d = coerce_datetime(date_choice, dayfirst=True, errors="coerce").date()
             t = _time_from_str(heure_choice)
         except Exception:
             return "Inconnu"
@@ -794,7 +808,7 @@ Il consomme les mêmes sources (MAG CENTRAL, VOLS, PLANNING BENEVOLES) et restit
                     )
                 )
                 st.success(f"Planning simulé exporté : {out_path}")
-                from asf_app.ui.ui_planning.ui_planning import show_mag_central_status
+                from asf_app.ui.ui_planning.utils import show_mag_central_status
                 show_mag_central_status()
                 _open_file(out_path)
                 # Export PDF 1ère feuille + ouvrir le PDF

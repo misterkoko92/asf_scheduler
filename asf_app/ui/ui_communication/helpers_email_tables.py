@@ -1,4 +1,4 @@
-from scheduler.format_rules import format_vol_number
+from utils.identifiers import format_vol_display
 
 # asf_app/ui/ui_communication/helpers_email_tables.py
 # -----------------------------------------------------
@@ -27,17 +27,16 @@ def build_comm_table_html(df):
 
     # Format numéro de vol AF XXX (supprime .0 éventuel)
     def _fmt_vol(v):
-        try:
-            num = int(float(v))
-            return f"AF {num}"
-        except Exception:
-            s = str(v).strip()
-            if not s:
-                return ""
-            if s.upper().startswith("AF"):
-                suf = s[2:].strip()
-                return f"AF {suf}"
-            return f"AF {s}"
+        out = format_vol_display(v)
+        if out:
+            return out
+        s = str(v).strip()
+        if not s:
+            return ""
+        if s.upper().startswith("AF"):
+            suf = s[2:].strip()
+            return f"AF {suf}"
+        return f"AF {s}"
 
     df["Numero_Vol_Aff"] = df.get("Numero_Vol_Aff", df.get("NUMERO VOL", "")).apply(_fmt_vol)
 

@@ -7,6 +7,7 @@
 
 import streamlit as st
 import pandas as pd
+from utils.datetime_utils import coerce_datetime
 
 from asf_app.ui.ui_communication.email_asf_handler import (
     generate_asf_email,
@@ -20,7 +21,7 @@ def _detect_week_year_from_df(df_comm: pd.DataFrame):
     if df_comm is None or df_comm.empty or "DATE" not in df_comm.columns:
         return None, None
 
-    dates = pd.to_datetime(df_comm["DATE"], errors="coerce").dropna()
+    dates = coerce_datetime(df_comm["DATE"], errors="coerce").dropna()
     if dates.empty:
         return None, None
 

@@ -8,6 +8,7 @@ from typing import Dict
 
 import pandas as pd
 import scheduler.config_paths as cp
+from utils.datetime_utils import format_date_value
 
 
 # ============================================================
@@ -18,7 +19,7 @@ def pretty_mtime(path_str: str) -> str:
     try:
         ts = os.path.getmtime(path_str)
         dt = datetime.datetime.fromtimestamp(ts)
-        return dt.strftime("%d/%m/%Y à %H:%M")
+        return format_date_value(dt, fmt="%d/%m/%Y à %H:%M", default="N/A")
     except Exception:
         return "N/A"
 

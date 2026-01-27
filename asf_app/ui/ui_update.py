@@ -3,12 +3,17 @@
 
 import streamlit as st
 import pandas as pd
+from utils.datetime_utils import coerce_datetime, format_date_value
 from pathlib import Path
 
 import scheduler.config_paths as cp
+from asf_app.config.runtime import (
+    get_onedrive_root,
+    get_output_planning_dir,
+    get_tmp_dir,
+    is_graph_onedrive,
+)
 from scheduler.config_paths import (
-    TABLEAU_DE_BORD,
-    SHEET_PARAM_BE,
     BASE_DIR,  # pour accéder à data/BE.csv
 )
 
@@ -17,10 +22,9 @@ from asf_app.ui.ui_stats.ui_stats import (
     extract_week_version,
     filter_latest,
 )
+from utils.identifiers import normalize_be_int
 
 # ==== IMPORTS BE MOTEUR ======================================================
-from loaders.universal_loader import load_and_normalize
-from scheduler.column_map import column_map_param_be
 
 
 # ============================================================================
@@ -37,7 +41,7 @@ def render_tab_update():
 
     st.subheader("📆 Sélection du planning validé")
 
-    if cp.is_graph_onedrive():
+    if is_graph_onedrive():
         items = cp.list_onedrive_files(
             "Planning MAB",
             recursive=True,
@@ -66,9 +70,9 @@ def render_tab_update():
     else:
         # Dossier des plannings validés : par défaut dossier ASFmm (OneDrive),
         # fallback sur le dossier de sortie du moteur.
-        planning_dir = cp.ASF_ONEDRIVE / "Planning MAB" / "ASFmm PLANNING 2025"
+        planning_dir = get_onedrive_root() / "Planning MAB" / "ASFmm PLANNING 2025"
         if not planning_dir.exists():
-            planning_dir = cp.OUTPUT_PLANNING_DIR
+            planning_dir = get_output_planning_dir()
 
         # On travaille dans planning_dir, sur tous les formats Excel
         all_files = sorted(
@@ -128,7 +132,7 @@ def render_tab_update():
 
     if isinstance(planning_path, str):
         remote_path = planning_path
-        local_path = cp.TMP_DIR / "onedrive_cache" / "planning_exports" / remote_path
+        local_path = get_tmp_dir() / "onedrive_cache" / "planning_exports" / remote_path
         if not local_path.exists():
             cp.download_onedrive_file(remote_path, local_path, interactive=False)
         planning_path = local_path
@@ -181,7 +185,7 @@ def render_tab_update():
     for col in df_show.columns:
         if "date" in col.lower():
             try:
-                df_show[col] = pd.to_datetime(df_show[col], errors="coerce").astype(
+                df_show[col] = coerce_datetime(df_show[col], errors="coerce").astype(
                     str
                 )
             except Exception:
@@ -294,7 +298,7 @@ def render_block_add(df_plan):
     df_vols["dest_norm"] = df_vols[dest_col].astype(str).str.upper()
 
     vols_dest = df_vols[df_vols["dest_norm"] == dest].copy()
-    vols_dest["Date_Vol"] = pd.to_datetime(vols_dest["Date_Vol"], errors="coerce")
+    vols_dest["Date_Vol"] = coerce_datetime(vols_dest["Date_Vol"], errors="coerce")
     vols_dest = vols_dest.sort_values(["Date_Vol", "Heure_Vol"])
 
     if vols_dest.empty:
@@ -302,7 +306,7 @@ def render_block_add(df_plan):
         return
 
     def label_vol(r):
-        d = r["Date_Vol"].strftime("%d/%m") if not pd.isna(r["Date_Vol"]) else "??/??"
+        d = format_date_value(r["Date_Vol"], fmt="%d/%m", default="??/??")
         h = r.get("Heure_Vol", "")
         return f"{d} — {h} — {r.get('Routing','')}"
 
@@ -330,7 +334,7 @@ def render_block_add(df_plan):
         dte = rowv["Date_Vol"].date()
         dispo = set(
             df_dispo[
-                pd.to_datetime(df_dispo["Date"], errors="coerce").dt.date == dte
+                coerce_datetime(df_dispo["Date"], errors="coerce").dt.date == dte
             ]["Benevole"]
             .astype(str)
             .str.upper()
@@ -353,7 +357,7 @@ def render_block_add(df_plan):
     if st.button("➕ Ajouter cette mise à bord", width="stretch"):
 
         new_row = {
-            "date": rowv["Date_Vol"].strftime("%Y-%m-%d")
+            "date": format_date_value(rowv["Date_Vol"], fmt="%Y-%m-%d", default="")
             if not pd.isna(rowv["Date_Vol"])
             else "",
             "nom": choice_ben,
@@ -437,7 +441,7 @@ def render_block_modify(df_plan):
     df_vols["dest_norm"] = df_vols[dest_col].astype(str).str.upper()
 
     vols_dest = df_vols[df_vols["dest_norm"] == dest].copy()
-    vols_dest["Date_Vol"] = pd.to_datetime(vols_dest["Date_Vol"], errors="coerce")
+    vols_dest["Date_Vol"] = coerce_datetime(vols_dest["Date_Vol"], errors="coerce")
     vols_dest = vols_dest.sort_values(["Date_Vol", "Heure_Vol"])
 
     if vols_dest.empty:
@@ -445,7 +449,7 @@ def render_block_modify(df_plan):
         return
 
     def vol_label(v):
-        d = v["Date_Vol"].strftime("%d/%m") if not pd.isna(v["Date_Vol"]) else "??/??"
+        d = format_date_value(v["Date_Vol"], fmt="%d/%m", default="??/??")
         return f"{d} — {v.get('Heure_Vol','')} — {v.get('Routing','')}"
 
     keys = vols_dest.index.tolist()
@@ -454,7 +458,7 @@ def render_block_modify(df_plan):
         v = vols_dest.loc[idx]
         if (
             not pd.isna(v["Date_Vol"])
-            and v["Date_Vol"].strftime("%Y-%m-%d") == str(row["date"])
+            and format_date_value(v["Date_Vol"], fmt="%Y-%m-%d", default="") == str(row["date"])
             and str(v.get("Heure_Vol", "")).strip() == str(row.get("heure", "")).strip()
         ):
             current_match = idx
@@ -492,7 +496,7 @@ def render_block_modify(df_plan):
         dte = new_vol["Date_Vol"].date()
         dispo = set(
             df_dispo[
-                pd.to_datetime(df_dispo["Date"], errors="coerce").dt.date == dte
+                coerce_datetime(df_dispo["Date"], errors="coerce").dt.date == dte
             ]["Benevole"]
             .astype(str)
             .str.upper()
@@ -516,7 +520,7 @@ def render_block_modify(df_plan):
     if st.button("💾 Enregistrer les modifications", width="stretch"):
 
         new_row = {
-            "date": new_vol["Date_Vol"].strftime("%Y-%m-%d")
+            "date": format_date_value(new_vol["Date_Vol"], fmt="%Y-%m-%d", default="")
             if not pd.isna(new_vol["Date_Vol"])
             else row["date"],
             "nom": choice_ben,
@@ -554,13 +558,7 @@ def render_block_delete(df_plan):
     df_local["be"] = df_local["be"].astype(str)
 
     # Normalisation BE : enlever les .0 éventuels, convertir en entier
-    def normalize_be(x):
-        try:
-            return int(float(str(x).strip()))
-        except Exception:
-            return None
-
-    df_local["be_norm"] = df_local["be"].apply(normalize_be)
+    df_local["be_norm"] = df_local["be"].apply(normalize_be_int)
 
     valid_be = [b for b in df_local["be_norm"].unique() if b is not None]
     be_list = sorted(valid_be)

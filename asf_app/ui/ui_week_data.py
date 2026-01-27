@@ -4,13 +4,24 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, date
+from pathlib import Path
 
-from asf_app.state import get_state
+from asf_app.state import get_state, get_excel_source_paths
 
 from loaders.load_shipments import load_shipments_df
 from utils.ui_helpers import build_iata_city_maps, format_be_label, format_vol_label
-from utils.datetime_utils import parse_date_series, parse_time_series, normalize_hour_str, hour_min_from_series
-from utils.identifiers import normalize_vol_number
+from utils.datetime_utils import (
+    parse_date_series,
+    parse_date_value,
+    parse_time_series,
+    normalize_hour_value,
+    hour_min_value,
+    coerce_datetime,
+    format_date_series,
+    format_time_series,
+    format_date_value,
+)
+from utils.identifiers import format_vol_display
 
 
 # ======================================================================
@@ -76,9 +87,11 @@ def load_be_moteur():
         return None, "ParamBE indisponible"
 
     try:
+        tdb_path = Path(state.tdb_tmp) if state.tdb_tmp is not None else None
         df_raw = load_shipments_df(
             planifiables_only=True,
             param_be_raw=state.df_param_be.copy(),
+            tdb_path=tdb_path,
         )
     except Exception as e:
         return None, f"Erreur load_shipments_df : {e}"
@@ -121,7 +134,7 @@ def load_be_moteur():
 def render_tab_week_data():
     state = get_state()
     if state.api_start_date:
-        week = pd.to_datetime(state.api_start_date).isocalendar().week
+        week = coerce_datetime(state.api_start_date).isocalendar().week
     else:
         week = detect_week(state)
 
@@ -176,14 +189,14 @@ def render_tab_week_data():
         tmp["Date_dt"] = robust_to_datetime(tmp["Date"])
 
         if state.api_start_date and state.api_end_date:
-            mask = (tmp["Date_dt"] >= pd.to_datetime(state.api_start_date)) & (
-                tmp["Date_dt"] <= pd.to_datetime(state.api_end_date)
+            mask = (tmp["Date_dt"] >= coerce_datetime(state.api_start_date)) & (
+                tmp["Date_dt"] <= coerce_datetime(state.api_end_date)
             )
             tmp = tmp[mask]
         elif week:
             tmp = tmp[tmp["Date_dt"].dt.isocalendar().week == week]
 
-        tmp["Date_fmt"] = tmp["Date_dt"].dt.strftime("%d/%m/%y")
+        tmp["Date_fmt"] = format_date_series(tmp["Date_dt"], fmt="%d/%m/%y")
 
         # --- extraction brute ---
         df_benev = tmp[[
@@ -198,51 +211,33 @@ def render_tab_week_data():
         })
 
         # --- parsing minimal ---
-        def parse_time(v):
-            if v is None or v == "" or pd.isna(v):
-                return None
-
-            # string simples
-            s = str(v).strip().lower()
-            s = s.replace("h", ":").replace(" ", "")
-            if s.isdigit() and len(s) == 2:
-                s += ":00"
-
-            try:
-                t = pd.to_datetime(s, errors="coerce")
-                if t is not None:
-                    return t.time()
-            except:
-                pass
-
-            # float Excel
-            try:
-                if isinstance(v, (float, int)):
-                    base = datetime(1899, 12, 30) + pd.to_timedelta(float(v), unit="D")
-                    return base.time()
-            except:
-                pass
-
-            return None
-
-        arr_t = df_benev["Arrivée_brut"].apply(parse_time)
-        dep_t = df_benev["Départ_brut"].apply(parse_time)
+        arr_dt = parse_time_series(
+            df_benev["Arrivée_brut"],
+            allow_hour_only=True,
+            allow_general_fallback=True,
+            strip_spaces=True,
+            lowercase=True,
+        )
+        dep_dt = parse_time_series(
+            df_benev["Départ_brut"],
+            allow_hour_only=True,
+            allow_general_fallback=True,
+            strip_spaces=True,
+            lowercase=True,
+        )
+        valid_mask = arr_dt.notna() & dep_dt.notna()
 
         # --- format final ---
-        arr_fmt = []
-        for t in arr_t:
-            if t is None:
-                arr_fmt.append("")
-                continue
-            new_t = datetime.combine(datetime.today(), t) + pd.Timedelta(hours=3)
-            arr_fmt.append(new_t.strftime("%Hh%M"))
-
-        dep_fmt = []
-        for t in dep_t:
-            if t is None:
-                dep_fmt.append("")
-                continue
-            dep_fmt.append(t.strftime("%Hh%M"))
+        arr_fmt = format_time_series(
+            arr_dt + pd.Timedelta(hours=3),
+            fmt="%Hh%M",
+            allow_general_fallback=True,
+        ).fillna("")
+        dep_fmt = format_time_series(
+            dep_dt,
+            fmt="%Hh%M",
+            allow_general_fallback=True,
+        ).fillna("")
 
         df_benev["Arrivée"] = arr_fmt
         df_benev["Départ"] = dep_fmt
@@ -251,15 +246,15 @@ def render_tab_week_data():
         # Filtre période choisie (prioritaire si définie)
         df_benev["Date_dt"] = robust_to_datetime(df_benev["Date"])
         if state.api_start_date and state.api_end_date:
-            start_dt = pd.to_datetime(state.api_start_date)
-            end_dt = pd.to_datetime(state.api_end_date)
+            start_dt = coerce_datetime(state.api_start_date)
+            end_dt = coerce_datetime(state.api_end_date)
             mask = (df_benev["Date_dt"] >= start_dt) & (df_benev["Date_dt"] <= end_dt)
             df_benev = df_benev[mask]
         elif week:
             df_benev = df_benev[df_benev["Date_dt"].dt.isocalendar().week == week]
 
-        df_benev = df_benev[df_benev["Arrivée"] != ""]
-        df_benev = df_benev[df_benev["Départ"] != ""]
+        # Garder uniquement les bénévoles avec créneaux valides
+        df_benev = df_benev[valid_mask]
 
         # on ne garde que les 4 colonnes utiles
         df_benev = df_benev[["Nom", "Date", "Arrivée", "Départ"]]
@@ -283,36 +278,22 @@ def render_tab_week_data():
     if state.df_vols is None or (hasattr(state.df_vols, "empty") and state.df_vols.empty):
         try:
             from loaders.load_vols import load_vols_df
-            state.df_vols = load_vols_df()
+            paths = get_excel_source_paths(state)
+            state.df_vols = load_vols_df(vols_path=paths.vols, param_dest_df=state.df_param_dest)
         except Exception:
             state.df_vols = None
 
-    def _parse_date_series(series):
-        ser = pd.to_datetime(series, format="%d/%m/%y", errors="coerce")
-        mask = ser.isna()
-        if mask.any():
-            ser.loc[mask] = pd.to_datetime(series.loc[mask], errors="coerce", dayfirst=True)
-        return ser
-
     def _parse_time_val(val):
-        if val is None or val == "" or pd.isna(val):
-            return ""
-        sval = str(val).replace("h", ":")
-        t = pd.to_datetime(sval, format="%H:%M", errors="coerce")
-        if pd.isna(t):
-            t = pd.to_datetime(sval, errors="coerce")
-        if pd.isna(t):
-            return ""
-        return t.strftime("%Hh%M")
+        return normalize_hour_value(val, allow_general_fallback=True)
 
     if state.df_vols is not None and not state.df_vols.empty:
         vols_df = state.df_vols.copy()
-        vols_df["Date_dt"] = _parse_date_series(vols_df["Date_Vol"])
+        vols_df["Date_dt"] = parse_date_series(vols_df["Date_Vol"], allow_dayfirst_false=False)
 
         # Période choisie
         if state.api_start_date and state.api_end_date:
-            start_dt = _parse_date_series(pd.Series([state.api_start_date])).iloc[0]
-            end_dt = _parse_date_series(pd.Series([state.api_end_date])).iloc[0]
+            start_dt = parse_date_value(state.api_start_date, allow_dayfirst_false=False)
+            end_dt = parse_date_value(state.api_end_date, allow_dayfirst_false=False)
             vols_df = vols_df[(vols_df["Date_dt"] >= start_dt) & (vols_df["Date_dt"] <= end_dt)]
         elif week:
             vols_df = vols_df[vols_df["Date_dt"].dt.isocalendar().week == week]
@@ -372,7 +353,7 @@ def render_tab_week_data():
                 label = format_vol_label(dtdt, dest_iata, r.get("Numero_Vol", ""), heure_str, sub_route, r.get("Source", "excel"))
                 rows.append({
                     "Destination": dest_city,
-                    "Date": dtdt.strftime("%d/%m/%y"),
+                    "Date": format_date_value(dtdt, fmt="%d/%m/%y", default=""),
                     "Heure": heure_str,
                     "Routing": sub_route,
                     "Numero_Vol": r.get("Numero_Vol", ""),
@@ -412,7 +393,7 @@ def render_tab_week_data():
     # ------------------------------------------------------------------
     def _week_dates():
         if state.api_start_date:
-            ref = pd.to_datetime(state.api_start_date, errors="coerce")
+            ref = coerce_datetime(state.api_start_date, errors="coerce")
         else:
             ref = None
             for df in (df_benev, df_flights):
@@ -438,18 +419,12 @@ def render_tab_week_data():
         return [monday + pd.Timedelta(days=i) for i in range(7)]
 
     def _time_to_minutes(val: object) -> int | None:
-        if val is None or val == "" or pd.isna(val):
-            return None
-        sval = str(val).strip().lower().replace("h", ":").replace(" ", "")
-        try:
-            t = pd.to_datetime(sval, format="%H:%M", errors="coerce")
-            if pd.isna(t):
-                t = pd.to_datetime(sval, errors="coerce")
-            if pd.isna(t):
-                return None
-            return int(t.hour) * 60 + int(t.minute)
-        except Exception:
-            return None
+        return hour_min_value(
+            val,
+            allow_general_fallback=True,
+            strip_spaces=True,
+            lowercase=True,
+        )
 
     def _minutes_to_hhmm(m: int | None) -> str:
         if m is None:
@@ -460,7 +435,7 @@ def render_tab_week_data():
 
     day_names = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
     week_dates = _week_dates()
-    day_labels = [f"{day_names[i]} {d.strftime('%d/%m')}" for i, d in enumerate(week_dates)]
+    day_labels = [f"{day_names[i]} {format_date_value(d, fmt='%d/%m', default='')}" for i, d in enumerate(week_dates)]
 
     # ---- Bloc bénévoles (disponibilités) ----
     with st.expander("👥 Disponibilités bénévoles (vue semaine)", expanded=False):
@@ -543,8 +518,7 @@ def render_tab_week_data():
             df_v["Date_dt"] = parse_date_series(df_v["Date"]).dt.date
 
             def _vol_display(num: object) -> str:
-                digits = normalize_vol_number(num)
-                return f"AF {digits}" if digits else str(num or "").strip()
+                return format_vol_display(num) or str(num or "").strip()
 
             # Disponibilités bénévoles par date (en minutes)
             benev_by_date: dict[date, list[tuple[int, int]]] = {}

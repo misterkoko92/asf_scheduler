@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import pandas as pd
+from utils.datetime_utils import coerce_datetime, format_date_series
 import numpy as np
 
 
@@ -28,7 +29,7 @@ def compute_kpis(df: pd.DataFrame):
 # ===============================================================
 def daily_load(df):
     df2 = df.copy()
-    df2["date"] = pd.to_datetime(df2["date"], errors="coerce")
+    df2["date"] = coerce_datetime(df2["date"], errors="coerce")
     return df2.groupby(df2["date"].dt.date)["nb_colis"].sum()
 
 
@@ -47,8 +48,8 @@ def compute_transfer_delay(df):
         return pd.Series(dtype=float)
 
     try:
-        dt_vol = pd.to_datetime(df["date"] + " " + df["heure"], errors="coerce")
-        dt_trans = pd.to_datetime(df.get("date_transfert", None), errors="coerce")
+        dt_vol = coerce_datetime(df["date"] + " " + df["heure"], errors="coerce")
+        dt_trans = coerce_datetime(df.get("date_transfert", None), errors="coerce")
         return (dt_vol - dt_trans).dt.total_seconds() / 3600  # heures
     except Exception:
         return pd.Series(dtype=float)
@@ -91,8 +92,8 @@ def pivot_dest_week(df):
 # ===============================================================
 def pivot_day_dest(df):
     df2 = df.copy()
-    df2["date"] = pd.to_datetime(df2["date"], errors="coerce")
-    df2["day"] = df2["date"].dt.strftime("%a")
+    df2["date"] = coerce_datetime(df2["date"], errors="coerce")
+    df2["day"] = format_date_series(df2["date"], fmt="%a")
     return df2.pivot_table(
         index="day",
         columns="destination_iata",

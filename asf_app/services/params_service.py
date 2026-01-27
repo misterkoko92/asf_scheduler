@@ -12,6 +12,7 @@ from scheduler.config_paths import (
     SHEET_PARAM_BENEV,
     SHEET_VOLS,
 )
+from utils.datetime_utils import format_date_value, format_time_value
 
 
 # =====================================================================
@@ -77,7 +78,7 @@ def add_benevole_dispo(path_benev: str, form_data: Dict) -> None:
     # Date
     date_dispo = form_data.get("date_dispo")
     if isinstance(date_dispo, datetime.date):
-        new_row["DATE"] = date_dispo.strftime("%d/%m/%Y")
+        new_row["DATE"] = format_date_value(date_dispo, fmt="%d/%m/%Y", default="")
 
     # Heure ARRIVÉE = input - 3 heures
     h_arr_input = form_data.get("h_arr")
@@ -86,12 +87,12 @@ def add_benevole_dispo(path_benev: str, form_data: Dict) -> None:
             datetime.datetime.combine(datetime.date.today(), h_arr_input)
             - datetime.timedelta(hours=3)
         ).time()
-        new_row["HEURE_ARRIVEE"] = h_real.strftime("%H:%M")
+        new_row["HEURE_ARRIVEE"] = format_time_value(h_real, fmt="%H:%M", default="")
 
     # Heure départ
     h_dep = form_data.get("h_dep")
     if isinstance(h_dep, datetime.time):
-        new_row["HEURE_DEPART"] = h_dep.strftime("%H:%M")
+        new_row["HEURE_DEPART"] = format_time_value(h_dep, fmt="%H:%M", default="")
 
     # Contraintes
     for f in ["MAX_JOURS_SEMAINE", "MAX_EXP_SEMAINE", "MAX_EXP_JOUR", "ATTENTE_MAX_H"]:
@@ -131,12 +132,12 @@ def add_vol(path_vols: str, form_data: Dict) -> None:
     # Date
     d = form_data.get("pvol_date")
     if isinstance(d, datetime.date):
-        new_row["PVOL_DATE"] = d.strftime("%d/%m/%Y")
+        new_row["PVOL_DATE"] = format_date_value(d, fmt="%d/%m/%Y", default="")
 
     # Heure
     h = form_data.get("pvol_heure")
     if isinstance(h, datetime.time):
-        new_row["PVOL_HEURE"] = h.strftime("%H:%M")
+        new_row["PVOL_HEURE"] = format_time_value(h, fmt="%H:%M", default="")
 
     # Destination
     new_row["PVOL_FK_DESTINATION"] = form_data.get("pvol_dest", "")

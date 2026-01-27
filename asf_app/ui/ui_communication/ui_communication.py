@@ -7,6 +7,7 @@ Compatible avec enrich_planning() (planning enrichi complet).
 
 import streamlit as st
 import pandas as pd
+from utils.datetime_utils import coerce_datetime
 import re
 import fnmatch
 from pathlib import Path
@@ -31,10 +32,12 @@ from scheduler.format_rules import format_be_number, format_vol_display
 from utils.identifiers import normalize_be_number
 from loaders.load_shipments import get_shipments_df_cached
 from scheduler.planning_schema import normalize_planning_df
+from asf_app.state import get_state, get_excel_source_paths
 
 # Loaders (nouveau)
 from asf_app.ui.loader import load_parameters
 import scheduler.config_paths as cp
+from asf_app.config.runtime import get_onedrive_root, get_output_remote_dir, get_tmp_dir, is_graph_onedrive
 # load_parameters() retourne :
 #   df_paramdest, df_paramexpediteur, df_parambenev, df_parambe
 
@@ -45,7 +48,7 @@ import scheduler.config_paths as cp
 def _detect_week_year(df_comm):
     if df_comm is None or df_comm.empty or "DATE" not in df_comm.columns:
         return None, None
-    dates = pd.to_datetime(df_comm["DATE"], errors="coerce").dropna()
+    dates = coerce_datetime(df_comm["DATE"], errors="coerce").dropna()
     if dates.empty:
         return None, None
     dt = dates.min()
@@ -58,6 +61,8 @@ def _detect_week_year(df_comm):
 def render_tab_communication():
 
     st.title("📨 Communication")
+    state = get_state()
+    paths = get_excel_source_paths(state)
 
     # -------------------------------------------------------
     # 1) Choix de la source (moteur principal ou simulation OR-Tools)
@@ -85,7 +90,7 @@ def render_tab_communication():
     if sim_res_modes:
         options.append("simulation")
     if not options:
-        st.warning("⚠️ Aucun planning disponible. Génère un planning (onglet Planning) ou lance une simulation.")
+        st.warning("⚠️ Aucun planning disponible. Lance une simulation (onglet Planning V2 / OR-Tools).")
         return
     default_source = "planning" if "planning" in options else options[0]
     source = st.radio(
@@ -126,7 +131,10 @@ def render_tab_communication():
     # -------------------------------------------------------
     # 2) Charger ParamDest / ParamBenev / ParamExp / ParamBE
     # -------------------------------------------------------
-    df_paramdest, df_paramexpediteur, df_parambenev, df_parambe = load_parameters()
+    df_paramdest, df_paramexpediteur, df_parambenev, df_parambe = load_parameters(
+        tdb_path=paths.tableau_de_bord,
+        benev_path=paths.planning_benevoles,
+    )
 
     # Pièce jointe par défaut : recherche du PDF officiel uniquement
     pdf_attach_path = None
@@ -142,7 +150,7 @@ def render_tab_communication():
 
     # Compléter Destinataire via mapping BE (MAG CENTRAL + planning), avec tolérance format
     try:
-        df_be = get_shipments_df_cached()
+        df_be = get_shipments_df_cached(tdb_path=paths.tableau_de_bord)
     except Exception:
         df_be = pd.DataFrame()
 
@@ -213,8 +221,8 @@ def render_tab_communication():
     try:
         pattern_old = f"ASFmm - PLANNING SEMAINE N° {week:02d} - {year}*.pdf"
         pattern_new = f"ASFmm - PLANNING SEMAINE {year}-{week:02d}-*.pdf"
-        if cp.is_graph_onedrive():
-            remote_dir = cp.get_output_remote_dir(year)
+        if is_graph_onedrive():
+            remote_dir = get_output_remote_dir(year)
             items = cp.list_onedrive_files(remote_dir, recursive=False, suffixes=[".pdf"])
             candidates = [
                 i for i in items
@@ -232,13 +240,13 @@ def render_tab_communication():
                 chosen = candidates[labels.index(pdf_choice)]
                 remote_path = chosen.get("path", "")
                 if remote_path:
-                    local_path = cp.TMP_DIR / "onedrive_cache" / "planning_pdf" / remote_path
+                    local_path = get_tmp_dir() / "onedrive_cache" / "planning_pdf" / remote_path
                     if not local_path.exists():
                         cp.download_onedrive_file(remote_path, local_path, interactive=False)
                     if local_path.exists():
                         pdf_attach_path = local_path
         else:
-            base_pdf_dir = cp.ASF_ONEDRIVE / "Planning MAB" / f"ASFmm PLANNING {year}"
+            base_pdf_dir = get_onedrive_root() / "Planning MAB" / f"ASFmm PLANNING {year}"
             if base_pdf_dir.exists():
                 candidates = sorted(
                     list(base_pdf_dir.glob(pattern_old)) + list(base_pdf_dir.glob(pattern_new)),

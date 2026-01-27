@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 from pathlib import Path
+import logging
 import os
 import shutil
 import unicodedata
@@ -142,7 +143,7 @@ TMP_DIR = normalize(os.getenv("ASF_TMP_DIR", BASE_DIR / ".tmp_asf"))
 GRAPH_TOKEN_CACHE = normalize(os.getenv("ASF_GRAPH_TOKEN_CACHE", TMP_DIR / ".msal_cache.json"))
 
 
-def _download_to_tmp(remote_path: str, dst_name: str) -> Path:
+def _download_to_tmp(remote_path: str, dst_name: str, *, strict: bool = False) -> Path:
     """Télécharge un fichier Graph vers TMP (placeholder vide si manquant)."""
     dst = TMP_DIR / dst_name
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -152,6 +153,10 @@ def _download_to_tmp(remote_path: str, dst_name: str) -> Path:
     except Exception:
         ok = False
     if not ok:
+        msg = f"OneDrive Graph: fichier introuvable ou téléchargement échoué ({remote_path})"
+        logger.error(msg)
+        if strict:
+            raise FileNotFoundError(msg)
         try:
             dst.touch()
         except Exception:
@@ -159,7 +164,7 @@ def _download_to_tmp(remote_path: str, dst_name: str) -> Path:
     return normalize(dst)
 
 
-def _copy_to_tmp(src: Path, dst_name: str) -> Path:
+def _copy_to_tmp(src: Path, dst_name: str, *, strict: bool = False) -> Path:
     """Copie src → TMP/dst_name (placeholder vide si manquant)."""
     dst = TMP_DIR / dst_name
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -167,8 +172,16 @@ def _copy_to_tmp(src: Path, dst_name: str) -> Path:
         if src.exists():
             shutil.copy2(src, dst)
         else:
+            msg = f"Source introuvable: {src}"
+            logger.error(msg)
+            if strict:
+                raise FileNotFoundError(msg)
             dst.touch()
     except Exception:
+        msg = f"Erreur copie source: {src}"
+        logger.error(msg)
+        if strict:
+            raise
         dst.touch()
     return normalize(dst)
 
@@ -288,7 +301,7 @@ def get_planning_maquette_path() -> Path:
 # UTILITAIRES
 # =============================================================================
 
-def prepare_paths(copy_sources: bool = True) -> None:
+def prepare_paths(copy_sources: bool = True, *, strict_sources: bool = False) -> None:
     """
     Crée le TMP local et copie les 3 sources OneDrive dedans.
     Met à jour les chemins globaux TABLEAU_DE_BORD / PLANNING_BENEVOLES / VOLS.
@@ -331,17 +344,17 @@ def prepare_paths(copy_sources: bool = True) -> None:
 
     if effective_copy:
         if USE_GRAPH_ONEDRIVE:
-            TABLEAU_DE_BORD = _download_to_tmp(TABLEAU_DE_BORD_REMOTE, "TABLEAU_DE_BORD.xlsx")
-            PLANNING_BENEVOLES = _download_to_tmp(PLANNING_BENEVOLES_REMOTE, "PLANNING_BENEVOLES.xlsx")
-            VOLS = _download_to_tmp(VOLS_REMOTE, "VOLS.xlsx")
+            TABLEAU_DE_BORD = _download_to_tmp(TABLEAU_DE_BORD_REMOTE, "TABLEAU_DE_BORD.xlsx", strict=strict_sources)
+            PLANNING_BENEVOLES = _download_to_tmp(PLANNING_BENEVOLES_REMOTE, "PLANNING_BENEVOLES.xlsx", strict=strict_sources)
+            VOLS = _download_to_tmp(VOLS_REMOTE, "VOLS.xlsx", strict=strict_sources)
             TABLEAU_DE_BORD_SRC = TABLEAU_DE_BORD
             PLANNING_BENEVOLES_SRC = PLANNING_BENEVOLES
             VOLS_SRC = VOLS
         else:
             bene_src = PLANNING_BENEVOLES_SRC if PLANNING_BENEVOLES_SRC.exists() else PLANNING_BENEVOLES_SRC_LEGACY
-            TABLEAU_DE_BORD = _copy_to_tmp(TABLEAU_DE_BORD_SRC, "TABLEAU_DE_BORD.xlsx")
-            PLANNING_BENEVOLES = _copy_to_tmp(bene_src, "PLANNING_BENEVOLES.xlsx")
-            VOLS = _copy_to_tmp(VOLS_SRC, "VOLS.xlsx")
+            TABLEAU_DE_BORD = _copy_to_tmp(TABLEAU_DE_BORD_SRC, "TABLEAU_DE_BORD.xlsx", strict=strict_sources)
+            PLANNING_BENEVOLES = _copy_to_tmp(bene_src, "PLANNING_BENEVOLES.xlsx", strict=strict_sources)
+            VOLS = _copy_to_tmp(VOLS_SRC, "VOLS.xlsx", strict=strict_sources)
     else:
         # On ne copie pas mais on s'assure que les fichiers existent au moins vides
         for dst in [TABLEAU_DE_BORD, PLANNING_BENEVOLES, VOLS]:
@@ -534,3 +547,4 @@ def sync_local_file_to_onedrive(
     if not remote_path:
         return False
     return upload_onedrive_file(local_path, remote_path, conflict_behavior=conflict_behavior)
+logger = logging.getLogger("ASF-SCHEDULER")

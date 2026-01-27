@@ -1,6 +1,6 @@
 # ASF Scheduler — Moteur Automatisé de Planification MAB
 
-ASF Scheduler est un moteur Python/Streamlit conçu pour automatiser
+ASF Scheduler est une application **Streamlit** conçue pour automatiser
 le planning hebdomadaire de la **Messagerie Médicale & Fret Humanitaire** 
 d’Aviation Sans Frontières.
 
@@ -25,29 +25,28 @@ Il combine :
   - équivalences colis → HF
   - règles destination / routing
   - capacité vol physique et capacité bénévole dynamique
-- Placement intelligent des colis par destination et par vol
+- Placement intelligent des colis par destination et par vol (OR-Tools)
 - Affectation optimale des bénévoles (fenêtre horaire + charge)
-- Génération Excel :
+- Génération Excel (depuis le planning simulé OR-Tools) :
   - planning complet
   - bilan expéditions
-- Interface Streamlit complète
+- Interface Streamlit complète (OR-Tools uniquement)
 
 ---
 
 ## 📦 Structure du projet
 
-- `asf_app/` : UI Streamlit (onglets planning, communication, mises à jour expéditions, statistiques…)
-- `scheduler/` : moteur métier (règles, calcul de priorités, affectation vols/bénévoles, génération planning)
+- `asf_app/` : UI Streamlit (données semaine, planning OR-Tools, communication, mises à jour expéditions, statistiques…)
+- `scheduler/` : moteur métier (règles, calcul de priorités, affectation vols/bénévoles, génération planning OR-Tools)
 - `loaders/` : chargement / normalisation des sources Excel
 - `data_test/` : jeux de données d’exemple
-- `.github/workflows/build.yml` : pipeline PyInstaller (macOS + Windows) + publication automatique sur un tag
 
 ---
 
 ## 🧰 Prérequis
 
 - Python 3.13 (recommandé)
-- macOS ou Windows (pour l’exécutable, les deux artefacts sont générés)
+- macOS ou Windows (usage Streamlit)
 
 ---
 
@@ -73,6 +72,9 @@ python -m streamlit run app.py  # ouvre http://localhost:8501
 ```
 
 Les chemins des fichiers Excel (Tableau de Bord, Planning, Param) sont configurés dans `scheduler/config_paths.py`. Assure‑toi que les fichiers OneDrive sont synchronisés localement.
+
+Le chargement des sources est **fail-fast** : si un fichier source est introuvable, l’UI affiche l’erreur et stoppe la session.
+La génération du planning se fait via l’onglet **Planning V2 (OR‑Tools)**.
 
 Variables d’environnement utiles (chemins) :
 - `ASF_ONEDRIVE_ROOT` : surcharge la racine OneDrive utilisée par l’app.
@@ -171,25 +173,6 @@ cd asf_scheduler/new_repo
 source .venv/bin/activate
 python -m pytest
 ```
-
----
-
-## 📦 Builds PyInstaller & Releases
-
-Le workflow GitHub Actions `build.yml` :
-- s’exécute sur chaque push (branche `main`) et sur les tags `v*`,
-- build un exécutable macOS et Windows (PyInstaller),
-- sur un tag, attache automatiquement les artefacts à la release GitHub.
-
-Pour publier une version :
-```bash
-cd asf_scheduler/new_repo
-git tag v1.0.0
-git push origin v1.0.0
-```
-La release GitHub est alors enrichie automatiquement des binaires (`ASF-Scheduler-macos-latest`, `ASF-Scheduler-windows-latest`).
-
----
 
 ## 💬 Support / contributions
 

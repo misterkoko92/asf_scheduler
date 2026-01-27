@@ -4,44 +4,44 @@
 import os
 from datetime import datetime, date, timedelta
 import pandas as pd
+from utils.datetime_utils import coerce_datetime, format_date_value
 import streamlit as st
 from pathlib import Path
 import shutil
 
 from asf_app.state import get_state, get_tmp_dir, sync_state_paths_to_engine
-from openpyxl import load_workbook
 
 import scheduler.config_paths as cp
+from asf_app.config.runtime import (
+    is_graph_onedrive,
+    get_tableau_de_bord_src,
+    get_planning_benevoles_src,
+    get_vols_src,
+    get_tableau_de_bord_remote,
+    get_planning_benevoles_remote,
+    get_vols_remote,
+)
+from asf_app.config.session_context import (
+    get_session_context,
+    ensure_session_context,
+    refresh_session_context,
+)
 from scheduler.config_paths import (
-    TABLEAU_DE_BORD,
-    PLANNING_BENEVOLES,
-    VOLS,
-    SHEET_MAG_CENTRAL,
-    SHEET_PARAM_BE,
-    SHEET_PARAM_DEST,
-    SHEET_PARAM_BENEV,
-    SHEET_BENEV_DISPO,
-    SHEET_VOLS,
-    TABLEAU_DE_BORD_SRC,
-    PLANNING_BENEVOLES_SRC,
-    VOLS_SRC,
-    prepare_paths,
     IS_STREAMLIT_CLOUD,
     CLOUD_MESSAGE,
 )
 
 # Loaders normalisés
-from loaders.universal_loader import load_and_normalize
 from loaders.load_shipments import load_shipments_df
 from loaders.load_vols_api import load_vols_api, store_vols_api_sheet
-from scheduler.column_map import (
-    column_map_mag_central,
-    column_map_param_be,
-    column_map_param_dest,
-    column_map_param_benev,
-    column_map_benev_dispo,
-    column_map_vols,
+from asf_app.services.input_service import (
+    load_tdb,
+    load_benev,
+    load_vols,
+    InputLoadError,
+    get_benev_source_message,
 )
+from utils.logging_utils import get_logger
 
 
 
@@ -49,11 +49,23 @@ from scheduler.column_map import (
 # HELPERS
 # -------------------------------------------------------------------------
 
+logger = get_logger("ui_inputs", console=False)
+
+DEFAULT_TMP_NAMES = {
+    "tdb": "TABLEAU_DE_BORD.xlsx",
+    "benev": "PLANNING_BENEVOLES.xlsx",
+    "vols": "VOLS.xlsx",
+}
+
+
+def _default_tmp_path(key_name: str) -> Path:
+    return get_tmp_dir() / DEFAULT_TMP_NAMES.get(key_name, f"{key_name}.xlsx")
+
 def pretty_mtime(path: Path) -> str:
     try:
         ts = path.stat().st_mtime
         dt = datetime.fromtimestamp(ts)
-        return dt.strftime("%d/%m/%Y à %H:%M")
+        return format_date_value(dt, fmt="%d/%m/%Y à %H:%M", default="N/A")
     except Exception:
         return "N/A"
 
@@ -97,40 +109,7 @@ def pick_planning_dates(state):
 
 
 def benev_last_message(path: Path) -> str:
-    """
-    Lit D2 (date) et E2 (heure) dans la feuille 'Source' du planning bénévoles.
-    Retourne une chaîne "DD/MM/YY à HHhMM" ou "N/A" si non disponible.
-    """
-    try:
-        wb = load_workbook(path, data_only=True)
-        if "Source" not in wb.sheetnames:
-            return "N/A"
-        ws = wb["Source"]
-        d = ws["D2"].value
-        h = ws["E2"].value
-        def _fmt_date(x):
-            if isinstance(x, datetime):
-                return x.strftime("%d/%m/%y")
-            if hasattr(x, "strftime"):
-                return x.strftime("%d/%m/%y")
-            return str(x) if x else ""
-        def _fmt_time(x):
-            if isinstance(x, datetime):
-                return x.strftime("%Hh%M")
-            if isinstance(x, str):
-                # essayer HH:MM
-                try:
-                    return datetime.strptime(x.strip(), "%H:%M").strftime("%Hh%M")
-                except Exception:
-                    return x
-            return str(x) if x else ""
-        d_str = _fmt_date(d)
-        h_str = _fmt_time(h)
-        if d_str or h_str:
-            return f"{d_str} à {h_str}".strip(" à ")
-        return "N/A"
-    except Exception:
-        return "N/A"
+    return get_benev_source_message(path)
 
 
 # -------------------------------------------------------------------------
@@ -142,18 +121,15 @@ def load_tdb_file(state, force=False):
         return
 
     try:
-        df_mag = load_and_normalize(state.tdb_tmp, SHEET_MAG_CENTRAL,
-                                    column_map_mag_central, header=5)
-        df_param_be = load_and_normalize(state.tdb_tmp, SHEET_PARAM_BE,
-                                         column_map_param_be, header=0)
-        df_param_dest = load_and_normalize(state.tdb_tmp, SHEET_PARAM_DEST,
-                                           column_map_param_dest, header=0)
-
-        state.df_be = df_mag
-        state.df_param_be = df_param_be
-        state.df_param_dest = df_param_dest
-
+        data = load_tdb(Path(state.tdb_tmp))
+        state.df_be = data.df_be
+        state.df_param_be = data.df_param_be
+        state.df_param_dest = data.df_param_dest
+    except FileNotFoundError as e:
+        logger.error("TABLEAU DE BORD manquant: %s", e)
+        st.error(f"❌ {e}")
     except Exception as e:
+        logger.error("Erreur chargement TABLEAU DE BORD: %s", e)
         st.error(f"❌ Erreur chargement TABLEAU DE BORD : {e}")
 
 
@@ -162,15 +138,14 @@ def load_benev_file(state, force=False):
         return
 
     try:
-        df_param_benev = load_and_normalize(state.benev_tmp, SHEET_PARAM_BENEV,
-                                            column_map_param_benev, header=0)
-        df_dispo = load_and_normalize(state.benev_tmp, SHEET_BENEV_DISPO,
-                                      column_map_benev_dispo, header=0)
-
-        state.df_param_benev = df_param_benev
-        state.df_benev = df_dispo
-
+        data = load_benev(Path(state.benev_tmp))
+        state.df_param_benev = data.df_param_benev
+        state.df_benev = data.df_benev
+    except FileNotFoundError as e:
+        logger.error("Planning Bénévoles manquant: %s", e)
+        st.error(f"❌ {e}")
     except Exception as e:
+        logger.error("Erreur chargement Bénévoles: %s", e)
         st.error(f"❌ Erreur chargement Bénévoles : {e}")
 
 
@@ -179,17 +154,18 @@ def load_vols_file(state, force=False):
         return
 
     try:
-        # Préférence : charger via loader complet (inclut onglets API + normalisation)
-        from loaders.load_vols import load_vols_df
-        state.df_vols = load_vols_df()
-    except Exception:
-        # Fallback minimal : onglet Vols normalisé
-        try:
-            df_vols = load_and_normalize(state.vols_tmp, SHEET_VOLS,
-                                         column_map_vols, header=0)
-            state.df_vols = df_vols
-        except Exception as e:
-            st.error(f"❌ Erreur chargement Vols : {e}")
+        df_param_dest = state.df_param_dest
+        tdb_path = Path(state.tdb_tmp) if state.tdb_tmp is not None else None
+        state.df_vols = load_vols(Path(state.vols_tmp), param_dest_df=df_param_dest, tdb_path=tdb_path)
+    except FileNotFoundError as e:
+        logger.error("Vols manquant: %s", e)
+        st.error(f"❌ {e}")
+    except InputLoadError as e:
+        logger.error("Erreur chargement Vols: %s", e)
+        st.error(f"❌ {e}")
+    except Exception as e:
+        logger.error("Erreur chargement Vols: %s", e)
+        st.error(f"❌ Erreur chargement Vols : {e}")
 
 
 # -------------------------------------------------------------------------
@@ -235,22 +211,22 @@ def refresh_from_onedrive(state, src_path, key_name, reload_func):
     """
     try:
         name_map = {
-            "tdb": TABLEAU_DE_BORD.name,
-            "benev": PLANNING_BENEVOLES.name,
-            "vols": VOLS.name,
+            "tdb": Path(state.tdb_tmp).name if state.tdb_tmp else DEFAULT_TMP_NAMES["tdb"],
+            "benev": Path(state.benev_tmp).name if state.benev_tmp else DEFAULT_TMP_NAMES["benev"],
+            "vols": Path(state.vols_tmp).name if state.vols_tmp else DEFAULT_TMP_NAMES["vols"],
         }
-        dst_name = name_map.get(key_name, Path(src_path).name)
-        if cp.is_graph_onedrive():
+        dst_name = name_map.get(key_name, Path(src_path).name if src_path else DEFAULT_TMP_NAMES.get(key_name, "data.xlsx"))
+        if is_graph_onedrive():
             remote_map = {
-                "tdb": cp.TABLEAU_DE_BORD_REMOTE,
-                "benev": cp.PLANNING_BENEVOLES_REMOTE,
-                "vols": cp.VOLS_REMOTE,
+                "tdb": get_tableau_de_bord_remote(),
+                "benev": get_planning_benevoles_remote(),
+                "vols": get_vols_remote(),
             }
             remote_path = remote_map.get(key_name, "")
             dst = get_tmp_dir() / dst_name
             cp.download_onedrive_file(remote_path, dst, interactive=False)
         else:
-            dst = ensure_tmp_file(src_path, dst_name, overwrite=True)
+            dst = ensure_tmp_file(Path(src_path), dst_name, overwrite=True)
         setattr(state, f"{key_name}_tmp", dst)
 
         # reset dfs
@@ -273,10 +249,17 @@ def refresh_from_onedrive(state, src_path, key_name, reload_func):
 
 
 def refresh_all(state):
-    prepare_paths(copy_sources=True)
-    state.tdb_tmp = TABLEAU_DE_BORD
-    state.benev_tmp = PLANNING_BENEVOLES
-    state.vols_tmp = VOLS
+    try:
+        ctx = refresh_session_context(strict_sources=True)
+    except FileNotFoundError as exc:
+        logger.error("Sources manquantes: %s", exc)
+        st.error(f"❌ {exc}")
+        return
+    st.session_state.pop("source_error", None)
+    if ctx is not None:
+        state.tdb_tmp = ctx.source_paths.tableau_de_bord
+        state.benev_tmp = ctx.source_paths.planning_benevoles
+        state.vols_tmp = ctx.source_paths.vols
     state.df_be = state.df_param_be = state.df_param_dest = None
     state.df_benev = state.df_param_benev = None
     state.df_vols = None
@@ -296,10 +279,12 @@ def render_tab_inputs():
     state = get_state()
 
     cloud_mode = IS_STREAMLIT_CLOUD
-    if cloud_mode and not cp.is_graph_onedrive():
+    if "source_error" in st.session_state:
+        st.error(f"❌ {st.session_state['source_error']}")
+    if cloud_mode and not is_graph_onedrive():
         st.warning(CLOUD_MESSAGE)
 
-    if cp.is_graph_onedrive():
+    if is_graph_onedrive():
         st.info("Mode OneDrive Graph actif. Connexion requise pour charger/écrire les fichiers.")
         client = cp.get_graph_client()
         if client is None:
@@ -322,25 +307,33 @@ def render_tab_inputs():
                             st.session_state.pop(flow_key, None)
                             st.rerun()
 
-    # Initialisation TMP si besoin (copies déjà préparées côté moteur)
+    # Initialisation TMP si besoin (copies déjà préparées côté session context)
+    ctx = get_session_context()
+    if ctx is None:
+        try:
+            ctx = ensure_session_context(strict_sources=True)
+        except FileNotFoundError as exc:
+            st.session_state["source_error"] = str(exc)
+            ctx = None
+
     if state.tdb_tmp is None:
-        state.tdb_tmp = TABLEAU_DE_BORD
+        state.tdb_tmp = ctx.source_paths.tableau_de_bord if ctx else _default_tmp_path("tdb")
     if state.benev_tmp is None:
-        state.benev_tmp = PLANNING_BENEVOLES
+        state.benev_tmp = ctx.source_paths.planning_benevoles if ctx else _default_tmp_path("benev")
     if state.vols_tmp is None:
-        state.vols_tmp = VOLS
+        state.vols_tmp = ctx.source_paths.vols if ctx else _default_tmp_path("vols")
     sync_state_paths_to_engine(state)
 
     # Chargements (évite d'afficher des erreurs sur Cloud si fichiers vides)
-    if not cloud_mode or cp.is_graph_onedrive() or state.tdb_tmp.stat().st_size > 0:
+    if not cloud_mode or is_graph_onedrive() or state.tdb_tmp.stat().st_size > 0:
         load_tdb_file(state)
-    if not cloud_mode or cp.is_graph_onedrive() or state.benev_tmp.stat().st_size > 0:
+    if not cloud_mode or is_graph_onedrive() or state.benev_tmp.stat().st_size > 0:
         load_benev_file(state)
-    if not cloud_mode or cp.is_graph_onedrive() or state.vols_tmp.stat().st_size > 0:
+    if not cloud_mode or is_graph_onedrive() or state.vols_tmp.stat().st_size > 0:
         load_vols_file(state)
 
     # ----- bouton refresh global ----
-    if (not cloud_mode or cp.is_graph_onedrive()) and st.button("🔄 Recharger TOUS les fichiers depuis OneDrive"):
+    if (not cloud_mode or is_graph_onedrive()) and st.button("🔄 Recharger TOUS les fichiers depuis OneDrive"):
         refresh_all(state)
 
     # Sélecteur de période
@@ -358,7 +351,7 @@ def render_tab_inputs():
 
         # BE planifiables
         try:
-            df_be = load_shipments_df(planifiables_only=True)
+            df_be = load_shipments_df(planifiables_only=True, tdb_path=state.tdb_tmp)
             if df_be is not None and not df_be.empty:
                 counts = (
                     df_be["Destination"]
@@ -378,8 +371,8 @@ def render_tab_inputs():
         except Exception as e:
             st.error(f"❌ Erreur BE : {e}")
 
-        if (not cloud_mode or cp.is_graph_onedrive()) and st.button("🔄 Recharger TDB depuis OneDrive"):
-            refresh_from_onedrive(state, TABLEAU_DE_BORD_SRC, "tdb", load_tdb_file)
+        if (not cloud_mode or is_graph_onedrive()) and st.button("🔄 Recharger TDB depuis OneDrive"):
+            refresh_from_onedrive(state, get_tableau_de_bord_src(), "tdb", load_tdb_file)
 
         file = st.file_uploader("Importer TABLEAU_DE_BORD.xlsx", type=["xlsx"], key="up_tdb")
         if file:
@@ -394,8 +387,8 @@ def render_tab_inputs():
         st.write(f"🕒 Modifié : {pretty_mtime(state.benev_tmp)}")
         st.write(f"Dernier message traité : {benev_last_message(state.benev_tmp)}")
 
-        if (not cloud_mode or cp.is_graph_onedrive()) and st.button("🔄 Recharger Bénévoles depuis OneDrive"):
-            refresh_from_onedrive(state, PLANNING_BENEVOLES_SRC, "benev", load_benev_file)
+        if (not cloud_mode or is_graph_onedrive()) and st.button("🔄 Recharger Bénévoles depuis OneDrive"):
+            refresh_from_onedrive(state, get_planning_benevoles_src(), "benev", load_benev_file)
 
         file = st.file_uploader("Importer Planning Bénévoles.xlsx", type=["xlsx"], key="up_benev")
         if file:
@@ -413,7 +406,7 @@ def render_tab_inputs():
         try:
             dfv = state.df_vols
             if dfv is not None and "Date_Vol" in dfv.columns:
-                dates = pd.to_datetime(dfv["Date_Vol"], errors="coerce", dayfirst=True, format="%d/%m/%y")
+                dates = coerce_datetime(dfv["Date_Vol"], errors="coerce", dayfirst=True, format="%d/%m/%y")
                 dates = dates.dropna()
                 if not dates.empty:
                     dmin, dmax = dates.min(), dates.max()
@@ -469,7 +462,10 @@ def render_tab_inputs():
                                     from loaders.load_vols_api import copy_api_sheet_to_tmp
                                     copy_api_sheet_to_tmp(sheet_name)
                                     from loaders.load_vols import load_vols_df
-                                    state.df_vols = load_vols_df()
+                                    state.df_vols = load_vols_df(
+                                        vols_path=Path(state.vols_tmp),
+                                        param_dest_df=state.df_param_dest,
+                                    )
                                 except Exception:
                                     pass
                             except Exception as e:
@@ -481,8 +477,8 @@ def render_tab_inputs():
             else:
                 st.warning("Sélectionne une période avant d'appeler l'API.")
         else:
-            if (not cloud_mode or cp.is_graph_onedrive()) and st.button("🔄 Recharger Vols depuis OneDrive"):
-                refresh_from_onedrive(state, VOLS_SRC, "vols", load_vols_file)
+            if (not cloud_mode or is_graph_onedrive()) and st.button("🔄 Recharger Vols depuis OneDrive"):
+                refresh_from_onedrive(state, get_vols_src(), "vols", load_vols_file)
 
             file = st.file_uploader("Importer Vols.xlsx", type=["xlsx"], key="up_vols")
             if file:

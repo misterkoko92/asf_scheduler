@@ -8,8 +8,14 @@ import re
 
 import pandas as pd
 
-from scheduler.format_rules import format_be_number
+from utils.identifiers import normalize_be_number
 import scheduler.config_paths as cp
+from asf_app.config.runtime import (
+    get_onedrive_root,
+    get_tmp_dir,
+    is_graph_onedrive,
+    get_listes_colisage_remote_dir,
+)
 
 _BE_FILENAME_RE = re.compile(r"\bBE\D*([0-9]{6})(?![0-9])", re.IGNORECASE)
 _DEFAULT_DIR_NAME = "8-Listes de colisage"
@@ -19,16 +25,13 @@ def get_colisage_dir() -> Path | str:
     env_override = os.getenv("ASF_LISTES_COLISAGE_DIR")
     if env_override:
         return Path(env_override).expanduser()
-    if cp.is_graph_onedrive():
-        return cp.LISTES_COLISAGE_REMOTE_DIR
-    return cp.ASF_ONEDRIVE / _DEFAULT_DIR_NAME
+    if is_graph_onedrive():
+        return get_listes_colisage_remote_dir()
+    return get_onedrive_root() / _DEFAULT_DIR_NAME
 
 
 def _normalize_be_key(value: str) -> str:
-    digits = format_be_number(value)
-    if len(digits) >= 6:
-        return digits[-6:]
-    return digits
+    return normalize_be_number(value)
 
 
 def collect_be_keys(df: pd.DataFrame) -> set[str]:
@@ -54,7 +57,7 @@ def collect_be_keys(df: pd.DataFrame) -> set[str]:
 def index_pdfs_by_be(base_dir: Path | str | None = None) -> dict[str, list[str]]:
     base_dir = base_dir or get_colisage_dir()
     index: dict[str, list[str]] = {}
-    if cp.is_graph_onedrive():
+    if is_graph_onedrive():
         remote_dir = str(base_dir)
         items = cp.list_onedrive_files(remote_dir, recursive=True, suffixes=[".pdf"])
         for item in items:
@@ -104,9 +107,9 @@ def find_be_pdf_attachments(
     attachments: list[str] = []
     for key in be_keys:
         for entry in pdf_index.get(key, []):
-            if cp.is_graph_onedrive():
+            if is_graph_onedrive():
                 remote_path = str(entry)
-                local_path = cp.TMP_DIR / "onedrive_cache" / "listes_colisage" / remote_path
+                local_path = get_tmp_dir() / "onedrive_cache" / "listes_colisage" / remote_path
                 if not local_path.exists():
                     cp.download_onedrive_file(remote_path, local_path, interactive=False)
                 if local_path.exists():

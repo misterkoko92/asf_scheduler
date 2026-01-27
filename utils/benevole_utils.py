@@ -1,7 +1,7 @@
 import pandas as pd
 from typing import Optional, Tuple
 
-from utils.datetime_utils import parse_date_series, parse_time_series
+from utils.datetime_utils import coerce_datetime, parse_date_series, parse_time_series
 
 
 def count_benevoles_with_dispo(
@@ -19,7 +19,7 @@ def count_benevoles_with_dispo(
 
     df_tmp = df_dispo.copy()
     if "Date_dt" in df_tmp.columns:
-        df_tmp["_Date_dt"] = pd.to_datetime(df_tmp["Date_dt"], errors="coerce")
+        df_tmp["_Date_dt"] = coerce_datetime(df_tmp["Date_dt"], errors="coerce")
     else:
         df_tmp["_Date_dt"] = parse_date_series(df_tmp.get("Date", pd.Series(dtype=object)))
 

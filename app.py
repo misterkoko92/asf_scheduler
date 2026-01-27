@@ -13,7 +13,6 @@ from asf_app.ui.theme import apply_theme
 from asf_app.ui.ui_inputs import render_tab_inputs
 from asf_app.ui.ui_week_data import render_tab_week_data
 from asf_app.ui.ui_params import render_tab_params
-from asf_app.ui.ui_planning.ui_planning import render_tab_planning
 from asf_app.ui.ui_manual import render_tab_manual
 from asf_app.ui.ui_logs import render_tab_logs
 from asf_app.ui.ui_communication.ui_communication import render_tab_communication  # <-- FIX IMPORT
@@ -26,11 +25,14 @@ from scheduler.config_paths import (
     TABLEAU_DE_BORD,
     PLANNING_BENEVOLES,
     VOLS,
-    prepare_paths,
 )
+from asf_app.config.session_context import ensure_session_context
 
-# Prépare les copies temporaires OneDrive dès le démarrage de l'UI
-prepare_paths(copy_sources=True)
+ctx = None
+try:
+    ctx = ensure_session_context(strict_sources=True)
+except FileNotFoundError as exc:
+    st.session_state["source_error"] = str(exc)
 
 # Masquer les UserWarning openpyxl (Data Validation non supportée)
 warnings.filterwarnings(
@@ -44,13 +46,20 @@ DEFAULT_USE_MODERN_THEME = False  # Passe à True pour activer la refonte visuel
 # ---------------------------------------
 # SESSION STATE INIT
 # ---------------------------------------
-def init_session_state():
+def init_session_state(session_ctx=None):
     if "paths" not in st.session_state:
-        st.session_state.paths = {
-            "tdb": str(TABLEAU_DE_BORD),
-            "benev": str(PLANNING_BENEVOLES),
-            "vols": str(VOLS),
-        }
+        if session_ctx is not None:
+            st.session_state.paths = {
+                "tdb": str(session_ctx.source_paths.tableau_de_bord),
+                "benev": str(session_ctx.source_paths.planning_benevoles),
+                "vols": str(session_ctx.source_paths.vols),
+            }
+        else:
+            st.session_state.paths = {
+                "tdb": str(TABLEAU_DE_BORD),
+                "benev": str(PLANNING_BENEVOLES),
+                "vols": str(VOLS),
+            }
 
     st.session_state.setdefault("dfs", {})
     st.session_state.setdefault("planning_df", None)
@@ -58,7 +67,7 @@ def init_session_state():
     st.session_state.setdefault("log_contents", "")
     st.session_state.setdefault("use_modern_theme", DEFAULT_USE_MODERN_THEME)
 
-init_session_state()
+init_session_state(ctx)
 
 
 # ---------------------------------------

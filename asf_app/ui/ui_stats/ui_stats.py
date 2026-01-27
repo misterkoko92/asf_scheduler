@@ -8,6 +8,7 @@ from pathlib import Path
 from datetime import datetime
 
 import pandas as pd
+from utils.datetime_utils import coerce_datetime
 import numpy as np
 import streamlit as st
 import plotly.express as px
@@ -25,7 +26,8 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 from reportlab.lib.units import cm
 
-import scheduler.config_paths as cp
+from asf_app.config.runtime import get_onedrive_root, get_output_planning_dir
+from asf_app.services.planning_exports_service import load_planning_xlsx as _load_planning_xlsx
 
 
 # ==========================================================================
@@ -138,7 +140,7 @@ def _filter_period(df: pd.DataFrame, period: str, ref_date=None) -> pd.DataFrame
 
     if ref_date is None:
         ref_date = df["date_dt"].max()
-    ref = pd.to_datetime(ref_date, errors="coerce")
+    ref = coerce_datetime(ref_date, errors="coerce")
     if pd.isna(ref):
         return df
 
@@ -184,158 +186,7 @@ def _select_period(df: pd.DataFrame, label: str, general_period: str) -> pd.Data
 
 
 def load_planning_xlsx(path: Path, default_year: int | None = None) -> pd.DataFrame:
-    """
-    Loader robuste pour les plannings ASFmm 2025 (formats Excel / macro).
-
-    Hypothèses sur la maquette :
-    - On ne regarde que le PREMIER onglet.
-    - Colonnes A→Q (0→16) contiennent :
-        A : bloc jour / vide / TOTAL
-        B : ITEM (masqué, inutilisé)
-        C : DATE LONGUE (vraie date Excel)
-        D : NOM bénévoles (format Prénom / Prénom court + NOM)
-        ...
-        F : DESTINATION (nom complet, ex : BRAZZAVILLE)
-        G : IATA (ex : BZV)
-        H : ROUTING
-        I : N° de vol
-        J : Heure de vol
-        K : N° BE (YYNNNN)
-        L : Nb colis
-        M : Type de colis
-        N : Observations (ignoré)
-        O : Date transfert
-        P : Expéditeur
-        Q : Destinataire
-
-    Sortie :
-        DataFrame avec colonnes :
-        ['date', 'nom', 'destination_nom', 'destination_iata', 'routing',
-         'vol_info', 'heure', 'be', 'nb_colis', 'type', 'expediteur',
-         'destinataire']
-    """
-    path = Path(path)
-    if not path.exists():
-        return pd.DataFrame()
-
-    try:
-        df_raw = pd.read_excel(path, sheet_name=0, header=None, dtype=object)
-    except Exception as e:
-        print(f"[load_planning_xlsx] Erreur lecture Excel {path}: {e}")
-        return pd.DataFrame()
-
-    if df_raw.empty:
-        return pd.DataFrame()
-
-    # Certains fichiers ont moins de colonnes : on pad jusqu’à 17 colonnes.
-    min_cols = 17
-    n_cols = max(min_cols, df_raw.shape[1])
-    df = df_raw.reindex(columns=range(n_cols)).iloc[:, :17].copy()
-    df.columns = list(range(17))
-
-    def _parse_date_long_fr(val):
-        if pd.isna(val):
-            return pd.NaT
-        s = str(val).strip()
-        if not s:
-            return pd.NaT
-        # Essai direct (peut contenir l'année)
-        dt = pd.to_datetime(s, errors="coerce", dayfirst=True)
-        if pd.notna(dt):
-            return dt
-        parts = s.split()
-        if len(parts) >= 2:
-            # ex: "Lundi 01/12"
-            date_part = parts[-1]
-            year = default_year or datetime.now().year
-            try:
-                return pd.to_datetime(f"{date_part}/{year}", format="%d/%m/%Y", errors="coerce")
-            except Exception:
-                pass
-        return pd.NaT
-
-    df2 = pd.DataFrame()
-    df2["date_longue"] = df[2].apply(_parse_date_long_fr)
-    df2["date"] = df2["date_longue"].ffill().dt.date.astype("string")
-
-    df2["nom"] = df[3]
-    df2["destination_nom"] = df[5]
-    df2["destination_iata"] = df[6]
-    df2["routing"] = df[7]
-    df2["vol_info"] = df[8]
-    df2["heure"] = df[9]
-    df2["be_raw"] = df[10]
-    df2["nb_colis"] = df[11]
-    df2["type"] = df[12]
-    df2["expediteur"] = df[15]   # Colonne P
-    df2["destinataire"] = df[16]  # Colonne Q
-
-    # Certaines lignes masquent volontairement routing/vol/heure pour lisibilité.
-    # On remplit les vides successifs avec la première ligne complète du bloc.
-    fill_cols = [
-        "nom",
-        "destination_nom",
-        "destination_iata",
-        "routing",
-        "vol_info",
-        "heure",
-        "date",
-        "expediteur",
-        "destinataire",
-    ]
-    for col in fill_cols:
-        df2[col] = df2[col].replace(r"^\s*$", pd.NA, regex=True).ffill()
-
-    df2["be"] = (
-        df2["be_raw"]
-        .astype(str)
-        .str.replace(r"\.0$", "", regex=True)
-        .str.strip()
-    )
-
-    mask_be = df2["be"].str.match(r"^\d+$", na=False)
-    df2 = df2[mask_be].copy()
-
-    if df2.empty:
-        return pd.DataFrame()
-
-    try:
-        df2["nb_colis"] = (
-            pd.to_numeric(df2["nb_colis"], errors="coerce")
-            .fillna(0)
-            .astype(int)
-        )
-    except Exception:
-        df2["nb_colis"] = 0
-
-    for col in [
-        "nom",
-        "destination_nom",
-        "destination_iata",
-        "routing",
-        "vol_info",
-        "heure",
-        "type",
-        "expediteur",
-        "destinataire",
-    ]:
-        df2[col] = df2[col].astype(str).str.strip()
-
-    keep = [
-        "date",
-        "nom",
-        "destination_nom",
-        "destination_iata",
-        "routing",
-        "vol_info",
-        "heure",
-        "be",
-        "nb_colis",
-        "type",
-        "expediteur",
-        "destinataire",
-    ]
-    return df2[keep]
+    return _load_planning_xlsx(path, default_year=default_year)
 
 
 # ==========================================================================
@@ -361,7 +212,7 @@ def _load_all_plannings(base_override: Path | None = None) -> pd.DataFrame:
         from scheduler.config_paths import detect_onedrive_asf, get_planning_dirs
         base_root = detect_onedrive_asf()
     except Exception:
-        base_root = cp.ASF_ONEDRIVE
+        base_root = get_onedrive_root()
     try:
         roots = get_planning_dirs()
     except Exception:
@@ -369,7 +220,7 @@ def _load_all_plannings(base_override: Path | None = None) -> pd.DataFrame:
     if base_override:
         roots.insert(0, base_override)
     if not roots:
-        roots = [base_root / "Planning MAB" / "ASFmm PLANNING 2025", base_root / "Planning MAB", cp.OUTPUT_PLANNING_DIR]
+        roots = [base_root / "Planning MAB" / "ASFmm PLANNING 2025", base_root / "Planning MAB", get_output_planning_dir()]
     seen = []
     all_files: list[Path] = []
     for r in roots:
@@ -417,7 +268,7 @@ def _load_all_plannings(base_override: Path | None = None) -> pd.DataFrame:
         df["week"] = wk
         df["source_file"] = f.name
 
-        df["date_dt"] = pd.to_datetime(df["date"], errors="coerce")
+        df["date_dt"] = coerce_datetime(df["date"], errors="coerce")
         df["year"] = df["date_dt"].dt.year
         df["month"] = df["date_dt"].dt.month
         df["jour_semaine"] = df["date_dt"].dt.dayofweek  # 0=lundi
@@ -609,7 +460,7 @@ def plot_hour_day_heatmap(df: pd.DataFrame, general_period: str):
 
     def _parse_hour(val):
         try:
-            t = pd.to_datetime(str(val), errors="coerce").time()
+            t = coerce_datetime(str(val), errors="coerce").time()
             return t.hour if t else np.nan
         except Exception:
             return np.nan
@@ -1135,7 +986,7 @@ def render_tab_stats():
         from scheduler.config_paths import detect_onedrive_asf
         base_root = detect_onedrive_asf()
     except Exception:
-        base_root = cp.ASF_ONEDRIVE
+        base_root = get_onedrive_root()
 
     default_dir = base_root / "Planning MAB" / "ASFmm PLANNING 2025"
     if "stats_planning_dir" not in st.session_state:
@@ -1339,7 +1190,7 @@ def render_tab_stats():
 
     if st.button("📑 Analyser toute l'année et générer un rapport PDF"):
         with st.spinner("Génération du rapport PDF en cours…"):
-            pdf_path = generate_year_pdf_report(df_year, cp.OUTPUT_PLANNING_DIR)
+            pdf_path = generate_year_pdf_report(df_year, get_output_planning_dir())
 
         st.success(f"Rapport généré : `{pdf_path.name}`")
 

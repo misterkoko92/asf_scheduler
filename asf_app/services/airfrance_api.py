@@ -10,11 +10,11 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any, Dict, List
 
 import requests
 
+from utils.datetime_utils import parse_iso_datetime, format_date_value, format_time_value
 try:
     from dotenv import load_dotenv
 except Exception:  # pragma: no cover - optional dependency for local .env loading
@@ -55,13 +55,13 @@ def _parse_iso(dt_str: str) -> tuple[str, str]:
     """
     Convertit un datetime ISO en (date JJ/MM/AA, heure HHhMM).
     """
-    if not dt_str:
+    dt_val = parse_iso_datetime(dt_str)
+    if dt_val is None:
         return "", ""
-    try:
-        dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
-        return dt.strftime("%d/%m/%y"), dt.strftime("%Hh%M")
-    except Exception:
-        return "", ""
+    return (
+        format_date_value(dt_val, fmt="%d/%m/%y", default=""),
+        format_time_value(dt_val, fmt="%Hh%M", default=""),
+    )
 
 
 @dataclass

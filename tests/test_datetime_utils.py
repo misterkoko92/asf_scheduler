@@ -16,6 +16,13 @@ def test_parse_date_series_formats():
     assert parsed.dt.day.tolist() == [15, 16, 17]
 
 
+def test_parse_date_series_no_dayfirst_false():
+    ser = pd.Series(["01/02/25"])
+    parsed = parse_date_series(ser, allow_dayfirst_false=False)
+    assert parsed.dt.day.tolist()[0] == 1
+    assert parsed.dt.month.tolist()[0] == 2
+
+
 def test_parse_time_series_and_normalize():
     ser = pd.Series(["10h00", "18:20", "07:05:00", ""])
     parsed = parse_time_series(ser)
@@ -35,3 +42,10 @@ def test_parse_time_series_numeric_excel():
     parsed = parse_time_series(ser)
     assert parsed.dt.hour.tolist()[:2] == [12, 6]
     assert parsed.dt.minute.tolist()[:2] == [0, 0]
+
+
+def test_parse_time_series_hour_only_string():
+    ser = pd.Series(["10"])
+    parsed = parse_time_series(ser, allow_hour_only=True)
+    assert parsed.dt.hour.tolist()[0] == 10
+    assert parsed.dt.minute.tolist()[0] == 0

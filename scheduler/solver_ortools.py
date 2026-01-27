@@ -34,6 +34,12 @@ from scheduler.config import (
 )
 from utils.logging_utils import get_logger
 from scheduler.planning_schema import normalize_planning_df
+from utils.datetime_utils import (
+    coerce_datetime,
+    parse_date_value_as_date,
+    parse_time_value_as_time,
+    format_time_value,
+)
 
 
 # =====================================================================
@@ -542,7 +548,7 @@ def _group_shipments(df_be: pd.DataFrame) -> pd.DataFrame:
 
 def _parse_vols(df_vols_raw: pd.DataFrame, dest_info: Dict[str, Dict[str, Any]]) -> pd.DataFrame:
     def _parse_datetime(row: pd.Series) -> Optional[datetime]:
-        date_val = row.get("Date_Vol_dt") or pd.to_datetime(
+        date_val = row.get("Date_Vol_dt") or coerce_datetime(
             row.get("Date_Vol"), errors="coerce", dayfirst=True
         )
         if pd.isna(date_val):
@@ -551,7 +557,10 @@ def _parse_vols(df_vols_raw: pd.DataFrame, dest_info: Dict[str, Dict[str, Any]])
         if time_val is None:
             time_val = time(0, 0)
         try:
-            return datetime.combine(pd.to_datetime(date_val).date(), time_val)
+            date_only = parse_date_value_as_date(date_val)
+            if date_only is None:
+                return None
+            return datetime.combine(date_only, time_val)
         except Exception:
             return None
 
@@ -585,7 +594,7 @@ def _parse_benevoles(df_benev_raw: pd.DataFrame, df_param: pd.DataFrame) -> pd.D
     df = df_benev_raw.copy()
 
     date_col = "Date_dt" if "Date_dt" in df.columns else "Date"
-    df["date_obj"] = pd.to_datetime(df[date_col], errors="coerce", dayfirst=True)
+    df["date_obj"] = coerce_datetime(df[date_col], errors="coerce", dayfirst=True)
     df = df[df["date_obj"].notna()].copy()
 
     if "Heure_Arrivee_time" in df.columns:
@@ -624,23 +633,7 @@ def _parse_benevoles(df_benev_raw: pd.DataFrame, df_param: pd.DataFrame) -> pd.D
 
 
 def _parse_time(val: Any) -> Optional[time]:
-    if val in ("", None):
-        return None
-    if isinstance(val, time):
-        return val
-    try:
-        sval = str(val).replace("h", ":")
-        for fmt in ("%H:%M", "%H:%M:%S"):
-            try:
-                return datetime.strptime(sval, fmt).time()
-            except Exception:
-                continue
-        num = float(sval)
-        hours = int(num)
-        minutes = int(round((num - hours) * 60))
-        return time(hour=hours, minute=minutes)
-    except Exception:
-        return None
+    return parse_time_value_as_time(val)
 
 
 # =====================================================================
@@ -912,7 +905,7 @@ def _extract_results(
                     "BE_Type": be.get("type", ""),
                     "Vol_Routing": vol.get("Routing", ""),
                     "Vol_Date": vol.get("Date_Vol") or vol["datetime"].date(),
-                    "Vol_Heure": vol.get("Heure_Vol") or vol["datetime"].time().strftime("%Hh%M"),
+                    "Vol_Heure": vol.get("Heure_Vol") or format_time_value(vol["datetime"].time(), fmt="%Hh%M", default=""),
                     "Vol_Numero": vol.get("Numero_Vol", ""),
                     "Vol_Destination": vol.get("Destination", vol.get("dest_iata", "")),
                     "Vol_Index": v_idx,
@@ -939,7 +932,7 @@ def _extract_results(
                     "Telephone": phone,
                     "Vol_Index": v_idx,
                     "Vol_Date": vol.get("Date_Vol") or vol["datetime"].date(),
-                    "Vol_Heure": vol.get("Heure_Vol") or vol["datetime"].time().strftime("%Hh%M"),
+                    "Vol_Heure": vol.get("Heure_Vol") or format_time_value(vol["datetime"].time(), fmt="%Hh%M", default=""),
                     "Vol_Numero": vol.get("Numero_Vol", ""),
                     "Destination": vol.get("Destination", vol.get("dest_iata", "")),
                     "Charge_Equiv": int(solver.Value(charge[v_idx])),
@@ -958,7 +951,7 @@ def _extract_results(
                 {
                     "Vol_Numero": vol.get("Numero_Vol", ""),
                     "Date": vol.get("Date_Vol") or vol["datetime"].date(),
-                    "Heure": vol.get("Heure_Vol") or vol["datetime"].time().strftime("%Hh%M"),
+                    "Heure": vol.get("Heure_Vol") or format_time_value(vol["datetime"].time(), fmt="%Hh%M", default=""),
                     "Destination": vol.get("Destination", vol.get("dest_iata", "")),
                     "Charge": int(solver.Value(charge[v_idx])),
                     "Nb_BE": int(solver.Value(nb_be[v_idx])),

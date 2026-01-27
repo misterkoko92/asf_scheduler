@@ -3,6 +3,7 @@
 
 import streamlit as st
 import pandas as pd
+from utils.datetime_utils import coerce_datetime, format_time_value
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -16,7 +17,7 @@ from scheduler.config_paths import (
     SHEET_MAG_CENTRAL,
 )
 
-from loaders.universal_loader import load_and_normalize
+from asf_app.services.input_service import load_normalized_sheet
 
 from scheduler.column_map import (
     column_map_param_benev,
@@ -31,7 +32,7 @@ from scheduler.column_map import (
 # ============================================================
 
 def load_df(path, sheet, mapping, header=0):
-    return load_and_normalize(
+    return load_normalized_sheet(
         path=path,
         sheet_name=sheet,
         mapping=mapping,
@@ -96,8 +97,8 @@ def render_tab_manual():
             # Assurer que les colonnes horaires soient éditables en texte (sinon Streamlit les bloque)
             def _time_to_str(val):
                 try:
-                    t = pd.to_datetime(val, errors="coerce").time()
-                    return t.strftime("%H:%M") if t else ""
+                    t = coerce_datetime(val, errors="coerce").time()
+                    return format_time_value(t, fmt="%H:%M", default="")
                 except Exception:
                     return str(val) if val is not None else ""
 
@@ -132,9 +133,9 @@ def render_tab_manual():
                 if "Heure_Arrivee" in edited.columns:
                     for i, row in edited.iterrows():
                         try:
-                            h = pd.to_datetime(row["Heure_Arrivee"]).time()
+                            h = coerce_datetime(row["Heure_Arrivee"]).time()
                             new_time = (datetime.combine(datetime.today(), h) - timedelta(hours=3)).time()
-                            edited.at[i, "Heure_Arrivee"] = new_time.strftime("%H:%M:%S")
+                            edited.at[i, "Heure_Arrivee"] = format_time_value(new_time, fmt="%H:%M:%S", default="")
                         except:
                             pass
 

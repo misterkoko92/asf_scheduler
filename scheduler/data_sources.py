@@ -20,6 +20,7 @@ from loaders.load_params import (
 )
 import scheduler.config_paths as cp
 from scheduler.config_paths import normalize
+from utils.datetime_utils import parse_iso_date_value, format_time_hm_loose
 
 
 class DataSource(Protocol):
@@ -156,40 +157,11 @@ def _unwrap_list(payload):
 
 
 def _parse_iso_date(value) -> date | None:
-    if value in (None, ""):
-        return None
-    if isinstance(value, date) and not isinstance(value, datetime):
-        return value
-    if isinstance(value, datetime):
-        return value.date()
-    sval = str(value).strip()
-    if not sval:
-        return None
-    if sval.endswith("Z"):
-        sval = f"{sval[:-1]}+00:00"
-    try:
-        return datetime.fromisoformat(sval).date()
-    except ValueError:
-        pass
-    try:
-        return datetime.strptime(sval, "%Y-%m-%d").date()
-    except ValueError:
-        return None
+    return parse_iso_date_value(value)
 
 
 def _format_time(value) -> str:
-    if value in (None, ""):
-        return ""
-    if isinstance(value, datetime):
-        return value.time().strftime("%H:%M")
-    if isinstance(value, time):
-        return value.strftime("%H:%M")
-    sval = str(value).strip().replace("h", ":")
-    if not sval:
-        return ""
-    if len(sval) >= 5:
-        return sval[:5]
-    return sval
+    return format_time_hm_loose(value)
 
 
 

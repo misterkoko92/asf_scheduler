@@ -13,6 +13,17 @@ import io
 import zipfile
 import platform
 import scheduler.config_paths as cp
+from asf_app.config.runtime import (
+    get_tmp_dir,
+    get_output_planning_dir,
+    is_graph_onedrive,
+    get_tableau_de_bord_remote,
+    get_planning_benevoles_remote,
+    get_vols_remote,
+    get_listes_colisage_remote_dir,
+    get_output_remote_dir_template,
+)
+from utils.datetime_utils import format_date_value
 
 
 # =============================================================================
@@ -41,13 +52,13 @@ def resolve_log_file() -> pathlib.Path:
     # ----------------------------------------
     # 2) Version dev (Streamlit, venv, IDE)
     # ----------------------------------------
-    return cp.TMP_DIR / "asf_scheduler.log"
+    return get_tmp_dir() / "asf_scheduler.log"
 
 
 LOG_FILE = resolve_log_file()
 
 # OneDrive cible
-LOG_FILE_ONEDRIVE = cp.OUTPUT_PLANNING_DIR / "asf_scheduler.log"
+LOG_FILE_ONEDRIVE = get_output_planning_dir() / "asf_scheduler.log"
 
 
 # =============================================================================
@@ -58,7 +69,7 @@ def pretty_mtime(path: pathlib.Path) -> str:
     """Retourne la dernière modification formatée."""
     try:
         ts = os.path.getmtime(path)
-        return datetime.fromtimestamp(ts).strftime("%d/%m/%Y %H:%M:%S")
+        return format_date_value(datetime.fromtimestamp(ts), fmt="%d/%m/%Y %H:%M:%S", default="N/A")
     except Exception:
         return "N/A"
 
@@ -112,23 +123,23 @@ def build_logs_export_bundle(log_path: pathlib.Path) -> bytes:
     except Exception:
         app_version = "unknown"
     info_lines = [
-        f"timestamp={datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"timestamp={format_date_value(datetime.now(), fmt='%Y-%m-%d %H:%M:%S', default='')}",
         f"python={sys.version}",
         f"platform={platform.platform()}",
         f"streamlit_version={getattr(st, '__version__', 'unknown')}",
         f"app_version={app_version}",
         f"cwd={os.getcwd()}",
         f"streamlit_cloud={cp.IS_STREAMLIT_CLOUD}",
-        f"onedrive_mode_graph={cp.is_graph_onedrive()}",
+        f"onedrive_mode_graph={is_graph_onedrive()}",
         f"onedrive_mode={cp.ONEDRIVE_MODE}",
         f"graph_configured={bool(cp.GRAPH_CLIENT_ID and cp.GRAPH_TENANT_ID)}",
-        f"tmp_dir={cp.TMP_DIR}",
-        f"output_dir={cp.OUTPUT_PLANNING_DIR}",
-        f"tdb_remote={cp.TABLEAU_DE_BORD_REMOTE}",
-        f"benev_remote={cp.PLANNING_BENEVOLES_REMOTE}",
-        f"vols_remote={cp.VOLS_REMOTE}",
-        f"colisage_remote_dir={cp.LISTES_COLISAGE_REMOTE_DIR}",
-        f"output_remote_template={cp.OUTPUT_PLANNING_REMOTE_DIR_TEMPLATE}",
+        f"tmp_dir={get_tmp_dir()}",
+        f"output_dir={get_output_planning_dir()}",
+        f"tdb_remote={get_tableau_de_bord_remote()}",
+        f"benev_remote={get_planning_benevoles_remote()}",
+        f"vols_remote={get_vols_remote()}",
+        f"colisage_remote_dir={get_listes_colisage_remote_dir()}",
+        f"output_remote_template={get_output_remote_dir_template()}",
         f"log_file={log_path}",
         f"log_exists={log_path.exists()}",
     ]

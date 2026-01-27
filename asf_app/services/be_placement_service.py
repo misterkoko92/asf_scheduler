@@ -8,6 +8,7 @@ import pandas as pd
 
 from scheduler import config
 from scheduler.planning_schema import normalize_planning_df
+from utils.datetime_utils import parse_date_value_as_date, parse_time_value_as_time, format_time_value
 
 
 class BEPlacementError(Exception):
@@ -21,25 +22,12 @@ class BEPlacementError(Exception):
 
 def _to_date(x):
     """Conversion robuste en date."""
-    try:
-        if isinstance(x, datetime.date):
-            return x
-        return pd.to_datetime(x).date()
-    except:
-        return None
+    return parse_date_value_as_date(x)
 
 
 def _to_time(x):
     """Conversion robuste en time (HH:MM)."""
-    try:
-        if isinstance(x, datetime.time):
-            return x
-        if isinstance(x, str) and ":" in x:
-            h, m = x.split(":")
-            return datetime.time(int(h), int(m))
-    except:
-        return None
-    return None
+    return parse_time_value_as_time(x)
 
 
 def _norm_str(x):
@@ -209,7 +197,7 @@ def _choose_best_benevole_on_flight(planning_df, date_vol, heure_str, vol, nb_co
 # =====================================================================
 
 def _build_new_row(be_num, nb_colis, dest, date_vol, heure_vol, vol, benevole):
-    heure_str = heure_vol.strftime("%H:%M") if isinstance(heure_vol, datetime.time) else ""
+    heure_str = format_time_value(heure_vol, fmt="%H:%M", default="")
 
     return {
         "Date_Vol": date_vol,

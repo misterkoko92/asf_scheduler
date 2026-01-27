@@ -14,6 +14,7 @@ import pandas as pd
 from scheduler import config
 from scheduler.planning_schema import normalize_planning_df, validate_planning_df
 from scheduler.solver_ortools import solve_planning_ortools
+from scheduler.data_sources import DataSource
 
 
 # =====================================================================
@@ -61,11 +62,13 @@ class Scheduler:
         rarity_mode: int = 1,
         simulation_id: Optional[str] = None,
         data_source_name: Optional[str] = None,
+        data_source: DataSource | None = None,
     ) -> None:
         self.mode: str = mode
         self.rarity_mode: int = rarity_mode
         self.simulation_id: Optional[str] = simulation_id
         self.data_source_name: Optional[str] = data_source_name
+        self.data_source: DataSource | None = data_source
         self.run_stats: Dict[str, Any] = {}
 
     # ------------------------------------------------------------
@@ -89,6 +92,7 @@ class Scheduler:
         priority_mode = "benevoles" if self.rarity_mode == 2 else "colis"
         planning, bilan, stats = solve_planning_ortools(
             priority_mode=priority_mode,
+            data_source=self.data_source,
             data_source_name=self.data_source_name,
         )
 

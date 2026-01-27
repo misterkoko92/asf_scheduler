@@ -18,6 +18,12 @@ from utils.identifiers import (
     normalize_be_number,
     normalize_vol_number,
 )
+from utils.datetime_utils import (
+    coerce_datetime,
+    format_date_fr_long_slash as _format_date_fr_long_slash,
+    format_date_fr_words as _format_date_fr_words,
+    format_heure_hh_mm as _format_heure_hh_mm,
+)
 
 # ============================================================
 # Helpers génériques
@@ -40,12 +46,13 @@ def _to_datetime(x):
     """Convertit robustement en datetime (Excel, str, datetime)."""
     if isinstance(x, datetime):
         return x
-
     if isinstance(x, float) and math.isnan(x):
         return None
-
     try:
-        return pd.to_datetime(x)
+        dt = coerce_datetime(x, errors="coerce")
+        if pd.isna(dt):
+            return None
+        return dt.to_pydatetime() if hasattr(dt, "to_pydatetime") else dt
     except Exception:
         return None
 
@@ -153,10 +160,13 @@ def _to_dt(v: Any) -> Optional[datetime]:
     try:
         if hasattr(v, "to_pydatetime"):
             return v.to_pydatetime()
-    except:
+    except Exception:
         pass
     try:
-        return datetime.fromisoformat(str(v))
+        dt_val = coerce_datetime(v, errors="coerce")
+        if pd.isna(dt_val):
+            return None
+        return dt_val.to_pydatetime() if hasattr(dt_val, "to_pydatetime") else dt_val
     except Exception:
         return None
 
@@ -178,17 +188,6 @@ def format_date(date_obj: Any, mode="default") -> str:
 # ============================================================
 # --------------- PARTIE COMMUNICATION 3.0 --------------------
 # ============================================================
-
-JOURS_FR = [
-    "Lundi", "Mardi", "Mercredi", "Jeudi",
-    "Vendredi", "Samedi", "Dimanche"
-]
-
-MOIS_FR = [
-    "janvier", "février", "mars", "avril", "mai", "juin",
-    "juillet", "août", "septembre", "octobre", "novembre", "décembre"
-]
-
 
 # ============================================================
 # Format BE “simple” (Communication)
@@ -229,11 +228,7 @@ def format_vol_display(value):
 # ============================================================
 
 def format_date_fr_long_slash(x):
-    dt = _to_datetime(x)
-    if dt is None:
-        return ""
-    jour = JOURS_FR[dt.weekday()]
-    return f"{jour} {dt.day:02d}/{dt.month:02d}/{dt.year}"
+    return _format_date_fr_long_slash(x)
 
 
 # ============================================================
@@ -241,12 +236,7 @@ def format_date_fr_long_slash(x):
 # ============================================================
 
 def format_date_fr_words(x):
-    dt = _to_datetime(x)
-    if dt is None:
-        return ""
-    jour = JOURS_FR[dt.weekday()]
-    mois = MOIS_FR[dt.month - 1]
-    return f"{jour} {dt.day} {mois}"
+    return _format_date_fr_words(x)
 
 
 # ============================================================
@@ -254,15 +244,4 @@ def format_date_fr_words(x):
 # ============================================================
 
 def format_heure_hh_mm(x):
-    if x is None:
-        return ""
-    if isinstance(x, str) and "h" in x:
-        return x
-
-    try:
-        dt = pd.to_datetime(x)
-        return f"{dt.hour}h{dt.minute:02d}"
-    except Exception:
-        pass
-
-    return str(x).replace(":", "h")
+    return _format_heure_hh_mm(x)
