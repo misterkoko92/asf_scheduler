@@ -4,10 +4,10 @@ Il n'est pas relié au reste du projet.
 
 Utilisation :
     # Un seul code IATA
-    python test_api/airfrance_api_test.py --dest ABJ --start 2025-12-08 --end 2025-12-14
+    python test_api/airfrance_api_test.py --dest ABJ --start 2025-12-08 --end 2025-12-14 --time-origin-type P
 
     # Tous les codes ParamDest du Tableau de Bord (1 appel/s)
-    python test_api/airfrance_api_test.py --from-paramdest --start 2025-12-08 --end 2025-12-14
+    python test_api/airfrance_api_test.py --from-paramdest --start 2025-12-08 --end 2025-12-14 --time-origin-type M
 """
 
 from __future__ import annotations
@@ -30,16 +30,33 @@ if str(BASE_DIR) not in sys.path:
 from loaders.universal_loader import load_and_normalize
 from scheduler.config_paths import TABLEAU_DE_BORD, SHEET_PARAM_DEST
 from scheduler.column_map import column_map_param_dest
+from asf_app.services.airfrance_api import (
+    _get_api_key,
+    get_api_limits,
+    get_default_time_origin_type,
+)
 
-API_KEY = "7krxvvkty8jn3dcgzuar7wck"
+API_KEY = _get_api_key()
+_AF_MAX_CALLS_PER_DAY, _AF_MIN_DELAY_SECONDS = get_api_limits()
+_AF_DEFAULT_TIME_ORIGIN_TYPE = get_default_time_origin_type()
 
 
-def fetch_flights(dest: str, start_date: str, end_date: str) -> Dict[str, Any]:
+def fetch_flights(
+    dest: str,
+    start_date: str,
+    end_date: str,
+    *,
+    time_origin_type: str,
+) -> Dict[str, Any]:
     """Appelle l'endpoint flightstatus pour une destination et une fenêtre de dates."""
+    if not API_KEY:
+        raise SystemExit("AF_API_KEY manquant (variable d'environnement ou .env).")
+
     url = (
         "https://api.airfranceklm.com/opendata/flightstatus"
         f"?startRange={start_date}T00:00:01Z&endRange={end_date}T23:59:59Z"
         f"&origin=CDG&destination={dest}&operatingAirlineCode=AF"
+        f"&timeOriginType={time_origin_type}"
     )
     # Respecter la limite 1 req/s si vous enchaînez les appels (à gérer à l'appelant)
     resp = requests.get(
@@ -85,15 +102,23 @@ def extract_routes(data: Dict[str, Any]) -> List[Dict[str, str]]:
         destination = cleaned_route[-1]
         num_vol = f'{flight["airline"]["code"]} {flight["flightNumber"]}'
         leg = (flight.get("flightLegs") or [{}])[0]
-        sched = leg.get("departureInformation", {}).get("times", {}).get("scheduled", "")
-        d_str, h_str = _parse_dt(sched)
+        times = leg.get("departureInformation", {}).get("times", {})
+        estimated = times.get("estimated", {}) if isinstance(times, dict) else {}
+        estimated_value = estimated.get("value") if isinstance(estimated, dict) else ""
+        dep_time = (
+            str(times.get("latestPublished") or "")
+            or str(times.get("actual") or "")
+            or str(estimated_value or "")
+            or str(times.get("scheduled") or "")
+        ) if isinstance(times, dict) else ""
+        d_str, h_str = _parse_dt(dep_time)
         flights.append(
             {
                 "Origine": origin,
                 "Destination": destination,
                 "route": route,
                 "num_vol": num_vol,
-                "horaire": sched,
+                "horaire": dep_time,
                 "Date_depart": d_str,
                 "Heure_depart": h_str,
             }
@@ -108,6 +133,12 @@ def main():
     parser.add_argument("--start", default="2025-12-08", help="Date début (YYYY-MM-DD)")
     parser.add_argument("--end", default="2025-12-14", help="Date fin (YYYY-MM-DD)")
     parser.add_argument("--out", default="test_api/export_vols.xlsx", help="Chemin du fichier Excel d'export")
+    parser.add_argument(
+        "--time-origin-type",
+        default=_AF_DEFAULT_TIME_ORIGIN_TYPE,
+        choices=["S", "M", "I", "P"],
+        help="Paramètre Air France timeOriginType (défaut: AF_TIME_ORIGIN_TYPE ou P)",
+    )
     args = parser.parse_args()
 
     all_rows: List[Dict[str, str]] = []
@@ -115,11 +146,20 @@ def main():
     if args.from_paramdest:
         df_paramdest = load_and_normalize(TABLEAU_DE_BORD, SHEET_PARAM_DEST, column_map_param_dest, header=0)
         codes = sorted(set(df_paramdest["Dest_IATA"].dropna().astype(str).str.upper()))
+        if len(codes) > _AF_MAX_CALLS_PER_DAY:
+            raise SystemExit(
+                f"Trop de destinations ({len(codes)}) pour AF_MAX_CALLS_PER_DAY={_AF_MAX_CALLS_PER_DAY}."
+            )
         print(f"Codes ParamDest détectés ({len(codes)}): {codes}")
         for code in codes:
             print(f"\n=== {code} ===")
             try:
-                data = fetch_flights(code, args.start, args.end)
+                data = fetch_flights(
+                    code,
+                    args.start,
+                    args.end,
+                    time_origin_type=args.time_origin_type,
+                )
                 routes = extract_routes(data)
                 all_rows.extend(routes)
                 print(f"Vols trouvés : {len(routes)}")
@@ -127,11 +167,16 @@ def main():
                     print(r)
             except SystemExit as e:
                 print(f"Erreur pour {code}: {e}")
-            time.sleep(1.1)  # respecter la limite 1 requête/s
+            time.sleep(_AF_MIN_DELAY_SECONDS)  # respecter le délai mini configuré
     else:
         if not args.dest:
             raise SystemExit("Spécifie --dest ou --from-paramdest")
-        data = fetch_flights(args.dest, args.start, args.end)
+        data = fetch_flights(
+            args.dest,
+            args.start,
+            args.end,
+            time_origin_type=args.time_origin_type,
+        )
         routes = extract_routes(data)
         all_rows.extend(routes)
 

@@ -7,10 +7,7 @@
 # Le texte, le sujet, les adresses TO/CC/BCC sont fournis par l’UI.
 # --------------------------------------------------------
 
-import platform
-from pathlib import Path
 from asf_app.ui.ui_communication.outlook import create_outlook_draft
-from datetime import datetime
 
 
 # --------------------------------------------------------

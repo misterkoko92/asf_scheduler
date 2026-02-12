@@ -13,7 +13,7 @@ import pandas as pd
 
 from scheduler import config
 from scheduler.planning_schema import normalize_planning_df, validate_planning_df
-from scheduler.solver_ortools import solve_planning_ortools
+from scheduler.solver_router import solve_planning_ortools, get_solver_version
 from scheduler.data_sources import DataSource
 
 
@@ -34,6 +34,7 @@ logger = logging.getLogger("ASF-SCHEDULER")
 
 def log_full_config() -> None:
     logger.info("=== CONFIGURATION ACTUELLE ===")
+    logger.info("SOLVER_VERSION = %s", get_solver_version())
     logger.info("MAX_BE_PER_FLIGHT = %s", config.MAX_BE_PER_FLIGHT)
     logger.info("MAX_EQUIV_PER_VOLUNTEER = %s", config.MAX_EQUIV_PER_VOLUNTEER)
     logger.info("MAX_BENEV_PER_VOL = %s", config.MAX_BENEV_PER_VOL)

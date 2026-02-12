@@ -31,6 +31,7 @@ Il combine :
   - planning complet
   - bilan expéditions
 - Interface Streamlit complète (OR-Tools uniquement)
+- Onglet Communication : génération des messages depuis le planning de session ou un planning Excel OneDrive (feuille "Export planning")
 
 ---
 
@@ -79,6 +80,18 @@ La génération du planning se fait via l’onglet **Planning V2 (OR‑Tools)**.
 Variables d’environnement utiles (chemins) :
 - `ASF_ONEDRIVE_ROOT` : surcharge la racine OneDrive utilisée par l’app.
 - `ASF_LISTES_COLISAGE_DIR` : surcharge le dossier des PDF “Listes de colisage” (pièces jointes des mails Destination/Expéditeur).
+
+Variables d’environnement Air France API :
+- `AF_API_KEY` : clé API Air France/KLM.
+- `AF_MAX_CALLS_PER_DAY` : garde-fou local du nombre d’appels quotidiens (défaut `100`).
+- `AF_MIN_DELAY_SECONDS` : délai mini entre deux appels API (défaut `1.1`).
+- `AF_TIME_ORIGIN_TYPE` : référence temporelle des vols (`S`, `M`, `I`, `P`, défaut `P`).
+
+Initialisation rapide :
+```bash
+cp .env.example .env
+# puis renseigner AF_API_KEY dans .env
+```
 
 ---
 

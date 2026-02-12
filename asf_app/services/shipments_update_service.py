@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from datetime import date, timedelta
 from typing import Optional
 
 import pandas as pd
@@ -11,6 +12,7 @@ import scheduler.config_paths as cp
 from loaders.universal_loader import load_and_normalize
 from scheduler.column_map import column_map_mag_central
 from scheduler.config_paths import SHEET_MAG_CENTRAL, TABLEAU_DE_BORD
+from asf_app.config.runtime import get_tableau_de_bord_src
 from utils.datetime_utils import (
     parse_date_series,
     parse_time_series,
@@ -88,43 +90,20 @@ def load_be_status_d_for_week(week: int, year: int, *, tdb_path: Path | None = N
     return df
 
 
-def apply_planning_update(
-    path: Path,
-    action: str,
-    be_num: str,
-    dest_iata: str,
-    date_new: str,
-    vol_new: str,
-    heure_new: str,
-    bene_choice: str,
-    be_info: pd.Series,
-    plan_row: Optional[pd.Series] = None,
-    plan_row_full: Optional[pd.Series] = None,
-    bene_meta: Optional[dict] = None,
-    bene_changed: bool = False,
-):
-    """
-    Construit un DF consolidé, applique l'action, puis regénère Export/Planning.
-    """
-    import openpyxl
-    from openpyxl.styles import PatternFill
+def _norm_be(value: str) -> str:
+    return normalize_be_number(value) or str(value)
 
-    def _norm_be(val: str) -> str:
-        return normalize_be_number(val) or str(val)
 
-    # Lecture Export planning en DF
+def _load_export_df(path: Path) -> pd.DataFrame:
     try:
         df_export = pd.read_excel(path, sheet_name="Export planning")
     except Exception:
         df_export = pd.DataFrame()
-    # Fallback Planning si Export planning absent
     if df_export.empty:
         try:
             df_export = pd.read_excel(path, sheet_name=0)
         except Exception:
             df_export = pd.DataFrame()
-
-    # Normalisation minimale
     df_export = df_export.copy()
     df_export.columns = [str(c) for c in df_export.columns]
     if "BE_Numero" not in df_export.columns:
@@ -137,106 +116,546 @@ def apply_planning_update(
         df_export["HEURE_MIN"] = hour_min_from_series(df_export["Heure_Vol"])
     if "_STATUS" not in df_export.columns:
         df_export["_STATUS"] = "normal"
+    return df_export
 
-    # Appliquer l'action sur le DF
+
+def _apply_update_to_export_df(
+    df_export: pd.DataFrame,
+    *,
+    action: str,
+    be_num: str,
+    dest_iata: str,
+    date_new: str,
+    vol_new: str,
+    heure_new: str,
+    bene_choice: str,
+    be_info: dict | pd.Series | None,
+    plan_row_full: dict | pd.Series | None,
+    bene_meta: Optional[dict],
+    bene_changed: bool,
+) -> pd.DataFrame:
+    be_info = be_info if isinstance(be_info, dict) else (be_info.to_dict() if be_info is not None else {})
+    plan_row_full = plan_row_full if isinstance(plan_row_full, dict) else (
+        plan_row_full.to_dict() if plan_row_full is not None else {}
+    )
+
+    def _is_missing(val: object) -> bool:
+        if val is None:
+            return True
+        try:
+            if pd.isna(val):
+                return True
+        except Exception:
+            pass
+        sval = str(val).strip().lower()
+        return sval in ("", "nan", "none")
+
+    def _first_not_missing(*values: object) -> object:
+        for val in values:
+            if not _is_missing(val):
+                return val
+        return ""
+
+    def _from_plan_row(*keys: str) -> object:
+        if not plan_row_full:
+            return ""
+        try:
+            for k in keys:
+                if k in plan_row_full and not _is_missing(plan_row_full.get(k)):
+                    return plan_row_full.get(k)
+        except Exception:
+            pass
+        return ""
+
     if action == "Annulation":
         df_export.loc[df_export["BE_Key"] == _norm_be(be_num), "_STATUS"] = "old"
-    else:
-        # marquer l'ancienne ligne en old
-        df_export.loc[df_export["BE_Key"] == _norm_be(be_num), "_STATUS"] = "old"
-        # construire la nouvelle ligne
-        new_row = {
+        return df_export
+
+    df_export.loc[df_export["BE_Key"] == _norm_be(be_num), "_STATUS"] = "old"
+    existing_mask = df_export["BE_Key"] == _norm_be(be_num)
+    base_row = df_export.loc[existing_mask].iloc[0].to_dict() if existing_mask.any() else {}
+
+    date_val = parse_date_series(pd.Series([date_new])).iloc[0].date() if date_new else None
+    heure_val = parse_time_series(pd.Series([heure_new])).iloc[0].time() if heure_new else None
+    heure_norm = normalize_hour_str(pd.Series([heure_new])).iloc[0] if heure_new else ""
+    heure_min = hour_min_from_series(pd.Series([heure_new])).iloc[0] if heure_new else None
+
+    new_row = dict(base_row)
+    new_row.update(
+        {
             "BE_Numero": be_num,
             "BE_Key": _norm_be(be_num),
             "Destination": dest_iata,
             "IATA": dest_iata,
-            "Date_Vol": parse_date_series(pd.Series([date_new])).iloc[0].date() if date_new else None,
-            "Heure_Vol": parse_time_series(pd.Series([heure_new])).iloc[0].time() if heure_new else None,
-            "Heure": normalize_hour_str(pd.Series([heure_new])).iloc[0],
-            "HEURE_MIN": hour_min_from_series(pd.Series([heure_new])).iloc[0],
+            "Date_Vol": date_val,
+            "Heure_Vol": heure_val,
+            "Heure": heure_norm,
+            "HEURE_MIN": heure_min,
             "Numero_Vol": vol_new,
-            "Numero_Vol": vol_new,
-            "Routing": "",
             "Benevole": bene_choice,
-            "BE_Nb_Colis": be_info.get("BE_Nb_Colis", be_info.get("Nb_Colis", "")),
-            "BE_Nb_Equiv": be_info.get("BE_Nb_Equiv", be_info.get("Equiv_Colis", "")),
-            "BE_Type": be_info.get("BE_Type", ""),
-            "BE_Expediteur": be_info.get("BE_Expediteur", ""),
-            "BE_Destinataire": be_info.get("BE_Destinataire", ""),
             "_STATUS": "new",
         }
-        df_export = pd.concat([df_export, pd.DataFrame([new_row])], ignore_index=True)
+    )
 
-    # Tri
-    df_export = df_export.sort_values(by=["Date_Vol", "Heure_Vol", "BE_Numero"], kind="mergesort").reset_index(drop=True)
+    new_row["BE_Nb_Colis"] = _first_not_missing(
+        new_row.get("BE_Nb_Colis"),
+        be_info.get("BE_Nb_Colis"),
+        be_info.get("Nb_Colis"),
+        _from_plan_row("BE_Nb_Colis", "Nb_Colis", "NB_COLIS", "BE_COLIS"),
+    )
+    new_row["BE_Nb_Equiv"] = _first_not_missing(
+        new_row.get("BE_Nb_Equiv"),
+        be_info.get("BE_Nb_Equiv"),
+        be_info.get("Equiv_Colis"),
+        _from_plan_row("BE_Nb_Equiv", "Equiv_Colis", "BE_Equiv", "BE_Equiv_Colis"),
+        new_row.get("BE_Nb_Colis"),
+    )
+    new_row["BE_Type"] = _first_not_missing(
+        new_row.get("BE_Type"),
+        be_info.get("BE_Type"),
+        be_info.get("Type"),
+        _from_plan_row("BE_Type", "Type", "TYPE", "BE_TYPE"),
+    )
+    new_row["BE_Expediteur"] = _first_not_missing(
+        new_row.get("BE_Expediteur"),
+        be_info.get("BE_Expediteur"),
+        _from_plan_row("BE_Expediteur", "EXPEDITEUR", "EXP", "BE_EXP"),
+    )
+    new_row["BE_Destinataire"] = _first_not_missing(
+        new_row.get("BE_Destinataire"),
+        be_info.get("BE_Destinataire"),
+        _from_plan_row("BE_Destinataire", "DESTINATAIRE", "BE_DEST"),
+    )
 
-    # Écriture Excel
-    wb = openpyxl.load_workbook(path)
-    # incrémenter Q1 (version) si existant
-    q1_value = None
+    if bene_changed:
+        new_row["ID"] = _first_not_missing(bene_meta.get("ID") if bene_meta else "", "")
+        new_row["Telephone"] = _first_not_missing(bene_meta.get("Telephone") if bene_meta else "", "")
+    else:
+        new_row["ID"] = _first_not_missing(new_row.get("ID"), bene_meta.get("ID") if bene_meta else "")
+        new_row["Telephone"] = _first_not_missing(
+            new_row.get("Telephone"),
+            bene_meta.get("Telephone") if bene_meta else "",
+        )
+
+    return pd.concat([df_export, pd.DataFrame([new_row])], ignore_index=True)
+
+
+def _sort_export_df(df_export: pd.DataFrame) -> pd.DataFrame:
+    return df_export.sort_values(
+        by=["Date_Vol", "Heure_Vol", "BE_Numero"],
+        kind="mergesort",
+    ).reset_index(drop=True)
+
+
+def _sheet_year(name: str) -> int | None:
+    match = re.search(r"(20\d{2})", str(name))
+    return int(match.group(1)) if match else None
+
+
+def _sheet_year_suffix(name: str) -> str | None:
+    yr = _sheet_year(name)
+    return str(yr)[-2:] if yr else None
+
+
+def _mag_sheet_names(wb) -> list[str]:
+    names = [name for name in wb.sheetnames if str(name).strip().upper().startswith("MAG CENTRAL")]
+    if names:
+        return names
+    if cp.SHEET_MAG_CENTRAL in wb.sheetnames:
+        return [cp.SHEET_MAG_CENTRAL]
+    return [wb.active.title]
+
+
+def _mag_lookup_keys(be_key: str) -> list[str]:
+    keys: list[str] = []
+
+    def _add(val: object) -> None:
+        if val is None:
+            return
+        sval = str(val).strip()
+        if sval and sval not in keys:
+            keys.append(sval)
+
+    base = str(be_key).strip()
+    if not base:
+        return keys
+    _add(base)
+    _add(base.lstrip("0"))
+    if base.isdigit():
+        if len(base) >= 4:
+            suf4 = base[-4:]
+            _add(suf4)
+            _add(suf4.lstrip("0"))
+            try:
+                _add(str(int(suf4)))
+            except Exception:
+                pass
+        if len(base) >= 3:
+            suf3 = base[-3:]
+            _add(suf3)
+            _add(suf3.lstrip("0"))
+            try:
+                _add(str(int(suf3)))
+            except Exception:
+                pass
+    return keys
+
+
+def _alt_key_for_sheet(be_key: str, sheet_name: str) -> str | None:
+    if not be_key or not be_key.isdigit() or len(be_key) < 4:
+        return None
+    if not be_key.startswith("00"):
+        return None
+    suffix = _sheet_year_suffix(sheet_name)
+    if not suffix:
+        return None
+    return f"{suffix}{be_key[-4:]}"
+
+
+def _sheet_order_for_be(be_key: str, mag_sheet_names: list[str]) -> list[str]:
+    preferred = []
+    if be_key:
+        for name in mag_sheet_names:
+            suffix = _sheet_year_suffix(name)
+            if suffix and be_key.startswith(suffix):
+                preferred.append(name)
+    return preferred + [n for n in mag_sheet_names if n not in preferred]
+
+
+def _build_mag_index(ws_mag) -> dict[str, int]:
+    mag_index: dict[str, int] = {}
+    for row in ws_mag.iter_rows(min_row=1, max_row=ws_mag.max_row, min_col=1, max_col=1):
+        val = row[0].value
+        if val is None:
+            continue
+        sval = str(int(val)) if isinstance(val, (int, float)) else str(val).strip()
+        key = normalize_be_number(sval)
+        if not key:
+            continue
+        keys = {key, sval, key.lstrip("0")}
+        for k in keys:
+            mag_index[k] = row[0].row
+    return mag_index
+
+
+def _find_mag_target_row(
+    *,
+    be_key: str,
+    mag_sheet_names: list[str],
+    mag_indexes: dict[str, dict[str, int]],
+) -> tuple[str | None, int | None]:
+    base_keys = _mag_lookup_keys(be_key)
+    target_sheet = None
+    target_row = None
+    for sheet_name in _sheet_order_for_be(be_key, mag_sheet_names):
+        idx = mag_indexes.get(sheet_name, {})
+        if not idx:
+            continue
+        alt_key = _alt_key_for_sheet(be_key, sheet_name)
+        keys = ([alt_key] if alt_key else []) + base_keys
+        for key in keys:
+            row_idx = idx.get(key)
+            if row_idx:
+                target_sheet = sheet_name
+                target_row = row_idx
+                break
+        if target_row:
+            break
+    return target_sheet, target_row
+
+
+def _parse_mag_departure_date(date_new: str) -> date | None:
+    if not date_new:
+        return None
     try:
-        ws_plan = wb.worksheets[0]
-        q1_val = ws_plan["Q1"].value
-        q1_value = (int(q1_val) if q1_val not in (None, "") else 0) + 1
-        ws_plan["Q1"].value = q1_value
+        parsed = parse_date_series(pd.Series([date_new])).iloc[0]
+        if pd.isna(parsed):
+            return None
+        return parsed.date()
     except Exception:
-        pass
+        return None
 
-    def _clear_values(ws, max_row: int, max_col: int):
-        for row in ws.iter_rows(min_row=1, max_row=max_row, min_col=1, max_col=max_col):
-            for cell in row:
-                cell.value = None
 
-    # Export planning
-    ws_exp = (
-        wb["Export planning"]
-        if "Export planning" in wb.sheetnames
-        else wb.create_sheet("Export planning", 1)
+def _previous_iso_week_friday(date_obj: date | None) -> date | None:
+    if date_obj is None:
+        return None
+    try:
+        mon = date.fromisocalendar(date_obj.isocalendar()[0], date_obj.isocalendar()[1], 1)
+        return mon - timedelta(days=3)
+    except Exception:
+        return None
+
+
+def _clean_bene_id(value: object) -> str:
+    bene_id = str(value or "").strip()
+    if bene_id.endswith(".0"):
+        bene_id = bene_id[:-2]
+    return bene_id
+
+
+def apply_planning_updates_batch(
+    path: Path,
+    updates: list[dict],
+    *,
+    week: int,
+    year: int,
+    df_vols: Optional[pd.DataFrame] = None,
+    df_parambenev: Optional[pd.DataFrame] = None,
+    df_dispos: Optional[pd.DataFrame] = None,
+    df_paramdest: Optional[pd.DataFrame] = None,
+    increment_version: bool = True,
+    write_mag_central: bool = False,
+    tdb_source_path: Optional[Path] = None,
+) -> Path:
+    from asf_app.services.export_service import export_planning_excel
+
+    df_export = _load_export_df(path)
+    for upd in updates:
+        df_export = _apply_update_to_export_df(
+            df_export,
+            action=upd.get("action", ""),
+            be_num=upd.get("be_num", ""),
+            dest_iata=upd.get("dest_iata", ""),
+            date_new=upd.get("date_new", ""),
+            vol_new=upd.get("vol_new", ""),
+            heure_new=upd.get("heure_new", ""),
+            bene_choice=upd.get("bene_choice", ""),
+            be_info=upd.get("be_info", {}),
+            plan_row_full=upd.get("plan_row_full", {}),
+            bene_meta=upd.get("bene_meta", {}),
+            bene_changed=bool(upd.get("bene_changed", False)),
+        )
+
+    df_export = _sort_export_df(df_export)
+
+    if increment_version:
+        export_result = export_planning_excel(
+            df_export,
+            week,
+            year,
+            df_vols=df_vols,
+            df_parambenev=df_parambenev,
+            df_dispos=df_dispos,
+            df_paramdest=df_paramdest,
+            create_tables=False,
+            write_source_excel=False,
+            increment_version=True,
+            output_dir=path.parent,
+            generate_pdf=False,
+        )
+    else:
+        export_result = export_planning_excel(
+            df_export,
+            week,
+            year,
+            df_vols=df_vols,
+            df_parambenev=df_parambenev,
+            df_dispos=df_dispos,
+            df_paramdest=df_paramdest,
+            create_tables=False,
+            write_source_excel=False,
+            increment_version=False,
+            output_path=path,
+            generate_pdf=False,
+        )
+    cp.sync_local_file_to_onedrive(export_result.output_path)
+
+    if write_mag_central:
+        for upd in updates:
+            _update_mag_central_for_be(
+                be_num=upd.get("be_num", ""),
+                action=upd.get("action", ""),
+                date_new=upd.get("date_new", ""),
+                heure_new=upd.get("heure_new", ""),
+                vol_new=upd.get("vol_new", ""),
+                bene_choice=upd.get("bene_choice", ""),
+                bene_meta=upd.get("bene_meta", {}),
+                tdb_source_path=tdb_source_path,
+            )
+
+    return export_result.output_path
+
+
+def apply_planning_update(
+    path: Path,
+    action: str,
+    be_num: str,
+    dest_iata: str,
+    date_new: str,
+    vol_new: str,
+    heure_new: str,
+    bene_choice: str,
+    be_info: pd.Series,
+    week: int,
+    year: int,
+    df_vols: Optional[pd.DataFrame] = None,
+    df_parambenev: Optional[pd.DataFrame] = None,
+    df_dispos: Optional[pd.DataFrame] = None,
+    df_paramdest: Optional[pd.DataFrame] = None,
+    plan_row: Optional[pd.Series] = None,
+    plan_row_full: Optional[pd.Series] = None,
+    bene_meta: Optional[dict] = None,
+    bene_changed: bool = False,
+    increment_version: bool = True,
+    write_mag_central: bool = False,
+    tdb_source_path: Optional[Path] = None,
+):
+    """
+    Construit un DF consolidé, applique l'action, puis regénère Export/Planning.
+    Retourne le chemin du fichier planning mis à jour.
+    """
+    from asf_app.services.export_service import export_planning_excel
+
+    df_export = _load_export_df(path)
+    df_export = _apply_update_to_export_df(
+        df_export,
+        action=action,
+        be_num=be_num,
+        dest_iata=dest_iata,
+        date_new=date_new,
+        vol_new=vol_new,
+        heure_new=heure_new,
+        bene_choice=bene_choice,
+        be_info=be_info,
+        plan_row_full=plan_row_full,
+        bene_meta=bene_meta,
+        bene_changed=bene_changed,
     )
-    headers = list(df_export.columns)
-    max_row = max(ws_exp.max_row, len(df_export) + 1)
-    max_col = max(ws_exp.max_column, len(headers))
-    _clear_values(ws_exp, max_row, max_col)
-    for c_idx, h in enumerate(headers, start=1):
-        ws_exp.cell(row=1, column=c_idx, value=h)
-    for r_idx, (_, r) in enumerate(df_export.iterrows(), start=2):
-        for c_idx, h in enumerate(headers, start=1):
-            ws_exp.cell(row=r_idx, column=c_idx, value=r.get(h, ""))
+    df_export = _sort_export_df(df_export)
 
-    # Planning : reprendre uniquement les colonnes utiles et appliquer couleurs
-    ws_plan_new = (
-        wb["Planning"]
-        if "Planning" in wb.sheetnames
-        else wb.create_sheet("Planning", 0)
+    if increment_version:
+        export_result = export_planning_excel(
+            df_export,
+            week,
+            year,
+            df_vols=df_vols,
+            df_parambenev=df_parambenev,
+            df_dispos=df_dispos,
+            df_paramdest=df_paramdest,
+            create_tables=False,
+            write_source_excel=False,
+            increment_version=True,
+            output_dir=path.parent,
+            generate_pdf=False,
+        )
+    else:
+        export_result = export_planning_excel(
+            df_export,
+            week,
+            year,
+            df_vols=df_vols,
+            df_parambenev=df_parambenev,
+            df_dispos=df_dispos,
+            df_paramdest=df_paramdest,
+            create_tables=False,
+            write_source_excel=False,
+            increment_version=False,
+            output_path=path,
+            generate_pdf=False,
+        )
+    cp.sync_local_file_to_onedrive(export_result.output_path)
+
+    if write_mag_central:
+        _update_mag_central_for_be(
+            be_num=be_num,
+            action=action,
+            date_new=date_new,
+            heure_new=heure_new,
+            vol_new=vol_new,
+            bene_choice=bene_choice,
+            bene_meta=bene_meta,
+            tdb_source_path=tdb_source_path,
+        )
+    return export_result.output_path
+
+
+def _update_mag_central_for_be(
+    *,
+    be_num: str,
+    action: str,
+    date_new: str,
+    heure_new: str,
+    vol_new: str,
+    bene_choice: str,
+    bene_meta: Optional[dict],
+    tdb_source_path: Optional[Path],
+) -> str:
+    path = Path(tdb_source_path) if tdb_source_path is not None else get_tableau_de_bord_src()
+    if not path.exists():
+        return "missing"
+
+    try:
+        from openpyxl import load_workbook
+    except Exception:
+        return "openpyxl_missing"
+
+    try:
+        wb_mag = load_workbook(path)
+    except Exception:
+        return "read_error"
+
+    mag_sheet_names = _mag_sheet_names(wb_mag)
+    mag_sheet_names = sorted(
+        mag_sheet_names,
+        key=lambda n: (_sheet_year(n) is None, _sheet_year(n) or 0, str(n)),
     )
-    planning_cols = [
-        "Benevole", "unusedE", "unusedF", "Destination", "IATA", "Routing",
-        "Numero_Vol", "Heure_Vol", "BE_Numero", "BE_Nb_Colis", "BE_Type",
-        "unusedN", "BE_Expediteur", "BE_Destinataire"
-    ]
-    # Squelettes colonnes D..Q (4..17)
-    headers_plan = ["", "", "", "Benevole", "", "Destination", "IATA", "Routing", "Numero_Vol", "Heure_Vol", "BE_Numero", "BE_Nb_Colis", "BE_Type", "", "BE_Expediteur", "BE_Destinataire"]
-    max_row = max(ws_plan_new.max_row, len(df_export) + 1)
-    max_col = max(ws_plan_new.max_column, len(headers_plan))
-    _clear_values(ws_plan_new, max_row, max_col)
-    if q1_value is not None:
-        ws_plan_new["Q1"].value = q1_value
-    for row in ws_plan_new.iter_rows(min_row=2, max_row=max_row, min_col=4, max_col=17):
-        for cell in row:
-            cell.fill = PatternFill()
-    for c_idx, val in enumerate(headers_plan, start=1):
-        ws_plan_new.cell(row=1, column=c_idx, value=val)
-    fill_red = PatternFill(fill_type="solid", fgColor="F8CBAD")
-    fill_blue = PatternFill(fill_type="solid", fgColor="BDD7EE")
-    for r_idx, (_, r) in enumerate(df_export.iterrows(), start=2):
-        status = str(r.get("_STATUS", "normal")).lower()
-        row_vals = ["", "", "", r.get("Benevole", ""), "", r.get("Destination", ""), r.get("IATA", ""), r.get("Routing", ""), r.get("Numero_Vol", ""), normalize_hour_str(pd.Series([r.get("Heure_Vol", "")])).iloc[0], r.get("BE_Numero", ""), "" if status.startswith("old") else r.get("BE_Nb_Colis", ""), r.get("BE_Type", ""), "", r.get("BE_Expediteur", ""), r.get("BE_Destinataire", "")]
-        for c_idx, val in enumerate(row_vals, start=1):
-            ws_plan_new.cell(row=r_idx, column=c_idx, value=val)
-        if status.startswith("old") or status.startswith("new"):
-            fill = fill_red if status.startswith("old") else fill_blue
-            for c in range(4, 18):
-                ws_plan_new.cell(row=r_idx, column=c).fill = fill
 
-    wb.save(path)
-    cp.sync_local_file_to_onedrive(path)
+    mag_indexes = {}
+    for sheet_name in mag_sheet_names:
+        try:
+            ws_mag = wb_mag[sheet_name]
+        except Exception:
+            continue
+        mag_indexes[sheet_name] = _build_mag_index(ws_mag)
+
+    be_key = normalize_be_number(be_num) or str(be_num)
+    target_sheet, target_row = _find_mag_target_row(
+        be_key=be_key,
+        mag_sheet_names=mag_sheet_names,
+        mag_indexes=mag_indexes,
+    )
+
+    if not target_sheet or not target_row:
+        return "not_found"
+
+    ws_mag = wb_mag[target_sheet]
+
+    action_lower = str(action).strip().lower()
+    if action_lower == "annulation":
+        ws_mag.cell(row=target_row, column=cp.MAG_CENTRAL_COL_DEPART_VOL).value = None
+        ws_mag.cell(row=target_row, column=cp.MAG_CENTRAL_COL_ID_BENEV).value = None
+        ws_mag.cell(row=target_row, column=cp.MAG_CENTRAL_COL_BENEV).value = None
+        ws_mag.cell(row=target_row, column=cp.MAG_CENTRAL_COL_VOL).value = None
+        ws_mag.cell(row=target_row, column=cp.MAG_CENTRAL_COL_HEURE).value = None
+    else:
+        date_obj = _parse_mag_departure_date(date_new)
+
+        # Date départ mag : vendredi précédent si cellule vide
+        if date_obj:
+            prev_friday = _previous_iso_week_friday(date_obj)
+            try:
+                dm_cell = ws_mag.cell(row=target_row, column=cp.MAG_CENTRAL_COL_DEPART_MAG)
+                if dm_cell.value in (None, "") and prev_friday is not None:
+                    dm_cell.value = prev_friday
+            except Exception:
+                pass
+
+        if date_obj:
+            ws_mag.cell(row=target_row, column=cp.MAG_CENTRAL_COL_DEPART_VOL).value = date_obj
+
+        bene_id = _clean_bene_id(bene_meta.get("ID") if bene_meta else "")
+
+        bene_name = str(bene_choice or "").strip()
+        hour_val = normalize_hour_str(pd.Series([heure_new])).iloc[0] if heure_new else ""
+
+        ws_mag.cell(row=target_row, column=cp.MAG_CENTRAL_COL_ID_BENEV).value = bene_id
+        ws_mag.cell(row=target_row, column=cp.MAG_CENTRAL_COL_BENEV).value = bene_name
+        ws_mag.cell(row=target_row, column=cp.MAG_CENTRAL_COL_VOL).value = str(vol_new or "")
+        ws_mag.cell(row=target_row, column=cp.MAG_CENTRAL_COL_HEURE).value = hour_val
+
+    try:
+        wb_mag.save(path)
+        cp.sync_local_file_to_onedrive(path)
+    except Exception:
+        return "write_error"
+    return "updated"

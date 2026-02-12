@@ -149,3 +149,34 @@ def test_export_planning_archives_when_no_increment(tmp_path, monkeypatch):
     assert archived.exists()
     assert out_path.exists()
     assert out_path.name == existing.name
+
+
+def test_export_planning_without_template_falls_back_to_minimal_workbook(tmp_path, monkeypatch):
+    monkeypatch.setattr(cp, "USE_GRAPH_ONEDRIVE", False, raising=False)
+    onedrive_root = tmp_path / "onedrive"
+    monkeypatch.setattr(cp, "ASF_ONEDRIVE", onedrive_root)
+    monkeypatch.setattr(cp, "PLANNING_TEMPLATE", tmp_path / "missing-template.xlsx")
+    monkeypatch.setattr(cp, "sync_local_file_to_onedrive", lambda *args, **kwargs: True)
+
+    week = 3
+    year = 2026
+    monday = date.fromisocalendar(year, week, 1)
+    df_plan = _planning_df("260003", "7890", "DLA", monday)
+
+    result = export_planning_excel(
+        df_plan,
+        week,
+        year,
+        df_dispos=pd.DataFrame(),
+        increment_version=True,
+        generate_pdf=False,
+    )
+
+    assert result.output_path.exists()
+    assert any("Maquette introuvable" in msg for msg in result.warnings)
+
+    wb = load_workbook(result.output_path)
+    assert "Export planning" in wb.sheetnames
+    assert "Data Vols" in wb.sheetnames
+    assert "Data Benevoles" in wb.sheetnames
+    assert wb.worksheets[0]["Q1"].value == 1

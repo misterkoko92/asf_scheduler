@@ -17,6 +17,7 @@ from asf_app.config.runtime import (
 )
 from utils.logging_utils import get_logger
 from utils.datetime_utils import parse_date_long_fr
+from utils.path_utils import safe_cache_path
 
 logger = get_logger("planning_exports_service", console=False)
 
@@ -44,7 +45,12 @@ def load_planning_preview_with_path(
             if not candidates:
                 return None, f"Fichier introuvable : S{week:02d}-{year}", None
             remote_path = str(candidates[0])
-        local_path = get_tmp_dir() / "onedrive_cache" / "planning_exports" / remote_path
+        cache_root = get_tmp_dir() / "onedrive_cache" / "planning_exports"
+        try:
+            local_path = safe_cache_path(cache_root, remote_path)
+        except ValueError as exc:
+            logger.warning("Chemin OneDrive invalide: %s (%s)", remote_path, exc)
+            return None, f"Chemin OneDrive invalide : {remote_path}", None
         if not local_path.exists():
             cp.download_onedrive_file(remote_path, local_path, interactive=False)
         if not local_path.exists():

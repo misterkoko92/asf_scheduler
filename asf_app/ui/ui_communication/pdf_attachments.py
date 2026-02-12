@@ -16,9 +16,13 @@ from asf_app.config.runtime import (
     is_graph_onedrive,
     get_listes_colisage_remote_dir,
 )
+from utils.logging_utils import get_logger
+from utils.path_utils import safe_cache_path
 
 _BE_FILENAME_RE = re.compile(r"\bBE\D*([0-9]{6})(?![0-9])", re.IGNORECASE)
+_BARE_BE_FILENAME_RE = re.compile(r"(?<!\d)([0-9]{6})(?!\d)")
 _DEFAULT_DIR_NAME = "8-Listes de colisage"
+logger = get_logger("pdf_attachments", console=False)
 
 
 def get_colisage_dir() -> Path | str:
@@ -65,6 +69,8 @@ def index_pdfs_by_be(base_dir: Path | str | None = None) -> dict[str, list[str]]
             path = item.get("path", "")
             match = _BE_FILENAME_RE.search(name)
             if not match:
+                match = _BARE_BE_FILENAME_RE.search(name)
+            if not match:
                 continue
             key = match.group(1)
             index.setdefault(key, []).append(path)
@@ -80,6 +86,8 @@ def index_pdfs_by_be(base_dir: Path | str | None = None) -> dict[str, list[str]]
         if not path.is_file():
             continue
         match = _BE_FILENAME_RE.search(path.name)
+        if not match:
+            match = _BARE_BE_FILENAME_RE.search(path.name)
         if not match:
             continue
         key = match.group(1)
@@ -109,7 +117,12 @@ def find_be_pdf_attachments(
         for entry in pdf_index.get(key, []):
             if is_graph_onedrive():
                 remote_path = str(entry)
-                local_path = get_tmp_dir() / "onedrive_cache" / "listes_colisage" / remote_path
+                cache_root = get_tmp_dir() / "onedrive_cache" / "listes_colisage"
+                try:
+                    local_path = safe_cache_path(cache_root, remote_path)
+                except ValueError as exc:
+                    logger.warning("Chemin OneDrive invalide: %s (%s)", remote_path, exc)
+                    continue
                 if not local_path.exists():
                     cp.download_onedrive_file(remote_path, local_path, interactive=False)
                 if local_path.exists():

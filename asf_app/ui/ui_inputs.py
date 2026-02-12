@@ -34,6 +34,7 @@ from scheduler.config_paths import (
 # Loaders normalisés
 from loaders.load_shipments import load_shipments_df
 from loaders.load_vols_api import load_vols_api, store_vols_api_sheet
+from asf_app.services.airfrance_api import get_api_limits, get_default_time_origin_type
 from asf_app.services.input_service import (
     load_tdb,
     load_benev,
@@ -56,10 +57,21 @@ DEFAULT_TMP_NAMES = {
     "benev": "PLANNING_BENEVOLES.xlsx",
     "vols": "VOLS.xlsx",
 }
+MAX_UPLOAD_MB = 10
+MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 
 
 def _default_tmp_path(key_name: str) -> Path:
     return get_tmp_dir() / DEFAULT_TMP_NAMES.get(key_name, f"{key_name}.xlsx")
+
+def _upload_too_large(upload, label: str) -> bool:
+    size = getattr(upload, "size", None)
+    if size is None:
+        return False
+    if size > MAX_UPLOAD_BYTES:
+        st.error(f"❌ {label} dépasse la limite de {MAX_UPLOAD_MB} Mo.")
+        return True
+    return False
 
 def pretty_mtime(path: Path) -> str:
     try:
@@ -376,7 +388,10 @@ def render_tab_inputs():
 
         file = st.file_uploader("Importer TABLEAU_DE_BORD.xlsx", type=["xlsx"], key="up_tdb")
         if file:
-            overwrite_tmp_file(file, state, "tdb", load_tdb_file)
+            if _upload_too_large(file, "TABLEAU_DE_BORD.xlsx"):
+                pass
+            else:
+                overwrite_tmp_file(file, state, "tdb", load_tdb_file)
 
     # ---------------------------------------------------------------------
     # BENEVOLES
@@ -392,7 +407,10 @@ def render_tab_inputs():
 
         file = st.file_uploader("Importer Planning Bénévoles.xlsx", type=["xlsx"], key="up_benev")
         if file:
-            overwrite_tmp_file(file, state, "benev", load_benev_file)
+            if _upload_too_large(file, "Planning Bénévoles.xlsx"):
+                pass
+            else:
+                overwrite_tmp_file(file, state, "benev", load_benev_file)
 
     # ---------------------------------------------------------------------
     # VOLS
@@ -423,9 +441,33 @@ def render_tab_inputs():
         state.vols_source = "api" if source_choice.endswith("AF)") else "excel"
 
         if state.vols_source == "api":
+            af_max_calls, af_min_delay = get_api_limits()
+            default_time_origin_type = get_default_time_origin_type()
+            api_time_options = ["P", "M", "S", "I"]
+            api_time_labels = {
+                "P": "P (Public) - planning publié",
+                "M": "M (Modified) - planning modifié",
+                "S": "S (Scheduled) - planning initial",
+                "I": "I (Internal) - données internes",
+            }
+            current_time_origin_type = str(
+                getattr(state, "api_time_origin_type", default_time_origin_type) or default_time_origin_type
+            ).strip().upper()
+            if current_time_origin_type not in api_time_options:
+                current_time_origin_type = default_time_origin_type
+            state.api_time_origin_type = st.selectbox(
+                "timeOriginType (API Air France)",
+                api_time_options,
+                index=api_time_options.index(current_time_origin_type),
+                format_func=lambda k: api_time_labels.get(k, k),
+                help="Contrôle la référence temporelle fournie par l'API Air France.",
+            )
             st.info(
                 "Appel direct API Air France (origin CDG, operating AF) pour les destinations ParamDest. "
-                "Limite 1 requête/s et 100/jour. Clé attendue dans `AF_API_KEY` (env ou secrets)."
+                f"Limites: {af_max_calls}/jour et {af_min_delay:g}s mini entre deux appels. "
+                "Clé attendue dans `AF_API_KEY` (env ou secrets). "
+                f"Valeur actuelle: `{state.api_time_origin_type}` "
+                f"(défaut env `AF_TIME_ORIGIN_TYPE`: `{default_time_origin_type}`)."
             )
             cache_info = ""
             cache_path = get_tmp_dir() / "vols_api_cache.parquet"
@@ -445,7 +487,11 @@ def render_tab_inputs():
             if state.api_start_date and state.api_end_date:
                 if st.button("Appeler l'API Air France"):
                     try:
-                        df_api = load_vols_api(state.api_start_date, state.api_end_date)
+                        df_api = load_vols_api(
+                            state.api_start_date,
+                            state.api_end_date,
+                            time_origin_type=state.api_time_origin_type,
+                        )
                         state.df_vols = df_api
                         if df_api is not None:
                             st.success(f"{len(df_api)} vols chargés via API (du {state.api_start_date:%d/%m} au {state.api_end_date:%d/%m}).")
@@ -482,4 +528,7 @@ def render_tab_inputs():
 
             file = st.file_uploader("Importer Vols.xlsx", type=["xlsx"], key="up_vols")
             if file:
-                overwrite_tmp_file(file, state, "vols", load_vols_file)
+                if _upload_too_large(file, "Vols.xlsx"):
+                    pass
+                else:
+                    overwrite_tmp_file(file, state, "vols", load_vols_file)

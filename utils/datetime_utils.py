@@ -1,4 +1,5 @@
 import datetime as dt
+import warnings
 import pandas as pd
 
 JOURS_FR_LONG = [
@@ -27,6 +28,31 @@ MOIS_FR_LONG = [
 ]
 
 
+_PANDAS_DAYFIRST_ISO_WARNING = (
+    r"Parsing dates in %Y-%m-%d format when dayfirst=True was specified\."
+)
+
+
+def _to_datetime_safely(
+    value: object,
+    *,
+    errors: str,
+    dayfirst: bool = False,
+    fmt: str | None = None,
+):
+    """
+    Wrapper pd.to_datetime avec filtrage ciblé d'un warning pandas connu
+    (ISO + dayfirst=True), sans modifier le résultat de parsing.
+    """
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=_PANDAS_DAYFIRST_ISO_WARNING,
+            category=UserWarning,
+        )
+        return pd.to_datetime(value, errors=errors, dayfirst=dayfirst, format=fmt)
+
+
 def parse_date_series(
     series: pd.Series,
     fmt: str = "%d/%m/%y",
@@ -37,13 +63,21 @@ def parse_date_series(
     Parse une série de dates en privilégiant le format fourni, avec fallback dayfirst.
     Retourne une Series datetime64[ns] (NaT si invalide).
     """
-    ser = pd.to_datetime(series, format=fmt, errors="coerce")
+    ser = _to_datetime_safely(series, fmt=fmt, errors="coerce")
     mask = ser.isna()
     if mask.any():
-        ser.loc[mask] = pd.to_datetime(series.loc[mask], errors="coerce", dayfirst=True)
+        ser.loc[mask] = _to_datetime_safely(
+            series.loc[mask],
+            errors="coerce",
+            dayfirst=True,
+        )
         mask = ser.isna()
         if allow_dayfirst_false and mask.any():
-            ser.loc[mask] = pd.to_datetime(series.loc[mask], errors="coerce", dayfirst=False)
+            ser.loc[mask] = _to_datetime_safely(
+                series.loc[mask],
+                errors="coerce",
+                dayfirst=False,
+            )
     return ser
 
 
@@ -129,7 +163,7 @@ def coerce_datetime(
     """Wrapper centralisé de pd.to_datetime (séries ou valeurs uniques)."""
     if fmt is None and format is not None:
         fmt = format
-    return pd.to_datetime(value, errors=errors, dayfirst=dayfirst, format=fmt)
+    return _to_datetime_safely(value, errors=errors, dayfirst=dayfirst, fmt=fmt)
 
 
 def parse_iso_datetime(value: object) -> dt.datetime | None:

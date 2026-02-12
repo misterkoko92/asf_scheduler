@@ -110,6 +110,8 @@ column_map_param_benev = {
     "PRENOM":            "Prenom",
     "PRENOM_COURT":      "Prenom_Court",
     "Mail":              "Email",
+    "MAX_COLIS_VOL":     "Max_Colis_Vol",
+    "MAX COLIS VOL":     "Max_Colis_Vol",
     "MAX_JOURS_SEMAINE": "Max_Jours_Semaine",
     "MAX_EXP_SEMAINE":   "Max_Exp_Semaine",
     "MAX_EXP_JOUR":      "Max_Exp_Jour",

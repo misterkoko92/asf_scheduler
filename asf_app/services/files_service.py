@@ -9,6 +9,7 @@ from typing import Dict
 import pandas as pd
 import scheduler.config_paths as cp
 from utils.datetime_utils import format_date_value
+from utils.excel_safety import sanitize_excel_value
 
 
 # ============================================================
@@ -62,8 +63,13 @@ def save_excel_sheet(path: str | Path, sheet_name: str, df: pd.DataFrame) -> Non
         return
 
     df_clean = df.where(pd.notna(df), "")
-    table = [list(df_clean.columns)]
-    table.extend([list(row) for row in df_clean.itertuples(index=False, name=None)])
+    table = [[sanitize_excel_value(c) for c in df_clean.columns]]
+    table.extend(
+        [
+            [sanitize_excel_value(v) for v in row]
+            for row in df_clean.itertuples(index=False, name=None)
+        ]
+    )
 
     # Sinon → tentative Excel automation pour préserver validations + mises en forme
     try:

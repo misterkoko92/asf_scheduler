@@ -60,9 +60,15 @@ def load_be_dest_codes() -> List[str]:
         return []
 
 
-def load_vols_api(start_date: date, end_date: date) -> pd.DataFrame:
+def load_vols_api(
+    start_date: date,
+    end_date: date,
+    *,
+    time_origin_type: str | None = None,
+) -> pd.DataFrame:
     """
     Retourne un DataFrame structuré comme load_vols_df() mais issu de l'API.
+    time_origin_type: S/M/I/P (None -> valeur configurée dans le service API).
     """
     df_param = load_paramdest_codes()
     df_be_codes = load_be_dest_codes()
@@ -78,6 +84,7 @@ def load_vols_api(start_date: date, end_date: date) -> pd.DataFrame:
         dest_codes=codes,
         start_date=start_date.strftime("%Y-%m-%d"),
         end_date=end_date.strftime("%Y-%m-%d"),
+        time_origin_type=time_origin_type,
     )
 
     iata_to_city: Dict[str, str] = {

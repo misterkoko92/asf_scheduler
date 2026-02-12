@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 from typing import Iterable, Optional
 from urllib.parse import quote
@@ -48,6 +49,11 @@ class OneDriveGraphClient:
             return
         self.config.token_cache_path.parent.mkdir(parents=True, exist_ok=True)
         self.config.token_cache_path.write_text(self._cache.serialize())
+        if os.name != "nt":
+            try:
+                os.chmod(self.config.token_cache_path, 0o600)
+            except Exception:
+                pass
 
     def _encode_path(self, path: str) -> str:
         return quote(path.lstrip("/"), safe="/")

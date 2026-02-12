@@ -20,6 +20,7 @@ from asf_app.ui.ui_shipments_update import render_tab_shipments_update
 from asf_app.ui.ui_stats.ui_stats import render_tab_stats
 from asf_app.ui.ui_simulation import render_tab_simulation
 from asf_app.ui.ui_faq import render_tab_faq
+from asf_app.ui.ui_version import render_tab_version
 
 from scheduler.config_paths import (
     TABLEAU_DE_BORD,
@@ -101,12 +102,13 @@ tabs = st.tabs([
     "📁 Données semaine",
     "➕ Ajouts manuels",
     "⚙️ Paramètres",
-    "📊 Planning V2 (OR-Tools)",
+    "📊 Planning",
     "📣 Communication",
     "🚚 Mise à Jour expéditions",
     "📈 Statistiques",
     "📝 Logs",
     "❓ FAQ / Instructions",
+    "🧾 Version",
 ])
 
 
@@ -149,3 +151,7 @@ with tabs[7]:
 # ONGLET 8 — FAQ / Instructions
 with tabs[8]:
     render_tab_faq()
+
+# ONGLET 9 — VERSION
+with tabs[9]:
+    render_tab_version()

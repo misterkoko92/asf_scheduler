@@ -12,6 +12,8 @@ import shutil
 from pathlib import Path
 from textwrap import dedent
 
+from utils.applescript_utils import applescript_escape
+
 
 def export_first_sheet_to_pdf(xlsx_path: str | Path, pdf_path: str | Path | None = None) -> Path:
     """
@@ -44,10 +46,13 @@ def export_first_sheet_to_pdf(xlsx_path: str | Path, pdf_path: str | Path | None
     tmp_copy = tmp_dir / (xlsx.stem + "_pdf_tmp.xlsx")
     shutil.copy2(xlsx, tmp_copy)
 
+    tmp_copy_esc = applescript_escape(str(tmp_copy))
+    pdf_esc = applescript_escape(str(pdf))
+
     script = dedent(
         f"""
-        set theFile to POSIX file "{tmp_copy}"
-        set pdfFile to POSIX file "{pdf}"
+        set theFile to POSIX file "{tmp_copy_esc}"
+        set pdfFile to POSIX file "{pdf_esc}"
         set hfsPath to (theFile as alias as string)
 
         tell application "Microsoft Excel"

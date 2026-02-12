@@ -11,6 +11,7 @@ from utils.datetime_utils import coerce_datetime
 import re
 import fnmatch
 from pathlib import Path
+from datetime import datetime
 
 # PlanningState
 from asf_app.ui.ui_planning.state_planning import get_planning_state
@@ -38,6 +39,7 @@ from asf_app.state import get_state, get_excel_source_paths
 from asf_app.ui.loader import load_parameters
 import scheduler.config_paths as cp
 from asf_app.config.runtime import get_onedrive_root, get_output_remote_dir, get_tmp_dir, is_graph_onedrive
+from utils.path_utils import safe_cache_path
 # load_parameters() retourne :
 #   df_paramdest, df_paramexpediteur, df_parambenev, df_parambe
 
@@ -54,6 +56,55 @@ def _detect_week_year(df_comm):
     dt = dates.min()
     return int(dt.isocalendar().week), int(dt.year)
 
+def _parse_onedrive_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _list_local_planning_files(year: int) -> list[Path]:
+    base_dir = get_onedrive_root() / "Planning MAB" / f"ASFmm PLANNING {year}"
+    if not base_dir.exists():
+        return []
+    files = [p for p in base_dir.glob("*.xls*") if p.is_file()]
+    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return files
+
+
+def _list_onedrive_planning_files(year: int) -> list[dict]:
+    remote_dir = get_output_remote_dir(year)
+    items = cp.list_onedrive_files(remote_dir, recursive=False, suffixes=[".xlsx", ".xlsm", ".xls"])
+    files = []
+    for item in items:
+        name = item.get("name", "")
+        if not name.lower().endswith((".xlsx", ".xlsm", ".xls")):
+            continue
+        if "folder" in item:
+            continue
+        files.append(
+            {
+                "name": name,
+                "path": item.get("path", ""),
+                "modified": _parse_onedrive_datetime(item.get("lastModifiedDateTime"))
+                or _parse_onedrive_datetime(item.get("createdDateTime")),
+            }
+        )
+    files.sort(key=lambda f: f["modified"] or datetime.min, reverse=True)
+    return files
+
+
+def _read_export_planning(path: Path) -> pd.DataFrame:
+    try:
+        df_raw = pd.read_excel(path, sheet_name="Export planning", dtype=object)
+    except Exception:
+        return pd.DataFrame()
+    if df_raw is None or df_raw.empty:
+        return pd.DataFrame()
+    return normalize_planning_df(df_raw)
+
 
 # ==========================================================
 # UI PRINCIPALE
@@ -65,68 +116,155 @@ def render_tab_communication():
     paths = get_excel_source_paths(state)
 
     # -------------------------------------------------------
-    # 1) Choix de la source (moteur principal ou simulation OR-Tools)
+    # 1) Choix de la source (session ou OneDrive)
     # -------------------------------------------------------
-    planning_state = get_planning_state()
-    df_plan_main = normalize_planning_df(planning_state.planning)
-    # OR-Tools V2 dans l'onglet simulation : stocké dans sim_results
-    sim_res_modes = st.session_state.get("sim_results") or {}
-    sim_active = st.session_state.get("sim_active_mode")
-    df_plan_sim = None
-    if sim_res_modes:
-        if sim_active and sim_active in sim_res_modes:
-            df_plan_sim = normalize_planning_df(sim_res_modes[sim_active].get("planning_df"))
-        else:
-            # premier mode disponible
-            df_plan_sim = normalize_planning_df(next(iter(sim_res_modes.values())).get("planning_df"))
-
-    if (df_plan_main is None or getattr(df_plan_main, "empty", True)) and (df_plan_sim is None or getattr(df_plan_sim, "empty", True)):
-        st.warning("⚠️ Aucun planning principal. Lance une simulation OR-Tools pour alimenter la communication.")
-        return
-
-    options = []
-    if df_plan_main is not None and not df_plan_main.empty:
-        options.append("planning")
-    if sim_res_modes:
-        options.append("simulation")
-    if not options:
-        st.warning("⚠️ Aucun planning disponible. Lance une simulation (onglet Planning V2 / OR-Tools).")
-        return
-    default_source = "planning" if "planning" in options else options[0]
-    source = st.radio(
+    source_mode = st.radio(
         "Source du planning pour la communication",
-        options=options,
-        format_func=lambda x: "Moteur principal" if x == "planning" else "Planning V2 (OR-Tools)",
-        index=options.index(default_source),
+        options=["session", "onedrive"],
+        format_func=lambda x: "Planning de la session" if x == "session" else "Planning OneDrive",
+        index=0,
         horizontal=True,
+        key="comm_source_mode",
     )
 
-    df_planning = df_plan_main if source == "planning" else df_plan_sim
-    # Si source = simulation et plusieurs modes, proposer un choix
-    if source == "simulation" and sim_res_modes:
-        mode_labels = []
-        mode_values = []
-        for key, res in sim_res_modes.items():
-            stats_mode = res.get("statistiques", {})
-            label = "Priorité Colis" if key == "colis" else "Priorité Bénévoles"
-            extra = f" ({stats_mode.get('nb_colis_expedies', 0)} colis / {stats_mode.get('nb_benevoles_mobilises', 0)} bénév)"
-            mode_labels.append(f"{label}{extra}")
-            mode_values.append(key)
-        sel_mode = st.radio(
-            "Mode OR-Tools",
-            options=mode_values,
-            format_func=lambda m: mode_labels[mode_values.index(m)],
-            index=mode_values.index(sim_active) if sim_active in mode_values else 0,
+    df_planning = None
+    if source_mode == "session":
+        planning_state = get_planning_state()
+        df_plan_main = normalize_planning_df(planning_state.planning)
+        # OR-Tools V2 dans l'onglet simulation : stocké dans sim_results
+        sim_res_modes = st.session_state.get("sim_results") or {}
+        sim_active = st.session_state.get("sim_active_mode")
+        df_plan_sim = None
+        if sim_res_modes:
+            if sim_active and sim_active in sim_res_modes:
+                df_plan_sim = normalize_planning_df(sim_res_modes[sim_active].get("planning_df"))
+            else:
+                # premier mode disponible
+                df_plan_sim = normalize_planning_df(next(iter(sim_res_modes.values())).get("planning_df"))
+
+        if (df_plan_main is None or getattr(df_plan_main, "empty", True)) and (df_plan_sim is None or getattr(df_plan_sim, "empty", True)):
+            st.warning("⚠️ Aucun planning principal. Génère un planning dans l'onglet Planning pour alimenter la communication.")
+            return
+
+        options = []
+        if df_plan_main is not None and not df_plan_main.empty:
+            options.append("planning")
+        if sim_res_modes:
+            options.append("simulation")
+        if not options:
+            st.warning("⚠️ Aucun planning disponible. Génère un planning (onglet Planning).")
+            return
+        default_source = "planning" if "planning" in options else options[0]
+        source = st.radio(
+            "Source session",
+            options=options,
+            format_func=lambda x: "Moteur principal" if x == "planning" else "Planning (OR-Tools)",
+            index=options.index(default_source),
             horizontal=True,
         )
-        st.session_state["sim_active_mode"] = sel_mode
-        df_planning = normalize_planning_df(sim_res_modes[sel_mode].get("planning_df"))
-        df_plan_sim = df_planning
-    if df_planning is None or getattr(df_planning, "empty", True):
-        st.warning("⚠️ Le planning choisi est vide.")
-        return
 
-    st.info("✔ Planning chargé depuis : " + ("Moteur principal" if source == "planning" else "Simulation OR-Tools"))
+        df_planning = df_plan_main if source == "planning" else df_plan_sim
+        # Si source = simulation et plusieurs modes, proposer un choix
+        if source == "simulation" and sim_res_modes:
+            mode_labels = []
+            mode_values = []
+            for key, res in sim_res_modes.items():
+                stats_mode = res.get("statistiques", {})
+                label = "Priorité Colis" if key == "colis" else "Priorité Bénévoles"
+                extra = f" ({stats_mode.get('nb_colis_expedies', 0)} colis / {stats_mode.get('nb_benevoles_mobilises', 0)} bénév)"
+                mode_labels.append(f"{label}{extra}")
+                mode_values.append(key)
+            sel_mode = st.radio(
+                "Mode OR-Tools",
+                options=mode_values,
+                format_func=lambda m: mode_labels[mode_values.index(m)],
+                index=mode_values.index(sim_active) if sim_active in mode_values else 0,
+                horizontal=True,
+            )
+            st.session_state["sim_active_mode"] = sel_mode
+            df_planning = normalize_planning_df(sim_res_modes[sel_mode].get("planning_df"))
+            df_plan_sim = df_planning
+        if df_planning is None or getattr(df_planning, "empty", True):
+            st.warning("⚠️ Le planning choisi est vide.")
+            return
+
+        st.info("✔ Planning chargé depuis : " + ("Moteur principal" if source == "planning" else "Planning OR-Tools"))
+    else:
+        year_default = datetime.now().year
+        year = int(
+            st.number_input(
+                "Année du planning",
+                min_value=2024,
+                max_value=2100,
+                value=year_default,
+                step=1,
+                key="comm_onedrive_year",
+            )
+        )
+
+        loaded_year = st.session_state.get("comm_onedrive_loaded_year")
+        if loaded_year is not None and loaded_year != year:
+            st.session_state.pop("comm_onedrive_df", None)
+            st.session_state.pop("comm_onedrive_file_label", None)
+            st.session_state.pop("comm_onedrive_file_path", None)
+            st.session_state["comm_onedrive_loaded_year"] = None
+
+        if is_graph_onedrive():
+            files = _list_onedrive_planning_files(year)
+            if not files:
+                st.warning("⚠️ Aucun fichier Excel trouvé dans OneDrive pour cette année.")
+            else:
+                labels = [f["name"] for f in files]
+                choice = st.radio("Fichiers Excel disponibles", options=labels, index=0, key="comm_onedrive_file")
+                if st.button("✅ Valider ce planning", type="primary"):
+                    chosen = files[labels.index(choice)]
+                    remote_path = chosen.get("path", "")
+                    if not remote_path:
+                        st.error("Chemin OneDrive invalide.")
+                    else:
+                        cache_root = get_tmp_dir() / "onedrive_cache" / "planning_xlsx"
+                        try:
+                            local_path = safe_cache_path(cache_root, remote_path)
+                        except ValueError:
+                            st.error(f"Chemin OneDrive invalide : {remote_path}")
+                            local_path = None
+                        if local_path:
+                            ok = cp.download_onedrive_file(remote_path, local_path, interactive=False)
+                            if not ok and not local_path.exists():
+                                st.error("Téléchargement OneDrive impossible.")
+                            else:
+                                df_loaded = _read_export_planning(local_path)
+                                if df_loaded.empty:
+                                    st.error("Feuille 'Export planning' introuvable ou vide.")
+                                else:
+                                    st.session_state["comm_onedrive_df"] = df_loaded
+                                    st.session_state["comm_onedrive_file_label"] = chosen.get("name", "")
+                                    st.session_state["comm_onedrive_file_path"] = remote_path
+                                    st.session_state["comm_onedrive_loaded_year"] = year
+        else:
+            files = _list_local_planning_files(year)
+            if not files:
+                st.warning("⚠️ Aucun fichier Excel trouvé dans OneDrive pour cette année.")
+            else:
+                labels = [f.name for f in files]
+                choice = st.radio("Fichiers Excel disponibles", options=labels, index=0, key="comm_onedrive_file")
+                if st.button("✅ Valider ce planning", type="primary"):
+                    chosen = files[labels.index(choice)]
+                    df_loaded = _read_export_planning(chosen)
+                    if df_loaded.empty:
+                        st.error("Feuille 'Export planning' introuvable ou vide.")
+                    else:
+                        st.session_state["comm_onedrive_df"] = df_loaded
+                        st.session_state["comm_onedrive_file_label"] = chosen.name
+                        st.session_state["comm_onedrive_file_path"] = str(chosen)
+                        st.session_state["comm_onedrive_loaded_year"] = year
+
+        df_planning = st.session_state.get("comm_onedrive_df")
+        file_label = st.session_state.get("comm_onedrive_file_label", "")
+        if df_planning is None or getattr(df_planning, "empty", True):
+            st.info("Sélectionne un fichier puis clique sur “Valider ce planning” pour continuer.")
+            return
+        st.info(f"✔ Planning chargé depuis OneDrive : {file_label}")
 
     # -------------------------------------------------------
     # 2) Charger ParamDest / ParamBenev / ParamExp / ParamBE
@@ -240,10 +378,15 @@ def render_tab_communication():
                 chosen = candidates[labels.index(pdf_choice)]
                 remote_path = chosen.get("path", "")
                 if remote_path:
-                    local_path = get_tmp_dir() / "onedrive_cache" / "planning_pdf" / remote_path
-                    if not local_path.exists():
+                    cache_root = get_tmp_dir() / "onedrive_cache" / "planning_pdf"
+                    try:
+                        local_path = safe_cache_path(cache_root, remote_path)
+                    except ValueError:
+                        st.error(f"Chemin OneDrive invalide : {remote_path}")
+                        local_path = None
+                    if local_path and not local_path.exists():
                         cp.download_onedrive_file(remote_path, local_path, interactive=False)
-                    if local_path.exists():
+                    if local_path and local_path.exists():
                         pdf_attach_path = local_path
         else:
             base_pdf_dir = get_onedrive_root() / "Planning MAB" / f"ASFmm PLANNING {year}"

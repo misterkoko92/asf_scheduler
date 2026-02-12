@@ -81,7 +81,7 @@ def _load_param_benev(planning_benevoles_path: Path | None = None):
     # Numériques
     if "ID" in df.columns:
         df["ID"] = pd.to_numeric(df["ID"], errors="coerce").astype("Int64")
-    for col in ["Max_Jours_Semaine", "Max_Exp_Semaine", "Max_Exp_Jour"]:
+    for col in ["Max_Jours_Semaine", "Max_Exp_Semaine", "Max_Exp_Jour", "Max_Colis_Vol"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
     if "Attente_Max_Heures" in df.columns:

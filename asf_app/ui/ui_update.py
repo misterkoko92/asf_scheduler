@@ -23,6 +23,7 @@ from asf_app.ui.ui_stats.ui_stats import (
     filter_latest,
 )
 from utils.identifiers import normalize_be_int
+from utils.path_utils import safe_cache_path
 
 # ==== IMPORTS BE MOTEUR ======================================================
 
@@ -132,7 +133,12 @@ def render_tab_update():
 
     if isinstance(planning_path, str):
         remote_path = planning_path
-        local_path = get_tmp_dir() / "onedrive_cache" / "planning_exports" / remote_path
+        cache_root = get_tmp_dir() / "onedrive_cache" / "planning_exports"
+        try:
+            local_path = safe_cache_path(cache_root, remote_path)
+        except ValueError:
+            st.error(f"Chemin OneDrive invalide : {remote_path}")
+            st.stop()
         if not local_path.exists():
             cp.download_onedrive_file(remote_path, local_path, interactive=False)
         planning_path = local_path

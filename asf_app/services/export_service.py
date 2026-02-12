@@ -26,6 +26,7 @@ from scheduler.planning_views import build_export_view
 from scheduler.format_rules import format_vol_display
 from utils.identifiers import normalize_be_number
 from utils.export_pdf import export_first_sheet_to_pdf
+from utils.excel_safety import sanitize_excel_value, sanitize_dataframe_for_excel
 from utils.datetime_utils import (
     coerce_datetime,
     format_date_value,
@@ -55,50 +56,32 @@ def _resolve_template() -> Path:
     return template
 
 
-def export_planning_excel(
-    df,
-    week,
-    year,
-    *,
-    df_vols=None,
-    df_parambenev=None,
-    df_dispos=None,
-    df_paramdest=None,
-    create_tables: bool = True,
-    write_source_excel: bool = False,
-    increment_version: bool = True,
-    benev_path: Path | None = None,
-    tdb_source_path: Path | None = None,
-    pdf_exporter: Callable[[Path, Path], Path] | None = None,
-) -> ExportResult:
-    warnings: list[str] = []
-    pdf_exporter = pdf_exporter or export_first_sheet_to_pdf
+def _create_minimal_workbook(path: Path, *, week: int, year: int) -> None:
+    from openpyxl import Workbook
 
-    template = _resolve_template()
-    if not template.exists():
-        raise FileNotFoundError(f"Maquette introuvable : {template}")
-
-    filename = f"ASFmm - PLANNING SEMAINE {year}-{week:02d}-TMP.xlsx"
-    planning_dir = (
-        get_output_planning_dir()
-        if is_graph_onedrive()
-        else get_onedrive_root() / "Planning MAB" / f"ASFmm PLANNING {year}"
-    )
-    planning_dir.mkdir(parents=True, exist_ok=True)
-    out_path = planning_dir / filename
-
-    shutil.copy2(template, out_path)
+    wb_min = Workbook()
+    ws_min = wb_min.active
+    ws_min.title = "Planning SXX"
     try:
-        wb = load_workbook(out_path)
+        ws_min["A1"] = date.fromisocalendar(int(year), int(week), 1)
     except Exception:
-        from openpyxl import Workbook
+        ws_min["A1"] = None
+    ws_min["Q1"] = 0
+    wb_min.create_sheet("Export planning")
+    wb_min.create_sheet("Data Vols")
+    wb_min.create_sheet("Data Benevoles")
+    wb_min.save(path)
 
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "Planning SXX"
-        wb.save(out_path)
-        wb = load_workbook(out_path)
 
+def _load_workbook_with_minimal_fallback(path: Path, *, week: int, year: int):
+    try:
+        return load_workbook(path)
+    except Exception:
+        _create_minimal_workbook(path, week=week, year=year)
+        return load_workbook(path)
+
+
+def _resolve_target_sheets(wb):
     ws_plan = wb.worksheets[0]
     for sh in wb.sheetnames:
         if sh.lower().startswith("planning"):
@@ -119,6 +102,462 @@ def export_planning_excel(
         if "Data Benevoles" in wb.sheetnames
         else (wb.worksheets[3] if len(wb.worksheets) > 3 else wb.create_sheet("Data Benevoles"))
     )
+    return ws_plan, ws_export, ws_vols, ws_bene
+
+
+def _week_year_from_ws_plan(ws_plan, *, fallback_week: int, fallback_year: int) -> tuple[int, int]:
+    val = ws_plan["A1"].value
+    wk, yr = fallback_week, fallback_year
+    try:
+        if isinstance(val, datetime):
+            wk = val.isocalendar()[1]
+            yr = val.isocalendar()[0]
+        else:
+            dt = coerce_datetime(val, errors="coerce", dayfirst=True)
+            if pd.notna(dt):
+                wk = dt.isocalendar()[1]
+                yr = dt.isocalendar()[0]
+    except Exception:
+        pass
+    return int(wk), int(yr)
+
+
+def _extract_version_from_planning_name(name: str, *, week: int, year: int) -> int | None:
+    stem = Path(name).stem
+    m = re.search(r"SEMAINE\s*(20\d{2})\D+(\d{1,2})\D+(\d+)", stem, re.IGNORECASE)
+    if m:
+        try:
+            y, w, v = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            if y == year and w == week:
+                return v
+        except Exception:
+            pass
+    m = re.search(r"N[°o]?\s*(\d{1,2}).*?(20\d{2}).*?v(\d+)", stem, re.IGNORECASE)
+    if m:
+        try:
+            w, y, v = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            if y == year and w == week:
+                return v
+        except Exception:
+            pass
+    m = re.search(r"N[°o]?\s*(\d{1,2}).*?(20\d{2})", stem, re.IGNORECASE)
+    if m:
+        try:
+            w, y = int(m.group(1)), int(m.group(2))
+            if y == year and w == week:
+                return 1
+        except Exception:
+            pass
+    return None
+
+
+def _build_bene_display_map(df_parambenev: pd.DataFrame | None) -> dict[str, str]:
+    display_map: dict[str, str] = {}
+    if df_parambenev is None or getattr(df_parambenev, "empty", True):
+        return display_map
+
+    tmp = df_parambenev.copy()
+    tmp["Benevole"] = tmp.get("Benevole", tmp.get("BENEVOLE", ""))
+    tmp["Prenom_Court"] = tmp.get("Prenom_Court", tmp.get("Prenom court", ""))
+    tmp["Nom"] = tmp.get("Nom", "")
+    for _, row in tmp.iterrows():
+        benevole = str(row.get("Benevole", "")).strip()
+        prenom_court = str(row.get("Prenom_Court", "")).strip()
+        nom = str(row.get("Nom", "")).strip().upper()
+        display_map[benevole] = f"{prenom_court} {nom}".strip()
+    return display_map
+
+
+def _format_bene_display(name: object, *, display_map: dict[str, str]) -> str:
+    if name in display_map:
+        return display_map[name]
+    parts = str(name).strip().split()
+    if len(parts) >= 2:
+        return f"{parts[0][0].upper()}. {' '.join(parts[1:]).upper()}"
+    return str(name).upper()
+
+
+def _normalize_vol_key(value: object) -> str:
+    normalized = str(value or "").strip().upper()
+    if normalized.startswith("AF"):
+        normalized = normalized.replace("AF", "").strip()
+    digits = "".join(ch for ch in normalized if ch.isdigit())
+    if digits:
+        try:
+            return str(int(digits))
+        except Exception:
+            return digits.lstrip("0") or digits
+    return normalized
+
+
+def _apply_routing_fallback_from_vols(
+    df_export: pd.DataFrame,
+    *,
+    df_vols: pd.DataFrame,
+) -> pd.DataFrame:
+    vols_map = df_vols.copy()
+    if "Date_Vol_dt" in vols_map.columns:
+        vols_date = coerce_datetime(vols_map["Date_Vol_dt"], errors="coerce")
+    else:
+        vols_date = coerce_datetime(vols_map.get("Date_Vol", ""), errors="coerce", dayfirst=True)
+    vols_map["_DATE_KEY"] = vols_date.dt.date
+    vols_map["_VOL_KEY"] = vols_map.get("Numero_Vol", "").apply(_normalize_vol_key)
+    routing_map = (
+        vols_map.dropna(subset=["Routing"])
+        .drop_duplicates(subset=["_DATE_KEY", "_VOL_KEY"])
+        .set_index(["_DATE_KEY", "_VOL_KEY"])["Routing"]
+        .to_dict()
+    )
+
+    out = df_export.copy()
+    out["_DATE_KEY"] = coerce_datetime(out["DATE"], errors="coerce").dt.date
+    out["_VOL_KEY"] = out.get("Numero_Vol", "").apply(_normalize_vol_key)
+    routing_series = out["Routing"] if "Routing" in out.columns else pd.Series([""] * len(out), index=out.index)
+    mask_routing_empty = (
+        routing_series.fillna("")
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        .replace({"nan": "", "none": ""})
+        .eq("")
+    )
+    if mask_routing_empty.any():
+
+        def _route_fallback(row: pd.Series) -> object:
+            key = (row.get("_DATE_KEY"), row.get("_VOL_KEY"))
+            if key in routing_map:
+                return routing_map[key]
+            return ""
+
+        out.loc[mask_routing_empty, "Routing"] = out.loc[mask_routing_empty].apply(_route_fallback, axis=1)
+    return out.drop(columns=["_DATE_KEY", "_VOL_KEY"], errors="ignore")
+
+
+def _friday_previous_week(wk: int, yr: int):
+    try:
+        mon = date.fromisocalendar(yr, wk, 1)
+        return mon - timedelta(days=3)
+    except Exception:
+        return None
+
+
+def _sheet_year(name: str) -> int | None:
+    match = re.search(r"(20\d{2})", str(name))
+    return int(match.group(1)) if match else None
+
+
+def _sheet_year_suffix(name: str) -> str | None:
+    yr = _sheet_year(name)
+    return str(yr)[-2:] if yr else None
+
+
+def _mag_sheet_names(wb) -> list[str]:
+    names = [name for name in wb.sheetnames if str(name).strip().upper().startswith("MAG CENTRAL")]
+    if names:
+        return names
+    if cp.SHEET_MAG_CENTRAL in wb.sheetnames:
+        return [cp.SHEET_MAG_CENTRAL]
+    return [wb.active.title]
+
+
+def _build_mag_index(ws_mag) -> dict[str, int]:
+    mag_index: dict[str, int] = {}
+    for row in ws_mag.iter_rows(min_row=1, max_row=ws_mag.max_row, min_col=1, max_col=20):
+        val = row[0].value
+        if val is None:
+            continue
+        sval = str(int(val)) if isinstance(val, (int, float)) else str(val).strip()
+        key = normalize_be_number(sval)
+        if not key:
+            continue
+        keys = {key, sval, key.lstrip("0")}
+        for lookup_key in keys:
+            mag_index[lookup_key] = row[0].row
+    return mag_index
+
+
+def _sheet_order_for_be(be_key: str, mag_sheet_names: list[str], *, preferred_year: int | None) -> list[str]:
+    preferred = []
+    if be_key:
+        for name in mag_sheet_names:
+            suffix = _sheet_year_suffix(name)
+            if suffix and be_key.startswith(suffix):
+                preferred.append(name)
+    if isinstance(preferred_year, int):
+        for name in mag_sheet_names:
+            if _sheet_year(name) == int(preferred_year) and name not in preferred:
+                preferred.append(name)
+    return preferred + [name for name in mag_sheet_names if name not in preferred]
+
+
+def _mag_lookup_keys(be_key: str) -> list[str]:
+    keys: list[str] = []
+
+    def _add(val: object) -> None:
+        if val is None:
+            return
+        sval = str(val).strip()
+        if sval and sval not in keys:
+            keys.append(sval)
+
+    base = str(be_key).strip()
+    if not base:
+        return keys
+    _add(base)
+    _add(base.lstrip("0"))
+    if base.isdigit():
+        if len(base) >= 4:
+            suf4 = base[-4:]
+            _add(suf4)
+            _add(suf4.lstrip("0"))
+            try:
+                _add(str(int(suf4)))
+            except Exception:
+                pass
+        if len(base) >= 3:
+            suf3 = base[-3:]
+            _add(suf3)
+            _add(suf3.lstrip("0"))
+            try:
+                _add(str(int(suf3)))
+            except Exception:
+                pass
+    return keys
+
+
+def _alt_key_for_sheet(be_key: str, sheet_name: str) -> str | None:
+    if not be_key or not be_key.isdigit() or len(be_key) < 4:
+        return None
+    if not be_key.startswith("00"):
+        return None
+    suffix = _sheet_year_suffix(sheet_name)
+    if not suffix:
+        return None
+    return f"{suffix}{be_key[-4:]}"
+
+
+def _find_mag_row(
+    *,
+    be_key: str,
+    mag_sheet_names: list[str],
+    mag_indexes: dict[str, dict[str, int]],
+    preferred_year: int | None,
+) -> tuple[str | None, int | None]:
+    if not be_key:
+        return None, None
+    base_keys = _mag_lookup_keys(be_key)
+    for sheet_name in _sheet_order_for_be(be_key, mag_sheet_names, preferred_year=preferred_year):
+        idx = mag_indexes.get(sheet_name, {})
+        if not idx:
+            continue
+        alt_key = _alt_key_for_sheet(be_key, sheet_name)
+        keys = ([alt_key] if alt_key else []) + base_keys
+        for lookup_key in keys:
+            row_idx = idx.get(lookup_key)
+            if row_idx:
+                return sheet_name, row_idx
+    return None, None
+
+
+def _safe_text(val: object) -> str:
+    if val is None:
+        return ""
+    try:
+        if pd.isna(val):
+            return ""
+    except Exception:
+        pass
+    return str(val).strip()
+
+
+def _build_update_items_by_sheet(updates_by_sheet: dict[str, dict[int, dict[int, object]]]) -> dict[str, list[tuple[int, int, object]]]:
+    update_items_by_sheet: dict[str, list[tuple[int, int, object]]] = {}
+    for sheet_name, rows in updates_by_sheet.items():
+        sheet_items: list[tuple[int, int, object]] = []
+        for row_idx, cols in rows.items():
+            for col_idx, val in cols.items():
+                sheet_items.append((row_idx, col_idx, val))
+        if sheet_items:
+            update_items_by_sheet[sheet_name] = sheet_items
+    return update_items_by_sheet
+
+
+def _update_mag_central_dates_for_export(
+    *,
+    df_export: pd.DataFrame,
+    week: int,
+    year: int,
+    tdb_source_path: Path | None,
+) -> tuple[dict, str]:
+    path = Path(tdb_source_path) if tdb_source_path is not None else get_tableau_de_bord_src()
+    if not path.exists():
+        return {}, "missing"
+    try:
+        wb_mag = load_workbook(path)
+    except Exception:
+        return {}, "read_error"
+
+    mag_sheet_names = _mag_sheet_names(wb_mag)
+    mag_sheet_names = sorted(
+        mag_sheet_names,
+        key=lambda name: (_sheet_year(name) is None, _sheet_year(name) or 0, str(name)),
+    )
+
+    mag_sheets: dict[str, object] = {}
+    mag_indexes: dict[str, dict[str, int]] = {}
+    for sheet_name in mag_sheet_names:
+        try:
+            ws_mag = wb_mag[sheet_name]
+        except Exception:
+            continue
+        mag_sheets[sheet_name] = ws_mag
+        mag_indexes[sheet_name] = _build_mag_index(ws_mag)
+
+    if not mag_indexes:
+        return {}, "read_error"
+
+    prev_friday = _friday_previous_week(week, year)
+    used_dates: dict = {}
+    updates_by_sheet: dict[str, dict[int, dict[int, object]]] = {}
+
+    preferred_year = year if isinstance(year, int) else None
+    for _, row in df_export.iterrows():
+        be_key = row.get("BE_KEY", "")
+        if not be_key:
+            continue
+        sheet_name, row_idx = _find_mag_row(
+            be_key=be_key,
+            mag_sheet_names=mag_sheet_names,
+            mag_indexes=mag_indexes,
+            preferred_year=preferred_year,
+        )
+        if not row_idx:
+            continue
+        ws_mag = mag_sheets.get(sheet_name)
+        if ws_mag is None:
+            continue
+        if prev_friday:
+            dm_cell = ws_mag.cell(row=row_idx, column=cp.MAG_CENTRAL_COL_DEPART_MAG)
+            if dm_cell.value in (None, ""):
+                updates_by_sheet.setdefault(sheet_name, {}).setdefault(row_idx, {})[
+                    cp.MAG_CENTRAL_COL_DEPART_MAG
+                ] = prev_friday
+                used_dates[be_key] = prev_friday
+            else:
+                used_dates[be_key] = dm_cell.value
+
+        date_vol = row.get("DATE")
+        if isinstance(date_vol, (pd.Timestamp, date)):
+            dv_value = date_vol.date() if isinstance(date_vol, pd.Timestamp) else date_vol
+            updates_by_sheet.setdefault(sheet_name, {}).setdefault(row_idx, {})[
+                cp.MAG_CENTRAL_COL_DEPART_VOL
+            ] = dv_value
+
+        bene_id = _safe_text(row.get("ID", ""))
+        if bene_id.endswith(".0"):
+            bene_id = bene_id[:-2]
+        bene_disp = _safe_text(row.get("BENEVOLE_DISP", row.get("Benevole", "")))
+        vol_aff = _safe_text(row.get("VOL_AFF", row.get("Numero_Vol", "")))
+        heure_aff = _safe_text(row.get("HEURE_AFF", ""))
+        if bene_id or bene_disp or vol_aff or heure_aff:
+            row_updates = updates_by_sheet.setdefault(sheet_name, {}).setdefault(row_idx, {})
+            row_updates[cp.MAG_CENTRAL_COL_ID_BENEV] = bene_id
+            row_updates[cp.MAG_CENTRAL_COL_BENEV] = bene_disp
+            row_updates[cp.MAG_CENTRAL_COL_VOL] = vol_aff
+            row_updates[cp.MAG_CENTRAL_COL_HEURE] = heure_aff
+
+    update_items_by_sheet = _build_update_items_by_sheet(updates_by_sheet)
+    if not update_items_by_sheet:
+        return used_dates, "no_updates"
+
+    try:
+        from utils.excel_automation import update_excel_cells
+
+        all_ok = True
+        for sheet_name, items in update_items_by_sheet.items():
+            if not update_excel_cells(path, sheet_name, items):
+                all_ok = False
+                break
+        if all_ok:
+            cp.sync_local_file_to_onedrive(path)
+            return used_dates, "excel"
+    except Exception:
+        pass
+
+    for sheet_name, items in update_items_by_sheet.items():
+        ws_mag = mag_sheets.get(sheet_name)
+        if ws_mag is None:
+            continue
+        for row_idx, col_idx, val in items:
+            ws_mag.cell(row=row_idx, column=col_idx).value = val
+
+    try:
+        wb_mag.save(path)
+        cp.sync_local_file_to_onedrive(path)
+    except Exception:
+        pass
+    return used_dates, "openpyxl"
+
+
+def export_planning_excel(
+    df,
+    week,
+    year,
+    *,
+    df_vols=None,
+    df_parambenev=None,
+    df_dispos=None,
+    df_paramdest=None,
+    create_tables: bool = True,
+    write_source_excel: bool = False,
+    increment_version: bool = True,
+    benev_path: Path | None = None,
+    tdb_source_path: Path | None = None,
+    pdf_exporter: Callable[[Path, Path], Path] | None = None,
+    output_path: Path | None = None,
+    output_dir: Path | None = None,
+    skip_versioning: bool = False,
+    generate_pdf: bool = True,
+) -> ExportResult:
+    warnings: list[str] = []
+    pdf_exporter = pdf_exporter or export_first_sheet_to_pdf
+
+    template = _resolve_template()
+    has_template = template.exists()
+    if not has_template:
+        warnings.append(f"Maquette introuvable ({template}); génération avec classeur minimal.")
+
+    if output_dir is not None:
+        output_dir = Path(output_dir)
+
+    if output_path is not None:
+        out_path = Path(output_path)
+        if not out_path.exists():
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            if has_template:
+                shutil.copy2(template, out_path)
+            else:
+                _create_minimal_workbook(out_path, week=week, year=year)
+        skip_versioning = True
+    else:
+        filename = f"ASFmm - PLANNING SEMAINE {year}-{week:02d}-TMP.xlsx"
+        planning_dir = (
+            output_dir
+            if output_dir is not None
+            else (
+                get_output_planning_dir()
+                if is_graph_onedrive()
+                else get_onedrive_root() / "Planning MAB" / f"ASFmm PLANNING {year}"
+            )
+        )
+        planning_dir.mkdir(parents=True, exist_ok=True)
+        out_path = planning_dir / filename
+        if has_template:
+            shutil.copy2(template, out_path)
+        else:
+            _create_minimal_workbook(out_path, week=week, year=year)
+    wb = _load_workbook_with_minimal_fallback(out_path, week=week, year=year)
+    ws_plan, ws_export, ws_vols, ws_bene = _resolve_target_sheets(wb)
 
     try:
         date.fromisocalendar(int(year), int(week), 1)
@@ -126,6 +565,7 @@ def export_planning_excel(
         pass
 
     dfp = build_export_view(df, df_paramdest=df_paramdest, df_vols=df_vols).fillna("")
+    safe_excel = sanitize_excel_value
 
     def _clear_tables(ws):
         try:
@@ -155,77 +595,15 @@ def export_planning_excel(
     )
     dfp = dfp.sort_values(by=["DATE", "HEURE_MIN", "Destination", "Numero_Vol"], kind="mergesort")
 
-    map_bene_to_display = {}
-    if df_parambenev is not None and not getattr(df_parambenev, "empty", True):
-        tmp = df_parambenev.copy()
-        tmp["Benevole"] = tmp.get("Benevole", tmp.get("BENEVOLE", ""))
-        tmp["Prenom_Court"] = tmp.get("Prenom_Court", tmp.get("Prenom court", ""))
-        tmp["Nom"] = tmp.get("Nom", "")
-        for _, r in tmp.iterrows():
-            b = str(r.get("Benevole", "")).strip()
-            pc = str(r.get("Prenom_Court", "")).strip()
-            nom = str(r.get("Nom", "")).strip().upper()
-            disp = f"{pc} {nom}".strip()
-            map_bene_to_display[b] = disp
-
-    def _bene_display(name):
-        if name in map_bene_to_display:
-            return map_bene_to_display[name]
-        parts = str(name).strip().split()
-        if len(parts) >= 2:
-            return f"{parts[0][0].upper()}. {' '.join(parts[1:]).upper()}"
-        return str(name).upper()
-
-    dfp["BENEVOLE_DISP"] = dfp.get("Benevole", dfp.get("BENEVOLE", "")).apply(_bene_display)
+    bene_display_map = _build_bene_display_map(df_parambenev)
+    dfp["BENEVOLE_DISP"] = dfp.get("Benevole", dfp.get("BENEVOLE", "")).apply(
+        lambda value: _format_bene_display(value, display_map=bene_display_map)
+    )
     dfp["VILLE"] = dfp.get("Ville", dfp.get("Dest_Ville", dfp.get("Destination", ""))).astype(str).str.upper()
     dfp["IATA"] = dfp.get("IATA", dfp.get("Dest_IATA", dfp.get("Destination", ""))).astype(str).str.upper()
 
     if df_vols is not None and not getattr(df_vols, "empty", True):
-        def _normalize_vol_key(value: object) -> str:
-            s = str(value or "").strip().upper()
-            if s.startswith("AF"):
-                s = s.replace("AF", "").strip()
-            digits = "".join(ch for ch in s if ch.isdigit())
-            if digits:
-                try:
-                    return str(int(digits))
-                except Exception:
-                    return digits.lstrip("0") or digits
-            return s
-
-        vols_map = df_vols.copy()
-        if "Date_Vol_dt" in vols_map.columns:
-            vols_date = coerce_datetime(vols_map["Date_Vol_dt"], errors="coerce")
-        else:
-            vols_date = coerce_datetime(vols_map.get("Date_Vol", ""), errors="coerce", dayfirst=True)
-        vols_map["_DATE_KEY"] = vols_date.dt.date
-        vols_map["_VOL_KEY"] = vols_map.get("Numero_Vol", "").apply(_normalize_vol_key)
-        routing_map = (
-            vols_map.dropna(subset=["Routing"])
-            .drop_duplicates(subset=["_DATE_KEY", "_VOL_KEY"])
-            .set_index(["_DATE_KEY", "_VOL_KEY"])["Routing"]
-            .to_dict()
-        )
-        dfp["_DATE_KEY"] = coerce_datetime(dfp["DATE"], errors="coerce").dt.date
-        dfp["_VOL_KEY"] = dfp.get("Numero_Vol", "").apply(_normalize_vol_key)
-        routing_series = dfp["Routing"] if "Routing" in dfp.columns else pd.Series([""] * len(dfp), index=dfp.index)
-        mask_routing_empty = (
-            routing_series.fillna("")
-            .astype(str)
-            .str.strip()
-            .str.lower()
-            .replace({"nan": "", "none": ""})
-            .eq("")
-        )
-        if mask_routing_empty.any():
-            def _route_fallback(row):
-                key = (row.get("_DATE_KEY"), row.get("_VOL_KEY"))
-                if key in routing_map:
-                    return routing_map[key]
-                return ""
-
-            dfp.loc[mask_routing_empty, "Routing"] = dfp.loc[mask_routing_empty].apply(_route_fallback, axis=1)
-        dfp = dfp.drop(columns=["_DATE_KEY", "_VOL_KEY"], errors="ignore")
+        dfp = _apply_routing_fallback_from_vols(dfp, df_vols=df_vols)
 
     dfp["VOL_AFF"] = dfp.get("Numero_Vol", dfp.get("Numero_Vol_Aff", "")).apply(format_vol_display)
     dfp["ROUTING"] = dfp.get("Routing", dfp.get("ROUTING", "")).astype(str).str.replace(",", "-").str.upper()
@@ -245,240 +623,15 @@ def export_planning_excel(
     dfp["BE_KEY"] = dfp["BE_NUM"]
     dfp["_STATUS"] = dfp.get("_STATUS", "normal")
 
-    def _friday_previous_week(wk: int, yr: int):
-        try:
-            mon = date.fromisocalendar(yr, wk, 1)
-            return mon - timedelta(days=3)
-        except Exception:
-            return None
-
-    def update_mag_central_dates() -> tuple[dict, str]:
-        path = Path(tdb_source_path) if tdb_source_path is not None else get_tableau_de_bord_src()
-        if not path.exists():
-            return {}, "missing"
-        try:
-            wb_mag = load_workbook(path)
-        except Exception:
-            return {}, "read_error"
-
-        def _sheet_year(name: str):
-            match = re.search(r"(20\d{2})", str(name))
-            return int(match.group(1)) if match else None
-
-        def _mag_sheet_names(wb):
-            names = [name for name in wb.sheetnames if str(name).strip().upper().startswith("MAG CENTRAL")]
-            if names:
-                return names
-            if cp.SHEET_MAG_CENTRAL in wb.sheetnames:
-                return [cp.SHEET_MAG_CENTRAL]
-            return [wb.active.title]
-
-        mag_sheet_names = _mag_sheet_names(wb_mag)
-        mag_sheet_names = sorted(
-            mag_sheet_names,
-            key=lambda n: (_sheet_year(n) is None, _sheet_year(n) or 0, str(n)),
-        )
-
-        mag_sheets = {}
-        mag_indexes = {}
-        for sheet_name in mag_sheet_names:
-            try:
-                ws_mag = wb_mag[sheet_name]
-            except Exception:
-                continue
-            mag_sheets[sheet_name] = ws_mag
-            mag_index = {}
-            for row in ws_mag.iter_rows(min_row=1, max_row=ws_mag.max_row, min_col=1, max_col=20):
-                val = row[0].value
-                if val is None:
-                    continue
-                sval = str(int(val)) if isinstance(val, (int, float)) else str(val).strip()
-                key = normalize_be_number(sval)
-                if not key:
-                    continue
-                keys = {key, sval, key.lstrip("0")}
-                for k in keys:
-                    mag_index[k] = row[0].row
-            mag_indexes[sheet_name] = mag_index
-
-        if not mag_indexes:
-            return {}, "read_error"
-
-        prev_friday = _friday_previous_week(week, year)
-        used_dates = {}
-        updates_by_sheet = {}
-
-        def _safe_text(val: object) -> str:
-            if val is None:
-                return ""
-            try:
-                if pd.isna(val):
-                    return ""
-            except Exception:
-                pass
-            return str(val).strip()
-
-        def _sheet_year_suffix(name: str) -> str | None:
-            yr = _sheet_year(name)
-            return str(yr)[-2:] if yr else None
-
-        def _sheet_order_for_be(be_key: str) -> list[str]:
-            preferred = []
-            if be_key:
-                for name in mag_sheet_names:
-                    suffix = _sheet_year_suffix(name)
-                    if suffix and be_key.startswith(suffix):
-                        preferred.append(name)
-            if isinstance(year, int):
-                for name in mag_sheet_names:
-                    if _sheet_year(name) == int(year) and name not in preferred:
-                        preferred.append(name)
-            return preferred + [n for n in mag_sheet_names if n not in preferred]
-
-        def _mag_lookup_keys(be_key: str) -> list[str]:
-            keys: list[str] = []
-
-            def _add(val: object) -> None:
-                if val is None:
-                    return
-                sval = str(val).strip()
-                if sval and sval not in keys:
-                    keys.append(sval)
-
-            base = str(be_key).strip()
-            if not base:
-                return keys
-            _add(base)
-            _add(base.lstrip("0"))
-            if base.isdigit():
-                if len(base) >= 4:
-                    suf4 = base[-4:]
-                    _add(suf4)
-                    _add(suf4.lstrip("0"))
-                    try:
-                        _add(str(int(suf4)))
-                    except Exception:
-                        pass
-                if len(base) >= 3:
-                    suf3 = base[-3:]
-                    _add(suf3)
-                    _add(suf3.lstrip("0"))
-                    try:
-                        _add(str(int(suf3)))
-                    except Exception:
-                        pass
-            return keys
-
-        def _alt_key_for_sheet(be_key: str, sheet_name: str) -> str | None:
-            if not be_key or not be_key.isdigit() or len(be_key) < 4:
-                return None
-            if not be_key.startswith("00"):
-                return None
-            suffix = _sheet_year_suffix(sheet_name)
-            if not suffix:
-                return None
-            return f"{suffix}{be_key[-4:]}"
-
-        def _find_mag_row(be_key: str):
-            if not be_key:
-                return None, None
-            sheet_order = _sheet_order_for_be(be_key)
-            base_keys = _mag_lookup_keys(be_key)
-            for sheet_name in sheet_order:
-                idx = mag_indexes.get(sheet_name, {})
-                if not idx:
-                    continue
-                alt_key = _alt_key_for_sheet(be_key, sheet_name)
-                keys = ([alt_key] if alt_key else []) + base_keys
-                for key in keys:
-                    row_idx = idx.get(key)
-                    if row_idx:
-                        return sheet_name, row_idx
-            return None, None
-
-        for _, r in dfp.iterrows():
-            be_key = r.get("BE_KEY", "")
-            if not be_key:
-                continue
-            sheet_name, row_idx = _find_mag_row(be_key)
-            if not row_idx:
-                continue
-            ws_mag = mag_sheets.get(sheet_name)
-            if ws_mag is None:
-                continue
-            if prev_friday:
-                dm_cell = ws_mag.cell(row=row_idx, column=cp.MAG_CENTRAL_COL_DEPART_MAG)
-                if dm_cell.value in (None, ""):
-                    updates_by_sheet.setdefault(sheet_name, {}).setdefault(row_idx, {})[
-                        cp.MAG_CENTRAL_COL_DEPART_MAG
-                    ] = prev_friday
-                    used_dates[be_key] = prev_friday
-                else:
-                    used_dates[be_key] = dm_cell.value
-            date_vol = r.get("DATE")
-            if isinstance(date_vol, (pd.Timestamp, date)):
-                dv_value = date_vol.date() if isinstance(date_vol, pd.Timestamp) else date_vol
-                updates_by_sheet.setdefault(sheet_name, {}).setdefault(row_idx, {})[
-                    cp.MAG_CENTRAL_COL_DEPART_VOL
-                ] = dv_value
-
-            bene_id = _safe_text(r.get("ID", ""))
-            if bene_id.endswith(".0"):
-                bene_id = bene_id[:-2]
-            bene_disp = _safe_text(r.get("BENEVOLE_DISP", r.get("Benevole", "")))
-            vol_aff = _safe_text(r.get("VOL_AFF", r.get("Numero_Vol", "")))
-            heure_aff = _safe_text(r.get("HEURE_AFF", ""))
-            if bene_id or bene_disp or vol_aff or heure_aff:
-                row_updates = updates_by_sheet.setdefault(sheet_name, {}).setdefault(row_idx, {})
-                row_updates[cp.MAG_CENTRAL_COL_ID_BENEV] = bene_id
-                row_updates[cp.MAG_CENTRAL_COL_BENEV] = bene_disp
-                row_updates[cp.MAG_CENTRAL_COL_VOL] = vol_aff
-                row_updates[cp.MAG_CENTRAL_COL_HEURE] = heure_aff
-
-        update_items_by_sheet = {}
-        for sheet_name, rows in updates_by_sheet.items():
-            sheet_items = []
-            for row_idx, cols in rows.items():
-                for col_idx, val in cols.items():
-                    sheet_items.append((row_idx, col_idx, val))
-            if sheet_items:
-                update_items_by_sheet[sheet_name] = sheet_items
-
-        if not update_items_by_sheet:
-            return used_dates, "no_updates"
-
-        try:
-            from utils.excel_automation import update_excel_cells
-
-            all_ok = True
-            for sheet_name, items in update_items_by_sheet.items():
-                if not update_excel_cells(path, sheet_name, items):
-                    all_ok = False
-                    break
-            if all_ok:
-                cp.sync_local_file_to_onedrive(path)
-                return used_dates, "excel"
-        except Exception:
-            pass
-
-        for sheet_name, items in update_items_by_sheet.items():
-            ws_mag = mag_sheets.get(sheet_name)
-            if ws_mag is None:
-                continue
-            for row_idx, col_idx, val in items:
-                ws_mag.cell(row=row_idx, column=col_idx).value = val
-
-        try:
-            wb_mag.save(path)
-            cp.sync_local_file_to_onedrive(path)
-        except Exception:
-            pass
-        return used_dates, "openpyxl"
-
     mag_write_method = "disabled"
     map_depart_mag: dict = {}
     if write_source_excel:
-        map_depart_mag, mag_write_method = update_mag_central_dates()
+        map_depart_mag, mag_write_method = _update_mag_central_dates_for_export(
+            df_export=dfp,
+            week=week,
+            year=year,
+            tdb_source_path=tdb_source_path,
+        )
 
     def _depart_mag_for(be_key):
         if be_key in map_depart_mag:
@@ -584,27 +737,27 @@ def export_planning_excel(
                 is_first = idx == 0
                 status = str(r.get("_STATUS", "normal")).lower()
                 bene_val = bene_list[idx] if idx < len(bene_list) else ""
-                ws_plan.cell(row=current_row, column=4).value = bene_val
+                ws_plan.cell(row=current_row, column=4).value = safe_excel(bene_val)
                 if is_first:
-                    ws_plan.cell(row=current_row, column=6).value = r["VILLE"]
-                    ws_plan.cell(row=current_row, column=7).value = r["IATA"]
-                    ws_plan.cell(row=current_row, column=8).value = r["ROUTING"]
-                    ws_plan.cell(row=current_row, column=9).value = r["VOL_AFF"]
-                    ws_plan.cell(row=current_row, column=10).value = r["HEURE_AFF"]
-                be_num_val = r["BE_NUM"]
+                    ws_plan.cell(row=current_row, column=6).value = safe_excel(r["VILLE"])
+                    ws_plan.cell(row=current_row, column=7).value = safe_excel(r["IATA"])
+                    ws_plan.cell(row=current_row, column=8).value = safe_excel(r["ROUTING"])
+                    ws_plan.cell(row=current_row, column=9).value = safe_excel(r["VOL_AFF"])
+                    ws_plan.cell(row=current_row, column=10).value = safe_excel(r["HEURE_AFF"])
+                be_num_val = safe_excel(r["BE_NUM"])
                 ws_plan.cell(row=current_row, column=11).value = be_num_val
                 be_colis_val = "" if status.startswith("old") else r["BE_COLIS"]
-                ws_plan.cell(row=current_row, column=12).value = be_colis_val
+                ws_plan.cell(row=current_row, column=12).value = safe_excel(be_colis_val)
                 if status.startswith("old"):
                     ws_plan.cell(row=current_row, column=12).value = ""
-                ws_plan.cell(row=current_row, column=13).value = r["BE_TYPE"]
+                ws_plan.cell(row=current_row, column=13).value = safe_excel(r["BE_TYPE"])
                 dep_mag = r.get("DEPART_MAG")
                 if isinstance(dep_mag, pd.Timestamp):
                     dep_mag = dep_mag.date()
                 dep_mag_str = format_date_value(dep_mag, fmt="%d/%m/%y", default="")
-                ws_plan.cell(row=current_row, column=15).value = dep_mag_str
-                ws_plan.cell(row=current_row, column=16).value = r["BE_EXP"]
-                ws_plan.cell(row=current_row, column=17).value = r["BE_DEST"]
+                ws_plan.cell(row=current_row, column=15).value = safe_excel(dep_mag_str)
+                ws_plan.cell(row=current_row, column=16).value = safe_excel(r["BE_EXP"])
+                ws_plan.cell(row=current_row, column=17).value = safe_excel(r["BE_DEST"])
                 fill_color = None
                 if status.startswith("old"):
                     fill_color = PatternFill("solid", fgColor="F8CCCC")
@@ -619,7 +772,7 @@ def export_planning_excel(
             if r not in keep_rows:
                 ws_plan.row_dimensions[r].hidden = True
 
-    for col_letter in ["B", "C", "G"]:
+    for col_letter in ["B", "C", "E", "G", "N"]:
         ws_plan.column_dimensions[col_letter].hidden = True
     for col_letter in ["P", "Q"]:
         col = ws_plan[col_letter]
@@ -628,15 +781,19 @@ def export_planning_excel(
 
     from openpyxl.utils.dataframe import dataframe_to_rows
 
+    dfp_safe = sanitize_dataframe_for_excel(dfp)
+    df_vols_safe = sanitize_dataframe_for_excel(df_vols)
+    df_dispos_safe = sanitize_dataframe_for_excel(df_dispos)
+
     _clear_tables(ws_export)
     ws_export.delete_rows(1, ws_export.max_row)
-    for row in dataframe_to_rows(dfp, index=False, header=True):
+    for row in dataframe_to_rows(dfp_safe, index=False, header=True):
         ws_export.append(row)
 
     _clear_tables(ws_vols)
-    if df_vols is not None and not getattr(df_vols, "empty", True):
+    if df_vols_safe is not None and not getattr(df_vols_safe, "empty", True):
         ws_vols.delete_rows(1, ws_vols.max_row)
-        for row in dataframe_to_rows(df_vols, index=False, header=True):
+        for row in dataframe_to_rows(df_vols_safe, index=False, header=True):
             ws_vols.append(row)
         max_row = ws_vols.max_row
         max_col = ws_vols.max_column
@@ -656,7 +813,7 @@ def export_planning_excel(
             tab.tableStyleInfo = style
             ws_vols.add_table(tab)
 
-    df_dispo_export = df_dispos
+    df_dispo_export = df_dispos_safe
     if df_dispo_export is None:
         try:
             df_dispo_export = get_benevoles_cached(planning_path=benev_path)
@@ -665,7 +822,7 @@ def export_planning_excel(
 
     _clear_tables(ws_bene)
     if df_dispo_export is not None and not getattr(df_dispo_export, "empty", True):
-        df_dispo_export = df_dispo_export.copy()
+        df_dispo_export = sanitize_dataframe_for_excel(df_dispo_export.copy())
         cols_order = [
             "ID",
             "Benevole",
@@ -738,63 +895,53 @@ def export_planning_excel(
     except Exception:
         pass
 
-    def _week_year_from_a1():
-        val = ws_plan["A1"].value
-        wk, yr = week, year
-        try:
-            if isinstance(val, datetime):
-                wk = val.isocalendar()[1]
-                yr = val.isocalendar()[0]
-            else:
-                dt = coerce_datetime(val, errors="coerce", dayfirst=True)
-                if pd.notna(dt):
-                    wk = dt.isocalendar()[1]
-                    yr = dt.isocalendar()[0]
-        except Exception:
-            pass
-        return int(wk), int(yr)
+    week_final, year_final = _week_year_from_ws_plan(
+        ws_plan,
+        fallback_week=week,
+        fallback_year=year,
+    )
 
-    week_final, year_final = _week_year_from_a1()
+    if skip_versioning:
+        if increment_version:
+            try:
+                q1_val = ws_plan["Q1"].value
+                q1_num = int(q1_val) if q1_val not in (None, "") else 0
+                ws_plan["Q1"].value = q1_num + 1
+            except Exception:
+                pass
+        wb.save(out_path)
+        pdf_path = None
+        if generate_pdf and not is_graph_onedrive():
+            pdf_target = out_path.with_suffix(".pdf")
+            try:
+                pdf_path = pdf_exporter(out_path, pdf_target)
+                if not pdf_path.exists():
+                    raise RuntimeError("PDF non généré.")
+            except Exception:
+                warnings.append("PDF non généré : Excel non accessible pour l’export automatique.")
+                pdf_path = None
+        return ExportResult(
+            output_path=out_path,
+            pdf_path=pdf_path,
+            mag_write_method=mag_write_method,
+            warnings=warnings,
+        )
 
     planning_dir_final = (
-        get_output_planning_dir()
-        if is_graph_onedrive()
-        else get_onedrive_root() / "Planning MAB" / f"ASFmm PLANNING {year_final}"
+        output_dir
+        if output_dir is not None
+        else (
+            get_output_planning_dir()
+            if is_graph_onedrive()
+            else get_onedrive_root() / "Planning MAB" / f"ASFmm PLANNING {year_final}"
+        )
     )
     planning_dir_final.mkdir(parents=True, exist_ok=True)
-
-    def _extract_version_from_name(name: str, *, week: int, year: int) -> int | None:
-        stem = Path(name).stem
-        m = re.search(r"SEMAINE\s*(20\d{2})\D+(\d{1,2})\D+(\d+)", stem, re.IGNORECASE)
-        if m:
-            try:
-                y, w, v = int(m.group(1)), int(m.group(2)), int(m.group(3))
-                if y == year and w == week:
-                    return v
-            except Exception:
-                pass
-        m = re.search(r"N[°o]?\s*(\d{1,2}).*?(20\d{2}).*?v(\d+)", stem, re.IGNORECASE)
-        if m:
-            try:
-                w, y, v = int(m.group(1)), int(m.group(2)), int(m.group(3))
-                if y == year and w == week:
-                    return v
-            except Exception:
-                pass
-        m = re.search(r"N[°o]?\s*(\d{1,2}).*?(20\d{2})", stem, re.IGNORECASE)
-        if m:
-            try:
-                w, y = int(m.group(1)), int(m.group(2))
-                if y == year and w == week:
-                    return 1
-            except Exception:
-                pass
-        return None
 
     existing_files = [p for p in planning_dir_final.glob("ASFmm - PLANNING SEMAINE *.xls*") if p.is_file()]
     versions = []
     for p in existing_files:
-        v = _extract_version_from_name(p.name, week=week_final, year=year_final)
+        v = _extract_version_from_planning_name(p.name, week=week_final, year=year_final)
         if v is not None:
             versions.append(v)
     max_version = max(versions) if versions else 0
@@ -809,7 +956,7 @@ def export_planning_excel(
             candidates = [
                 p
                 for p in existing_files
-                if _extract_version_from_name(p.name, week=week_final, year=year_final) == max_version
+                if _extract_version_from_planning_name(p.name, week=week_final, year=year_final) == max_version
             ]
             if candidates:
                 def _mtime(p: Path) -> float:

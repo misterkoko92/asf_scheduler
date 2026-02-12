@@ -127,14 +127,10 @@ def normalize_planning_df(df: pd.DataFrame | None) -> pd.DataFrame:
     for col in ["BE_Type", "BE_Expediteur", "BE_Destinataire", "Telephone"]:
         df_norm[col] = df_norm[col].astype(str).fillna("")
 
-    df_norm["_MANUEL"] = (
-        df_norm["_MANUEL"]
-        .fillna(False)
-        .astype(str)
-        .str.strip()
-        .str.lower()
-        .isin({"true", "1", "yes", "vrai"})
-    )
+    manuel_raw = df_norm["_MANUEL"]
+    df_norm["_MANUEL"] = manuel_raw.map(
+        lambda v: "" if pd.isna(v) else str(v).strip().lower()
+    ).isin({"true", "1", "yes", "vrai"})
     df_norm["_STATUS"] = (
         df_norm["_STATUS"]
         .fillna("normal")

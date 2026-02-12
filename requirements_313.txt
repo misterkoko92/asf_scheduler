@@ -1,7 +1,5 @@
 altair==5.5.0
 altgraph==0.17.4
-# Editable install du projet local
--e .
 attrs==25.4.0
 blinker==1.9.0
 cachetools==6.2.1

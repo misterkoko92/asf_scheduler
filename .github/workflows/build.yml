@@ -32,7 +32,15 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install pytest-cov
           pip install pyinstaller
+
+      - name: Run tests
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings \
+            --cov=asf_app --cov=scheduler --cov=loaders --cov=utils \
+            --cov-report=term-missing --cov-report=xml
 
       - name: Build
         shell: bash
@@ -46,7 +54,7 @@ jobs:
           ADD_ASF="asf_app${SEP}asf_app"
           ADD_SCHED="scheduler${SEP}scheduler"
           ADD_LOADERS="loaders${SEP}loaders"
-          pyinstaller run_app.py --onefile --name ASF-Scheduler --paths . \
+          pyinstaller app.py --onefile --name ASF-Scheduler --paths . \
             --add-data "$ADD_APP" --add-data "$ADD_ASF" --add-data "$ADD_SCHED" --add-data "$ADD_LOADERS" \
             --copy-metadata streamlit --copy-metadata pandas --copy-metadata altair --copy-metadata click \
             --collect-all streamlit --collect-submodules asf_app --collect-submodules scheduler --collect-submodules loaders --collect-submodules reportlab \

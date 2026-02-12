@@ -81,6 +81,7 @@ class AppState:
     api_start_date: Optional[Any] = None
     api_end_date: Optional[Any] = None
     vols_source: str = "excel"  # excel | api
+    api_time_origin_type: str = "P"
 
     # ---------------------------
     # PLANNING GÉNÉRÉ

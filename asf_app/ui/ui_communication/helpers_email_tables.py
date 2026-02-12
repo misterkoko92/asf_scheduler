@@ -1,3 +1,6 @@
+from html import escape
+import pandas as pd
+
 from utils.identifiers import format_vol_display
 
 # asf_app/ui/ui_communication/helpers_email_tables.py
@@ -78,8 +81,12 @@ def build_comm_table_html(df):
     for _, row in df[cols].iterrows():
         html.append("<tr>")
         for c in cols:
-            value = row[c] if row[c] is not None else ""
-            html.append(f"<td style='white-space:nowrap; {border_style}'>{value}</td>")
+            value = row[c]
+            if pd.isna(value):
+                safe_value = ""
+            else:
+                safe_value = escape(str(value), quote=True)
+            html.append(f"<td style='white-space:nowrap; {border_style}'>{safe_value}</td>")
         html.append("</tr>")
 
     html.append("</table>")

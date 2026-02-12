@@ -150,6 +150,7 @@ def render_tab_params():
         # Initialisation runtime
         if not hasattr(state, "config_moteur"):
             state.config_moteur = {
+                "SOLVER_VERSION": os.getenv("ASF_SOLVER_VERSION", "v3"),
                 "MAX_BE_PER_FLIGHT": 20,
                 "MAX_EQUIV_PER_VOLUNTEER": 20,
                 "MAX_BENEV_PER_VOL": 0,
@@ -160,6 +161,13 @@ def render_tab_params():
         cfg = state.config_moteur
 
         with st.form("form_param_moteur"):
+
+            cfg["SOLVER_VERSION"] = st.selectbox(
+                "Version solver OR-Tools",
+                options=["v2", "v3"],
+                index=0 if str(cfg.get("SOLVER_VERSION", "v2")).lower() == "v2" else 1,
+                help="V2 = stable (capacité globale). V3 = capacité stricte par bénévole.",
+            )
 
             colA, colB = st.columns(2)
             with colA:
@@ -198,6 +206,8 @@ def render_tab_params():
             )
 
             if st.form_submit_button("💾 Appliquer"):
+                os.environ["ASF_SOLVER_VERSION"] = str(cfg.get("SOLVER_VERSION", "v3"))
+                st.session_state["solver_version"] = str(cfg.get("SOLVER_VERSION", "v3"))
                 state.config_moteur = cfg
                 st.success("✔ Paramoteur mis à jour (SESSION ONLY).")
 

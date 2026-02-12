@@ -1,6 +1,9 @@
+import warnings
+
 import pandas as pd
 
 from utils.datetime_utils import (
+    coerce_datetime,
     parse_date_series,
     parse_time_series,
     normalize_hour_str,
@@ -49,3 +52,27 @@ def test_parse_time_series_hour_only_string():
     parsed = parse_time_series(ser, allow_hour_only=True)
     assert parsed.dt.hour.tolist()[0] == 10
     assert parsed.dt.minute.tolist()[0] == 0
+
+
+def test_parse_date_series_dayfirst_iso_emits_no_warning():
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        parsed = parse_date_series(pd.Series(["2026-01-23"]))
+    assert str(parsed.iloc[0].date()) == "2026-01-23"
+    assert not any(
+        "Parsing dates in %Y-%m-%d format when dayfirst=True was specified."
+        in str(w.message)
+        for w in caught
+    )
+
+
+def test_coerce_datetime_dayfirst_iso_emits_no_warning():
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        parsed = coerce_datetime("2026-01-23", errors="coerce", dayfirst=True)
+    assert str(parsed.date()) == "2026-01-23"
+    assert not any(
+        "Parsing dates in %Y-%m-%d format when dayfirst=True was specified."
+        in str(w.message)
+        for w in caught
+    )

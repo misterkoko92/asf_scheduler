@@ -95,7 +95,7 @@ def add_benevole_dispo(path_benev: str, form_data: Dict) -> None:
         new_row["HEURE_DEPART"] = format_time_value(h_dep, fmt="%H:%M", default="")
 
     # Contraintes
-    for f in ["MAX_JOURS_SEMAINE", "MAX_EXP_SEMAINE", "MAX_EXP_JOUR", "ATTENTE_MAX_H"]:
+    for f in ["MAX_JOURS_SEMAINE", "MAX_EXP_SEMAINE", "MAX_EXP_JOUR", "ATTENTE_MAX_H", "MAX_COLIS_VOL"]:
         if f in new_row:
             new_row[f] = form_data.get(f.lower(), "")
 

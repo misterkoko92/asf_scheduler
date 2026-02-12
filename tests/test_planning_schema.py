@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import warnings
+
 import pandas as pd
 
 from scheduler.planning_schema import normalize_planning_df, validate_planning_df
@@ -121,3 +123,27 @@ def test_build_export_view_maps_city_to_iata_without_routing_fallback():
     assert view.loc[0, "IATA"] == "DSS"
     assert view.loc[0, "Dest_Ville"] == "DAKAR"
     assert view.loc[0, "Routing"] == ""
+
+
+def test_normalize_planning_df_manual_flag_no_future_warning():
+    df = pd.DataFrame(
+        [
+            {
+                "Date_Vol": "01/01/2025",
+                "Heure_Vol": "10h00",
+                "Numero_Vol": "AF 0007",
+                "Destination": "dss",
+                "BE_Numero": "1234",
+                "BE_Nb_Colis": "1",
+                "BE_Nb_Equiv": "1",
+                "Benevole": "Jean",
+                "ID": "1",
+                "_MANUEL": pd.NA,
+            }
+        ]
+    )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        norm = normalize_planning_df(df)
+    assert bool(norm.loc[0, "_MANUEL"]) is False
+    assert not any("Downcasting object dtype arrays on .fillna" in str(w.message) for w in caught)

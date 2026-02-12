@@ -35,7 +35,8 @@ def _open_whatsapp(url: str):
     if "darwin" in system:          # macOS
         subprocess.Popen(["open", url])
     elif "windows" in system:
-        subprocess.Popen(["cmd", "/c", "start", "", url], shell=True)
+        # "start" est exécuté via cmd sans shell pour limiter la surface d'injection.
+        subprocess.Popen(["cmd", "/c", "start", "", url])
     else:
         # fallback Linux
         subprocess.Popen(["xdg-open", url])

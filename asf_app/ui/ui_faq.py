@@ -29,7 +29,7 @@ def render_tab_faq():
   - TABLEAU DE BORD : `.../Hélida/TABLEAU DE BORD.xlsx`  
     - Feuilles utilisées : **MAG CENTRAL** (BE statut D), **ParamBE**, **ParamExpediteur**, **ParamDest**, **ParamBenev**, **ParamBenevTéléphone** (selon column_map)  
   - PLANNING BÉNÉVOLES : `.../Planning Bénévoles/Planning BENEVOLE.xlsx` (fallback 2025 si besoin)  
-    - Feuilles utilisées : **Disponibilités** (créneaux bénévoles)  
+    - Feuilles utilisées : **Disponibilités** (créneaux bénévoles), **ParamBenev** (dont `MAX_COLIS_VOL`)  
   - VOLS : `.../Planning MAB/Fichiers Source/aVols/Vols.xlsx`  
     - Feuilles utilisées : **Vols** (planning des vols)
         """
@@ -48,13 +48,14 @@ def render_tab_faq():
         """
 - Réglages moteur/affichage.  
 - Thème : switch Classique / Moderne (haut de page).
+- **Paramoteur** : choix de la version solver **V2/V3** (par défaut V3).
         """
     )
 
-    st.markdown("### Onglet Planning V2 (OR-Tools)")
+    st.markdown("### Onglet Planning")
     st.markdown(
         """
-- **Simulation OR-Tools** (2 modes) → planning + bilan en mémoire.  
+- **Génération OR-Tools** (2 modes) → planning + bilan en mémoire.  
 - **Ajuster le planning simulé** : sélection BE (statut D) et vols filtrés par destination ; ajout / suppression.  
 - **Export Excel** du planning simulé :  
   - Enrichissement complet.  
@@ -72,7 +73,10 @@ def render_tab_faq():
     st.markdown(
         """
 - df_comm construit depuis le planning enrichi.  
-- Si aucun planning principal n’est disponible, utiliser le planning simulé (OR-Tools).  
+- Choix de source : **Planning de la session** (moteur principal / OR-Tools) ou **Planning OneDrive**.  
+- Planning OneDrive : sélectionner l’année, choisir un fichier Excel dans `ASFmm PLANNING YYYY`, puis cliquer **Valider**.  
+  La feuille **“Export planning”** est utilisée pour générer les messages.  
+- Si aucun planning de session n’est disponible, le mode OneDrive reste utilisable.  
 - Whatsapp : messages générés, envoi via lien.  
 - Emails Air France / ASF Interne :  
   - Joint uniquement le PDF si trouvé dans `Planning MAB/ASFmm PLANNING YYYY/ASFmm - PLANNING SEMAINE YYYY-XX-ZZ.pdf`.  
@@ -107,7 +111,8 @@ def render_tab_faq():
 - **Tri BE** : par priorité puis équiv colis, avec gestion NON-ASF si applicable.  
 - **Packing** : OR-Tools place les BE par destination selon les règles ParamDest ; rejet si pas de vol ou capacité insuffisante.  
 - **Affectation bénévoles** : OR-Tools sélectionne les créneaux dispos (heures arr/dep), filtre par vol (charge), attribution en simple/double selon charge.  
-- **Capacité bénévole** : ajuste la capacité équivalente d’un vol en fonction du nombre de bénévoles affectés (ex : 1 bénévole → cap réduite).  
+- **Capacité bénévole (V3)** : contrainte **stricte par bénévole** via `MAX_COLIS_VOL` (ParamBenev), fallback 22 si vide/≤0.  
+- **Capacité bénévole (V2)** : capacité globale par vol basée sur le nombre de bénévoles affectés.  
 - **Sortie** : planning enrichi (BE, vols, bénévoles, équiv, statuts), bilan BE/vols/bénévoles.  
 - **Mise à jour MAG CENTRAL** (à l’export) : col J “DATE DE DEPART MAG” si vide → vendredi semaine précédente ; col L “DATE DEPART VOL” = date vol planifié.  
 - **Export** : maquette Excel (feuilles Planning SXX-YYYY / Export planning / Data Vols) + PDF via Excel si autorisé.  

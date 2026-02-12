@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from scheduler.solver_ortools import solve_planning_ortools_simulation
+from scheduler.solver_router import solve_planning_ortools_simulation
 from scheduler.data_sources import DataSource
 
 
@@ -20,6 +20,7 @@ def run_ortools_simulation(
     priority_mode: str = "colis",
     data_source_name: str | None = None,
     data_source: DataSource | None = None,
+    solver_version: str | None = None,
 ) -> Dict[str, Any]:
     """
     Lance le solveur OR-Tools et retourne un dict contenant
@@ -32,6 +33,7 @@ def run_ortools_simulation(
         priority_mode=priority_mode,
         data_source=data_source,
         data_source_name=data_source_name,
+        solver_version=solver_version,
     )
 
 
@@ -42,6 +44,7 @@ def run_ortools_simulation_dual(
     verbose: bool = False,
     data_source_name: str | None = None,
     data_source: DataSource | None = None,
+    solver_version: str | None = None,
 ) -> Dict[str, Any]:
     """
     Lance deux simulations : priorité colis (par défaut) et priorité bénévoles.
@@ -55,6 +58,7 @@ def run_ortools_simulation_dual(
         priority_mode="colis",
         data_source=data_source,
         data_source_name=data_source_name,
+        solver_version=solver_version,
     )
     modes["benevoles"] = run_ortools_simulation(
         timeout_seconds=timeout_seconds,
@@ -63,5 +67,6 @@ def run_ortools_simulation_dual(
         priority_mode="benevoles",
         data_source=data_source,
         data_source_name=data_source_name,
+        solver_version=solver_version,
     )
     return {"modes": modes, "selected": "colis"}

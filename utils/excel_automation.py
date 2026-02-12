@@ -12,6 +12,8 @@ from typing import Iterable
 from openpyxl.utils import get_column_letter
 from openpyxl.utils.datetime import to_excel
 
+from utils.applescript_utils import applescript_escape
+
 
 def _coerce_excel_value(value):
     if value is None or value == "":
@@ -55,7 +57,7 @@ def _as_applescript_value(value: object) -> str:
         return "true" if value else "false"
     if isinstance(value, (int, float)):
         return str(value)
-    text = str(value).replace('"', '\\"')
+    text = applescript_escape(str(value))
     return f"\"{text}\""
 
 
@@ -82,18 +84,20 @@ def _update_excel_macos(path: Path, sheet_name: str, updates: list[tuple[int, in
     for row, col, val in updates:
         addr = f"{get_column_letter(col)}{row}"
         if isinstance(val, str):
-            safe = val.replace('"', '\\"')
+            safe = applescript_escape(val)
             lines.append(f'set value of range "{addr}" of ws to "{safe}"')
         else:
             lines.append(f'set value of range "{addr}" of ws to {val}')
 
+    path_esc = applescript_escape(str(path))
+    sheet_name_safe = applescript_escape(sheet_name)
     script = f"""
-        set theFile to POSIX file "{path}"
+        set theFile to POSIX file "{path_esc}"
         tell application "Microsoft Excel"
             activate
             set display alerts to false
             set wb to open workbook workbook file name theFile
-            set ws to worksheet "{sheet_name}" of wb
+            set ws to worksheet "{sheet_name_safe}" of wb
             {chr(10).join(lines)}
             save wb
             close wb saving yes
@@ -183,9 +187,10 @@ def _write_table_macos(
         addr = f"A{idx}:{last_col}{idx}"
         lines.append(f"set value of range \"{addr}\" of ws to {{{row_values}}}")
 
-    sheet_name_safe = sheet_name.replace('"', '\\"')
+    path_esc = applescript_escape(str(path))
+    sheet_name_safe = applescript_escape(sheet_name)
     script = f"""
-        set theFile to POSIX file "{path}"
+        set theFile to POSIX file "{path_esc}"
         tell application "Microsoft Excel"
             activate
             set display alerts to false
@@ -255,7 +260,8 @@ def replace_sheet_table(path: Path, sheet_name: str, data: Iterable[Iterable[obj
         except Exception:
             return False
     if sys.platform == "darwin":
-        sheet_name_safe = sheet_name.replace('"', '\\"')
+        path_esc = applescript_escape(str(path))
+        sheet_name_safe = applescript_escape(sheet_name)
         lines = []
         if table:
             cols = len(table[0])
@@ -265,7 +271,7 @@ def replace_sheet_table(path: Path, sheet_name: str, data: Iterable[Iterable[obj
                 addr = f"A{idx}:{last_col}{idx}"
                 lines.append(f"set value of range \"{addr}\" of ws to {{{row_values}}}")
         script = f"""
-            set theFile to POSIX file "{path}"
+            set theFile to POSIX file "{path_esc}"
             tell application "Microsoft Excel"
                 activate
                 set display alerts to false

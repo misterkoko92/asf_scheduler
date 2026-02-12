@@ -433,6 +433,7 @@ class AsfBenevDataSource(BaseDataSource):
                     "Prenom_Court": item.get("short_name") or "",
                     "Email": item.get("email") or "",
                     "Telephone": item.get("phone") or "",
+                    "Max_Colis_Vol": constraints.get("max_assigned_volunteer_flight"),
                     "Max_Jours_Semaine": constraints.get("max_days_per_week"),
                     "Max_Exp_Semaine": constraints.get("max_expeditions_per_week"),
                     "Max_Exp_Jour": constraints.get("max_expeditions_per_day"),
@@ -442,7 +443,7 @@ class AsfBenevDataSource(BaseDataSource):
         df = pd.DataFrame(rows)
         if "ID" in df.columns:
             df["ID"] = pd.to_numeric(df["ID"], errors="coerce").astype("Int64")
-        for col in ["Max_Jours_Semaine", "Max_Exp_Semaine", "Max_Exp_Jour"]:
+        for col in ["Max_Jours_Semaine", "Max_Exp_Semaine", "Max_Exp_Jour", "Max_Colis_Vol"]:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
         if "Attente_Max_Heures" in df.columns:
