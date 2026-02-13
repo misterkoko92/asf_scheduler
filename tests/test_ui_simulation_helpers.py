@@ -17,14 +17,17 @@ from asf_app.ui.ui_simulation import (
     _compute_week_bounds,
     _compute_week_year,
     _delete_manual_assignment,
+    _export_simulation_excel,
     _filter_vols_for_export,
     _filter_vols_for_selection,
     _normalize_sort_plan,
+    _open_file,
     _recompute_be_non_planifies,
     _recompute_bilan,
     _recompute_bilan_benevoles,
     _recompute_dest_stats,
     _recompute_vols,
+    _resolve_tdb_write_path,
     _time_from_str,
 )
 
@@ -616,3 +619,113 @@ def test_apply_and_delete_manual_assignment_and_normalize_sort():
         )
     )
     assert list(out_sorted["BE_Numero"].astype(str)) == ["260001", "260002"]
+
+
+def test_open_file_platforms_and_error_handling(monkeypatch):
+    opened: list[tuple[str, str]] = []
+
+    class _Subprocess:
+        @staticmethod
+        def Popen(args):
+            opened.append(("popen", str(args[0])))
+
+    class _OS:
+        @staticmethod
+        def startfile(path):
+            opened.append(("startfile", str(path)))
+
+    monkeypatch.setattr("platform.system", lambda: "Darwin")
+    monkeypatch.setattr("subprocess.Popen", _Subprocess.Popen)
+    _open_file("a.xlsx")
+
+    monkeypatch.setattr("platform.system", lambda: "Windows")
+    monkeypatch.setattr("os.startfile", _OS.startfile, raising=False)
+    _open_file("b.xlsx")
+
+    monkeypatch.setattr("platform.system", lambda: "Linux")
+    _open_file("c.xlsx")
+    assert ("popen", "open") in opened
+    assert ("startfile", "b.xlsx") in opened
+    assert ("popen", "xdg-open") in opened
+
+    monkeypatch.setattr("subprocess.Popen", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("boom")))
+    _open_file("d.xlsx")  # ne doit pas lever
+
+
+def test_resolve_tdb_write_path_prefers_source_when_available(monkeypatch, tmp_path):
+    state = SimpleNamespace()
+    paths = SimpleNamespace(tableau_de_bord=tmp_path / "tmp_tdb.xlsx")
+    src = tmp_path / "src_tdb.xlsx"
+    src.write_bytes(b"x")
+    monkeypatch.setattr("asf_app.ui.ui_simulation.get_excel_source_paths", lambda _state: paths)
+    monkeypatch.setattr("asf_app.ui.ui_simulation.is_graph_onedrive", lambda: False)
+    monkeypatch.setattr("asf_app.ui.ui_simulation.get_tableau_de_bord_src", lambda: src)
+
+    out = _resolve_tdb_write_path(state=state, write_source_excel=True)
+    assert out == src
+
+    out2 = _resolve_tdb_write_path(state=state, write_source_excel=False)
+    assert out2 == paths.tableau_de_bord
+
+
+def test_export_simulation_excel_calls_export_service(monkeypatch, tmp_path):
+    state = SimpleNamespace(
+        current_week=4,
+        current_year=2026,
+        api_start_date="2026-01-19",
+        api_end_date="2026-01-25",
+    )
+    current_plan = pd.DataFrame(
+        [
+            {
+                "Date_Vol": "20/01/26",
+                "Heure_Vol": "10h00",
+                "Numero_Vol": "AF100",
+                "Destination": "DLA",
+                "BE_Numero": "260001",
+                "BE_Nb_Colis": 2,
+                "BE_Nb_Equiv": 2,
+            }
+        ]
+    )
+    df_paramdest = pd.DataFrame([{"Dest_IATA": "DLA", "Dest_Ville": "DOUALA"}])
+    df_vols_all = pd.DataFrame([{"Date_Vol": "20/01/26", "Numero_Vol": "AF100"}])
+    df_dispo = pd.DataFrame([{"Benevole": "ALICE"}])
+    df_parambenev = pd.DataFrame([{"Benevole": "ALICE"}])
+
+    monkeypatch.setattr("asf_app.ui.ui_simulation.sort_planning_df", lambda df: df)
+    monkeypatch.setattr("asf_app.ui.ui_simulation.build_export_view", lambda df, **_kwargs: df.copy())
+    monkeypatch.setattr(
+        "asf_app.ui.ui_simulation.get_excel_source_paths",
+        lambda _state: SimpleNamespace(
+            planning_benevoles=tmp_path / "PLANNING_BENEVOLES.xlsx",
+            tableau_de_bord=tmp_path / "TABLEAU_DE_BORD.xlsx",
+        ),
+    )
+    monkeypatch.setattr("asf_app.ui.ui_simulation.is_graph_onedrive", lambda: False)
+    monkeypatch.setattr("asf_app.ui.ui_simulation.get_tableau_de_bord_src", lambda: tmp_path / "TABLEAU_DE_BORD.xlsx")
+
+    captured: dict[str, object] = {}
+
+    def _fake_export(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return "OK"
+
+    monkeypatch.setattr("asf_app.services.export_service.export_planning_excel", _fake_export)
+
+    out = _export_simulation_excel(
+        current_plan=current_plan,
+        state=state,
+        df_paramdest=df_paramdest,
+        df_vols_all=df_vols_all,
+        df_dispo=df_dispo,
+        df_parambenev=df_parambenev,
+        write_source_excel=False,
+        increment_version=True,
+    )
+
+    assert out == "OK"
+    assert captured["kwargs"]["write_source_excel"] is False
+    assert captured["kwargs"]["increment_version"] is True
+    assert captured["kwargs"]["create_tables"] is False

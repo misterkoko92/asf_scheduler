@@ -965,30 +965,17 @@ def generate_year_pdf_report(df: pd.DataFrame, output_dir: Path) -> Path:
     return pdf_path
 
 
-# ==========================================================================
-#  ONGLET STATS — UI PRINCIPALE
-# ==========================================================================
-
-
-def render_tab_stats():
-    """
-    Onglet complet :
-      - Chargement de tous les plannings ASFmm (dernière version par semaine)
-      - Filtres année / semaines
-      - KPIs globaux
-      - Graphiques Plotly interactifs
-      - Génération d'un rapport PDF annuel dans OUTPUT_PLANNING_DIR/Statistiques
-    """
-    st.header("📊 Statistiques & analyse des plannings ASFmm 2025")
-
-    # Dossier plannings (override possible via UI)
+def _resolve_stats_default_planning_dir() -> Path:
     try:
         from scheduler.config_paths import detect_onedrive_asf
+
         base_root = detect_onedrive_asf()
     except (ImportError, OSError, RuntimeError, TypeError, ValueError):
         base_root = get_onedrive_root()
+    return base_root / "Planning MAB" / "ASFmm PLANNING 2025"
 
-    default_dir = base_root / "Planning MAB" / "ASFmm PLANNING 2025"
+
+def _render_stats_planning_dir_selector(default_dir: Path) -> Path:
     if "stats_planning_dir" not in st.session_state:
         st.session_state["stats_planning_dir"] = str(default_dir)
 
@@ -1005,33 +992,35 @@ def render_tab_stats():
 
     planning_dir = Path(st.session_state.get("stats_planning_dir", default_dir))
     st.caption(f"Dossier plannings : `{planning_dir}`")
+    return planning_dir
 
+
+def _trigger_stats_loading() -> bool:
     if st.button("📥 Charger / actualiser les données", key="btn_stats_load"):
         st.session_state["stats_should_load"] = True
+    return bool(st.session_state.get("stats_should_load"))
 
-    if not st.session_state.get("stats_should_load"):
-        st.info("Clique sur « Charger / actualiser les données » pour afficher les statistiques.")
-        return
 
+def _load_stats_dataframe(planning_dir: Path) -> pd.DataFrame:
     with st.spinner("Chargement des plannings et préparation des statistiques…"):
-        df_all = _load_all_plannings(base_override=planning_dir)
+        return _load_all_plannings(base_override=planning_dir)
 
-    if df_all.empty:
-        st.info("Aucun planning ASFmm détecté ou DataFrame vide.")
-        return
 
-    # ---------------------------------------------
-    # Filtres (année + semaines)
-    # ---------------------------------------------
-    years = sorted(df_all["year"].dropna().unique())
+def _resolve_stats_year_default(years: list[int]) -> int:
     current_year = datetime.now().year
     if current_year in years:
-        year_default = current_year
-    elif (current_year - 1) in years:
-        year_default = current_year - 1
-    else:
-        year_default = years[0] if years else current_year
+        return current_year
+    if (current_year - 1) in years:
+        return current_year - 1
+    return years[0] if years else current_year
 
+
+def _render_stats_filters(df_all: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, str] | None:
+    years = sorted(df_all["year"].dropna().unique())
+    if not years:
+        return None
+
+    year_default = _resolve_stats_year_default(years)
     col_y, col_w = st.columns([1, 2])
     with col_y:
         year_sel = st.selectbox(
@@ -1042,6 +1031,8 @@ def render_tab_stats():
 
     df_year = df_all[df_all["year"] == year_sel].copy()
     weeks = sorted(df_year["week"].dropna().unique())
+    if not weeks:
+        return None
 
     with col_w:
         if len(weeks) == 1:
@@ -1058,31 +1049,24 @@ def render_tab_stats():
     df = df_year[
         (df_year["week"] >= week_range[0]) & (df_year["week"] <= week_range[1])
     ].copy()
-
     if df.empty:
-        st.warning("Aucune donnée dans l'intervalle choisi.")
-        return
+        return df_year, df, "Annuel"
 
-    # ---------------------------------------------
-    # Période générale
-    # ---------------------------------------------
     general_period = st.selectbox(
         "Période générale pour les blocs",
         _PERIOD_OPTIONS,
         index=_PERIOD_OPTIONS.index("Annuel"),
     )
     df = _filter_period(df, general_period, ref_date=df["date_dt"].max())
+    return df_year, df, general_period
 
-    # ---------------------------------------------
-    # KPIs globaux
-    # ---------------------------------------------
+
+def _render_stats_kpi_block(df: pd.DataFrame) -> None:
     kpi = _kpi_global(df)
 
     st.subheader("📌 Indicateurs clés sur la période sélectionnée")
-
     c1, c2, c3 = st.columns(3)
     c4, c5, c6 = st.columns(3)
-
     c1.metric("BE distincts", kpi["nb_be"])
     c2.metric("Colis totaux", kpi["nb_colis"])
     c3.metric("Semaines couvertes", kpi["nb_semaines"])
@@ -1093,95 +1077,54 @@ def render_tab_stats():
     with st.expander("Voir un extrait du jeu de données (20 premières lignes)", expanded=False):
         st.dataframe(df.head(20), width="stretch")
 
-    st.markdown("---")
 
-    # ---------------------------------------------
-    # Volume hebdomadaire
-    # ---------------------------------------------
+def _render_stats_visual_sections(df: pd.DataFrame, general_period: str) -> None:
+    st.markdown("---")
     st.subheader("📦 Volume hebdomadaire")
     plot_weekly_volume(df, general_period)
 
     st.markdown("---")
-
-    # ---------------------------------------------
-    # Destinations
-    # ---------------------------------------------
     st.subheader("🌍 Destinations")
     plot_top_destinations(df, general_period)
 
     st.markdown("---")
-
-    # ---------------------------------------------
-    # Types de colis
-    # ---------------------------------------------
     st.subheader("📦 Types de colis")
     plot_type_colis(df, general_period)
 
     st.markdown("---")
-
-    # ---------------------------------------------
-    # Répartition jour/heure
-    # ---------------------------------------------
     st.subheader("🕒 Répartition jour / heure")
     plot_hour_day_heatmap(df, general_period)
 
     st.markdown("---")
-
-    # ---------------------------------------------
-    # Heatmap semaine × destination
-    # ---------------------------------------------
     st.subheader("🔥 Heatmap semaine / destination")
     plot_heatmap_week_destination(df, general_period)
 
     st.markdown("---")
-
-    # ---------------------------------------------
-    # Charge bénévoles
-    # ---------------------------------------------
     st.subheader("👥 Charge bénévoles")
     plot_benevole_load(df, general_period)
 
     st.markdown("---")
-
-    # ---------------------------------------------
-    # Matrice expéditeur × destination
-    # ---------------------------------------------
     st.subheader("📦✈️ Expéditeur × Destination")
     plot_exp_dest_matrix(df, general_period)
 
     st.markdown("---")
-
-    # ---------------------------------------------
-    # Expéditeurs
-    # ---------------------------------------------
     st.subheader("📦 Expéditeurs")
     plot_expediteur_volume(df, general_period)
 
     st.markdown("---")
-
-    # ---------------------------------------------
-    # Alerte et qualité
-    # ---------------------------------------------
     st.subheader("⚠️ Alerte / Qualité")
     plot_top_alerts(df, general_period)
     st.markdown("")
     plot_quality_report(df, general_period)
 
     st.markdown("---")
-
-    # ---------------------------------------------
-    # Comparaison période précédente
-    # ---------------------------------------------
     st.subheader("↔️ Comparaison période précédente")
     plot_comparison(df, general_period)
 
+
+def _render_stats_pdf_export(df_year: pd.DataFrame) -> None:
     st.markdown("---")
-
-    # ---------------------------------------------
-    # Rapport PDF annuel
-    # ---------------------------------------------
     st.subheader("🧾 Rapport PDF annuel")
-
     st.caption(
         "Ce bouton analyse tous les plannings de l'année sélectionnée "
         "et génère un rapport PDF dans le sous-dossier "
@@ -1191,15 +1134,53 @@ def render_tab_stats():
     if st.button("📑 Analyser toute l'année et générer un rapport PDF"):
         with st.spinner("Génération du rapport PDF en cours…"):
             pdf_path = generate_year_pdf_report(df_year, get_output_planning_dir())
-
         st.success(f"Rapport généré : `{pdf_path.name}`")
-
         with open(pdf_path, "rb") as f:
             data = f.read()
-
         st.download_button(
             "⬇ Télécharger le rapport PDF",
             data=data,
             file_name=pdf_path.name,
             mime="application/pdf",
         )
+
+
+# ==========================================================================
+#  ONGLET STATS — UI PRINCIPALE
+# ==========================================================================
+
+
+def render_tab_stats():
+    """
+    Onglet complet :
+      - Chargement de tous les plannings ASFmm (dernière version par semaine)
+      - Filtres année / semaines
+      - KPIs globaux
+      - Graphiques Plotly interactifs
+      - Génération d'un rapport PDF annuel dans OUTPUT_PLANNING_DIR/Statistiques
+    """
+    st.header("📊 Statistiques & analyse des plannings ASFmm 2025")
+
+    default_dir = _resolve_stats_default_planning_dir()
+    planning_dir = _render_stats_planning_dir_selector(default_dir)
+    if not _trigger_stats_loading():
+        st.info("Clique sur « Charger / actualiser les données » pour afficher les statistiques.")
+        return
+
+    df_all = _load_stats_dataframe(planning_dir)
+    if df_all.empty:
+        st.info("Aucun planning ASFmm détecté ou DataFrame vide.")
+        return
+
+    filters = _render_stats_filters(df_all)
+    if filters is None:
+        st.warning("Aucune donnée annuelle exploitable.")
+        return
+    df_year, df, general_period = filters
+    if df.empty:
+        st.warning("Aucune donnée dans l'intervalle choisi.")
+        return
+
+    _render_stats_kpi_block(df)
+    _render_stats_visual_sections(df, general_period)
+    _render_stats_pdf_export(df_year)

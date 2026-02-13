@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
@@ -647,6 +647,161 @@ def optimize_equilibrage(
                     int(delta),
                 )
             model.Add(max_c - min_c <= int(delta) + 1)
+
+
+def run_hierarchical_priority_optimization(
+    *,
+    model: cp_model.CpModel,
+    solver: cp_model.CpSolver,
+    x: Dict[Tuple[int, int], cp_model.IntVar],
+    y: Dict[Tuple[int, int], cp_model.IntVar],
+    u: Dict[int, cp_model.IntVar],
+    nb_benev: Dict[int, cp_model.IntVar],
+    be_groups: pd.DataFrame,
+    priority_map: Dict[Any, Any],
+    benev_ids: Sequence[int],
+    benev_vols_compat: Dict[int, List[int]],
+    benev_avail_minutes: Dict[int, int],
+    priority_mode: str,
+    log_fn: Callable[[str], None],
+    optimize_equilibrage_fn: Callable[[], None],
+) -> Tuple[str, int | None]:
+    """Exécute la séquence d'optimisation hiérarchique commune (V2/V3)."""
+    if cp_model is None:  # pragma: no cover - sécurité défensive
+        return priority_mode, None
+
+    weighted_terms: List[Tuple[int, cp_model.IntVar]] = []
+    for (be_idx, _), var in x.items():
+        be = be_groups.loc[be_idx]
+        prio = priority_map.get(be["type"], be["priorite_moyenne"])
+        poids_pondere = int(be["poids_total"]) * (10 - prio if prio is not None else 10)
+        weighted_terms.append((int(poids_pondere), var))
+    weighted_expr = sum(weight * var for weight, var in weighted_terms)
+
+    benev_used: Dict[int, cp_model.IntVar] = {}
+    benev_missions: Dict[int, cp_model.IntVar] = {}
+    for benev_id in benev_ids:
+        bid = int(benev_id)
+        used_var = model.NewBoolVar(f"b_used_{bid}")
+        benev_used[bid] = used_var
+        vols = benev_vols_compat.get(bid, [])
+        miss_var = model.NewIntVar(0, 50, f"missions_{bid}")
+        benev_missions[bid] = miss_var
+        if vols:
+            model.Add(miss_var == sum(y[(bid, v)] for v in vols if (bid, v) in y))
+            model.Add(miss_var >= 1).OnlyEnforceIf(used_var)
+            model.Add(miss_var == 0).OnlyEnforceIf(used_var.Not())
+        else:
+            model.Add(miss_var == 0)
+            model.Add(used_var == 0)
+
+    def _phase_max_weight() -> float | None:
+        model.Maximize(weighted_expr)
+        log_fn("[ORTOOLS] Phase — maximisation poids")
+        phase_status = solver.Solve(model)
+        if phase_status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            return None
+        max_weight = solver.ObjectiveValue()
+        model.Add(weighted_expr >= int(max_weight))
+        log_fn(f"[ORTOOLS] Poids max atteint = {max_weight:.2f}")
+        return max_weight
+
+    def _phase_min_vols() -> int | None:
+        log_fn("[ORTOOLS] Phase — minimisation nb vols")
+        model.Minimize(sum(u.values()))
+        phase_status = solver.Solve(model)
+        if phase_status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            return None
+        min_vols = int(round(solver.ObjectiveValue()))
+        model.Add(sum(u.values()) <= min_vols)
+        log_fn(f"[ORTOOLS] Nb vols minimum = {min_vols}")
+        return min_vols
+
+    def _phase_max_benev() -> int | None:
+        log_fn("[ORTOOLS] Phase — maximisation bénévoles utilisés")
+        model.Maximize(sum(benev_used.values()))
+        phase_status = solver.Solve(model)
+        if phase_status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            return None
+        max_benev = int(round(solver.ObjectiveValue()))
+        model.Add(sum(benev_used.values()) >= max_benev)
+        log_fn(f"[ORTOOLS] Bénévoles max utilisés = {max_benev}")
+        return max_benev
+
+    def _phase_min_benev() -> int | None:
+        log_fn("[ORTOOLS] Phase — minimisation bénévoles affectés")
+        model.Minimize(sum(nb_benev.values()))
+        phase_status = solver.Solve(model)
+        if phase_status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            return None
+        min_benev = int(round(solver.ObjectiveValue()))
+        model.Add(sum(nb_benev.values()) <= min_benev)
+        log_fn(f"[ORTOOLS] Bénévoles min affectés = {min_benev}")
+        return min_benev
+
+    def _phase_min_excess_missions() -> int | None:
+        log_fn("[ORTOOLS] Phase — minimisation surplus de missions (>1 par bénévole)")
+        excess_vars: List[cp_model.IntVar] = []
+        for bid, missions in benev_missions.items():
+            excess = model.NewIntVar(0, 50, f"excess_{bid}")
+            model.Add(excess >= missions - 1)
+            model.Add(excess >= 0)
+            excess_vars.append(excess)
+        model.Minimize(sum(excess_vars))
+        phase_status = solver.Solve(model)
+        if phase_status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            return None
+        min_excess = int(round(solver.ObjectiveValue()))
+        model.Add(sum(excess_vars) <= min_excess)
+        log_fn(f"[ORTOOLS] Surplus missions total = {min_excess}")
+        return min_excess
+
+    def _phase_min_weighted_availability() -> float | None:
+        log_fn("[ORTOOLS] Phase — minimisation pondérée par disponibilités (privilégier peu disponibles)")
+        terms: List[Any] = []
+        for bid, missions in benev_missions.items():
+            avail_minutes = benev_avail_minutes.get(int(bid), 0)
+            weight = max(1, int(avail_minutes))
+            terms.append(missions * weight)
+        model.Minimize(sum(terms))
+        phase_status = solver.Solve(model)
+        if phase_status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            return None
+        log_fn("[ORTOOLS] Pondération disponibilités appliquée")
+        return solver.ObjectiveValue()
+
+    mode = str(priority_mode or "colis").lower()
+    if mode not in ("colis", "benevoles"):
+        mode = "colis"
+
+    if mode == "colis":
+        if _phase_max_weight() is None:
+            return mode, None
+        if _phase_min_vols() is None:
+            return mode, None
+        if _phase_min_benev() is None:
+            return mode, None
+        _phase_min_excess_missions()
+        _phase_min_weighted_availability()
+        optimize_equilibrage_fn()
+        log_fn("[ORTOOLS] Phase finale — contraintes poids/vols/bénévoles équilibrées")
+    else:
+        if _phase_max_weight() is None:
+            return mode, None
+        if _phase_min_vols() is None:
+            return mode, None
+        if _phase_max_benev() is None:
+            return mode, None
+        _phase_min_excess_missions()
+        _phase_min_weighted_availability()
+        optimize_equilibrage_fn()
+        log_fn("[ORTOOLS] Phase finale — contraintes bénévoles/poids/vols équilibrées")
+
+    model.Minimize(sum(u.values()))
+    final_status = solver.Solve(model)
+    if final_status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        return mode, None
+    return mode, final_status
 
 
 def extract_solver_results(

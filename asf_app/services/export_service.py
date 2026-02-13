@@ -6,7 +6,7 @@ import shutil
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 from zipfile import BadZipFile
 
 import pandas as pd
@@ -1104,56 +1104,61 @@ def _update_mag_central_dates_for_export(
     return used_dates, "openpyxl"
 
 
-def export_planning_excel(
-    df,
-    week,
-    year,
+def _build_export_workbook_context(
     *,
-    df_vols=None,
-    df_parambenev=None,
-    df_dispos=None,
-    df_paramdest=None,
-    create_tables: bool = True,
-    write_source_excel: bool = False,
-    increment_version: bool = True,
-    benev_path: Path | None = None,
-    tdb_source_path: Path | None = None,
-    pdf_exporter: Callable[[Path, Path], Path] | None = None,
-    output_path: Path | None = None,
-    output_dir: Path | None = None,
-    skip_versioning: bool = False,
-    generate_pdf: bool = True,
-) -> ExportResult:
+    week: int,
+    year: int,
+    output_path: Path | None,
+    output_dir: Path | None,
+    skip_versioning: bool,
+) -> tuple[Path, bool, list[str], Any, Any, Any, Any, Any]:
     warnings: list[str] = []
-    pdf_exporter = pdf_exporter or export_first_sheet_to_pdf
-
     template = _resolve_template()
     has_template = template.exists()
     if not has_template:
         warnings.append(f"Maquette introuvable ({template}); génération avec classeur minimal.")
 
-    if output_dir is not None:
-        output_dir = Path(output_dir)
-
-    out_path, skip_versioning = _prepare_output_workbook_path(
+    normalized_output_dir = Path(output_dir) if output_dir is not None else None
+    out_path, normalized_skip_versioning = _prepare_output_workbook_path(
         week=week,
         year=year,
         template=template,
         has_template=has_template,
         output_path=Path(output_path) if output_path is not None else None,
-        output_dir=output_dir,
+        output_dir=normalized_output_dir,
         skip_versioning=skip_versioning,
     )
     wb = _load_workbook_with_minimal_fallback(out_path, week=week, year=year)
     ws_plan, ws_export, ws_vols, ws_bene = _resolve_target_sheets(wb)
+    return (
+        out_path,
+        normalized_skip_versioning,
+        warnings,
+        wb,
+        ws_plan,
+        ws_export,
+        ws_vols,
+        ws_bene,
+    )
 
+
+def _prepare_export_rows(
+    *,
+    df,
+    week: int,
+    year: int,
+    df_paramdest,
+    df_vols,
+    df_parambenev,
+    write_source_excel: bool,
+    tdb_source_path: Path | None,
+) -> tuple[pd.DataFrame, str]:
     dfp = _prepare_export_dataframe(
         df,
         df_paramdest=df_paramdest,
         df_vols=df_vols,
         df_parambenev=df_parambenev,
     )
-    safe_excel = sanitize_excel_value
 
     mag_write_method = "disabled"
     map_depart_mag: dict = {}
@@ -1173,14 +1178,33 @@ def export_planning_excel(
             year=year,
         )
     )
+    return dfp, mag_write_method
 
+
+def _write_export_workbook_data(
+    *,
+    wb: Any,
+    ws_plan: Any,
+    ws_export: Any,
+    ws_vols: Any,
+    ws_bene: Any,
+    out_path: Path,
+    week: int,
+    year: int,
+    dfp: pd.DataFrame,
+    df_vols,
+    df_dispos,
+    df_parambenev,
+    benev_path: Path | None,
+    create_tables: bool,
+) -> tuple[int, int]:
     _reset_planning_grid(ws_plan)
     _populate_planning_sheet(
         ws_plan,
         dfp=dfp,
         day_blocks=_PLAN_DAY_BLOCKS,
         keep_rows=_PLAN_KEEP_ROWS,
-        safe_excel=safe_excel,
+        safe_excel=sanitize_excel_value,
     )
     _apply_planning_layout(ws_plan)
 
@@ -1231,28 +1255,53 @@ def export_planning_excel(
     except ValueError:
         pass
 
-    week_final, year_final = _week_year_from_ws_plan(
+    return _week_year_from_ws_plan(
         ws_plan,
         fallback_week=week,
         fallback_year=year,
     )
 
-    if skip_versioning:
-        _increment_q1_if_requested(ws_plan, increment_version=increment_version)
-        wb.save(out_path)
-        pdf_path = _export_pdf_with_warning(
-            out_path,
-            enabled=bool(generate_pdf and (not is_graph_onedrive())),
-            pdf_exporter=pdf_exporter,
-            warnings=warnings,
-        )
-        return ExportResult(
-            output_path=out_path,
-            pdf_path=pdf_path,
-            mag_write_method=mag_write_method,
-            warnings=warnings,
-        )
 
+def _build_export_result_skip_versioning(
+    *,
+    wb: Any,
+    ws_plan: Any,
+    out_path: Path,
+    increment_version: bool,
+    generate_pdf: bool,
+    pdf_exporter: Callable[[Path, Path], Path],
+    warnings: list[str],
+    mag_write_method: str,
+) -> ExportResult:
+    _increment_q1_if_requested(ws_plan, increment_version=increment_version)
+    wb.save(out_path)
+    pdf_path = _export_pdf_with_warning(
+        out_path,
+        enabled=bool(generate_pdf and (not is_graph_onedrive())),
+        pdf_exporter=pdf_exporter,
+        warnings=warnings,
+    )
+    return ExportResult(
+        output_path=out_path,
+        pdf_path=pdf_path,
+        mag_write_method=mag_write_method,
+        warnings=warnings,
+    )
+
+
+def _build_export_result_versioned(
+    *,
+    wb: Any,
+    ws_plan: Any,
+    out_path: Path,
+    output_dir: Path | None,
+    week_final: int,
+    year_final: int,
+    increment_version: bool,
+    pdf_exporter: Callable[[Path, Path], Path],
+    warnings: list[str],
+    mag_write_method: str,
+) -> ExportResult:
     planning_dir_final = (
         output_dir
         if output_dir is not None
@@ -1299,10 +1348,103 @@ def export_planning_excel(
         pdf_exporter=pdf_exporter,
         warnings=warnings,
     )
-
     return ExportResult(
         output_path=out_path,
         pdf_path=pdf_path,
         mag_write_method=mag_write_method,
         warnings=warnings,
+    )
+
+
+def export_planning_excel(
+    df,
+    week,
+    year,
+    *,
+    df_vols=None,
+    df_parambenev=None,
+    df_dispos=None,
+    df_paramdest=None,
+    create_tables: bool = True,
+    write_source_excel: bool = False,
+    increment_version: bool = True,
+    benev_path: Path | None = None,
+    tdb_source_path: Path | None = None,
+    pdf_exporter: Callable[[Path, Path], Path] | None = None,
+    output_path: Path | None = None,
+    output_dir: Path | None = None,
+    skip_versioning: bool = False,
+    generate_pdf: bool = True,
+) -> ExportResult:
+    pdf_exporter = pdf_exporter or export_first_sheet_to_pdf
+    output_dir_path = Path(output_dir) if output_dir is not None else None
+
+    (
+        out_path,
+        skip_versioning,
+        warnings,
+        wb,
+        ws_plan,
+        ws_export,
+        ws_vols,
+        ws_bene,
+    ) = _build_export_workbook_context(
+        week=week,
+        year=year,
+        output_path=Path(output_path) if output_path is not None else None,
+        output_dir=output_dir_path,
+        skip_versioning=skip_versioning,
+    )
+
+    dfp, mag_write_method = _prepare_export_rows(
+        df=df,
+        week=week,
+        year=year,
+        df_paramdest=df_paramdest,
+        df_vols=df_vols,
+        df_parambenev=df_parambenev,
+        write_source_excel=write_source_excel,
+        tdb_source_path=tdb_source_path,
+    )
+
+    week_final, year_final = _write_export_workbook_data(
+        wb=wb,
+        ws_plan=ws_plan,
+        ws_export=ws_export,
+        ws_vols=ws_vols,
+        ws_bene=ws_bene,
+        out_path=out_path,
+        week=week,
+        year=year,
+        dfp=dfp,
+        df_vols=df_vols,
+        df_dispos=df_dispos,
+        df_parambenev=df_parambenev,
+        benev_path=benev_path,
+        create_tables=create_tables,
+    )
+
+    if skip_versioning:
+        return _build_export_result_skip_versioning(
+            wb=wb,
+            ws_plan=ws_plan,
+            out_path=out_path,
+            increment_version=increment_version,
+            generate_pdf=generate_pdf,
+            pdf_exporter=pdf_exporter,
+            warnings=warnings,
+            mag_write_method=mag_write_method,
+        )
+
+    return _build_export_result_versioned(
+        wb=wb,
+        ws_plan=ws_plan,
+        out_path=out_path,
+        output_dir=output_dir_path,
+        week_final=week_final,
+        year_final=year_final,
+        increment_version=increment_version,
+        pdf_exporter=pdf_exporter,
+        warnings=warnings,
+        mag_write_method=mag_write_method,
     )

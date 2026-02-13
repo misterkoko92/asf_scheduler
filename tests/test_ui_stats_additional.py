@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
@@ -66,7 +68,14 @@ class _StubCol:
     def __init__(self, metrics: list[tuple[str, object, object]]):
         self._metrics = metrics
 
-    def metric(self, label, value, delta):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        _ = exc_type, exc, tb
+        return False
+
+    def metric(self, label, value, delta=None):
         self._metrics.append((str(label), value, delta))
 
 
@@ -120,7 +129,8 @@ class _StubSt:
         return _StubExpander()
 
     def columns(self, n, **_kwargs):
-        return [_StubCol(self.metric_calls) for _ in range(int(n))]
+        count = len(n) if isinstance(n, (list, tuple)) else int(n)
+        return [_StubCol(self.metric_calls) for _ in range(count)]
 
     def markdown(self, *_args, **_kwargs):
         return None
@@ -202,3 +212,212 @@ def test_ui_stats_table_and_pdf_generation(tmp_path):
     assert pdf_path.exists()
     assert pdf_path.suffix.lower() == ".pdf"
     assert "Statistiques" in str(pdf_path.parent)
+
+
+def test_ui_stats_default_planning_dir_fallback(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "scheduler.config_paths.detect_onedrive_asf",
+        lambda: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    monkeypatch.setattr(ui_stats, "get_onedrive_root", lambda: tmp_path)
+
+    out = ui_stats._resolve_stats_default_planning_dir()
+
+    assert out == tmp_path / "Planning MAB" / "ASFmm PLANNING 2025"
+
+
+def test_ui_stats_render_filters_returns_expected_tuple(monkeypatch):
+    df = _sample_stats_df()
+    stub = _StubSt()
+    monkeypatch.setattr(ui_stats, "st", stub)
+
+    out = ui_stats._render_stats_filters(df)
+
+    assert out is not None
+    df_year, df_filtered, general_period = out
+    assert not df_year.empty
+    assert not df_filtered.empty
+    assert general_period == "Annuel"
+
+
+def test_render_tab_stats_smoke_orchestrated(monkeypatch, tmp_path):
+    df = _sample_stats_df()
+    stub = _StubSt()
+    stub.session_state["stats_should_load"] = True
+    stub.subheader = lambda *_args, **_kwargs: None  # type: ignore[attr-defined]
+    monkeypatch.setattr(ui_stats, "st", stub)
+    monkeypatch.setattr(
+        ui_stats,
+        "_resolve_stats_default_planning_dir",
+        lambda: tmp_path / "Planning MAB" / "ASFmm PLANNING 2025",
+    )
+    monkeypatch.setattr(
+        ui_stats,
+        "_render_stats_planning_dir_selector",
+        lambda default_dir: default_dir,
+    )
+    monkeypatch.setattr(ui_stats, "_trigger_stats_loading", lambda: True)
+    monkeypatch.setattr(ui_stats, "_load_stats_dataframe", lambda _planning_dir: df)
+    monkeypatch.setattr(
+        ui_stats,
+        "_render_stats_filters",
+        lambda _df_all: (df.copy(), df.copy(), "Annuel"),
+    )
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        ui_stats,
+        "_render_stats_kpi_block",
+        lambda _df: calls.append("kpi"),
+    )
+    monkeypatch.setattr(
+        ui_stats,
+        "_render_stats_visual_sections",
+        lambda _df, _period: calls.append("visuals"),
+    )
+    monkeypatch.setattr(
+        ui_stats,
+        "_render_stats_pdf_export",
+        lambda _df_year: calls.append("pdf"),
+    )
+
+    ui_stats.render_tab_stats()
+
+    assert calls == ["kpi", "visuals", "pdf"]
+
+
+class _StubStActions(_StubSt):
+    def __init__(self):
+        super().__init__()
+        self.rerun_called = False
+        self.download_calls = 0
+        self._button_sequences: dict[str, list[bool]] = {}
+        self._text_input_value = ""
+
+    def set_button_sequence(self, label: str, values: list[bool]):
+        self._button_sequences[label] = list(values)
+
+    def button(self, label, *_args, **_kwargs):
+        seq = self._button_sequences.get(label)
+        if seq:
+            return seq.pop(0)
+        return False
+
+    def subheader(self, *_args, **_kwargs):
+        return None
+
+    def text_input(self, _label, value="", **_kwargs):
+        return self._text_input_value or value
+
+    def rerun(self):
+        self.rerun_called = True
+
+    def download_button(self, *_args, **_kwargs):
+        self.download_calls += 1
+
+
+def test_stats_selector_loading_and_filters_branches(monkeypatch, tmp_path):
+    stub = _StubStActions()
+    stub._text_input_value = str(tmp_path / "stats")
+    stub.set_button_sequence("✅ Utiliser ce dossier", [True])
+    stub.set_button_sequence("📥 Charger / actualiser les données", [True])
+    monkeypatch.setattr(ui_stats, "st", stub)
+
+    out_dir = ui_stats._render_stats_planning_dir_selector(tmp_path)
+    assert out_dir == Path(stub.session_state["stats_planning_dir"])
+    assert stub.rerun_called is True
+
+    should_load = ui_stats._trigger_stats_loading()
+    assert should_load is True
+
+    # Branche sans année exploitable
+    assert ui_stats._render_stats_filters(pd.DataFrame({"year": [pd.NA]})) is None
+
+    # Branche une seule semaine (week_min == week_max)
+    df = pd.DataFrame(
+        [
+            {"year": 2026, "week": 4, "date_dt": pd.Timestamp("2026-01-20")},
+            {"year": 2026, "week": 4, "date_dt": pd.Timestamp("2026-01-21")},
+        ]
+    )
+    out = ui_stats._render_stats_filters(df)
+    assert out is not None
+    _, filtered, period = out
+    assert not filtered.empty
+    assert period in {"Annuel", "Hebdomadaire"}
+
+
+def test_stats_kpi_visual_sections_and_pdf(monkeypatch, tmp_path):
+    stub = _StubStActions()
+    stub.set_button_sequence("📑 Analyser toute l'année et générer un rapport PDF", [True])
+    monkeypatch.setattr(ui_stats, "st", stub)
+
+    df = _sample_stats_df()
+    ui_stats._render_stats_kpi_block(df)
+    assert any(m[0] == "BE distincts" for m in stub.metric_calls)
+
+    called: list[str] = []
+    monkeypatch.setattr(ui_stats, "plot_weekly_volume", lambda *_args, **_kwargs: called.append("weekly"))
+    monkeypatch.setattr(ui_stats, "plot_top_destinations", lambda *_args, **_kwargs: called.append("dest"))
+    monkeypatch.setattr(ui_stats, "plot_type_colis", lambda *_args, **_kwargs: called.append("type"))
+    monkeypatch.setattr(ui_stats, "plot_hour_day_heatmap", lambda *_args, **_kwargs: called.append("hour"))
+    monkeypatch.setattr(ui_stats, "plot_heatmap_week_destination", lambda *_args, **_kwargs: called.append("heat"))
+    monkeypatch.setattr(ui_stats, "plot_benevole_load", lambda *_args, **_kwargs: called.append("benev"))
+    monkeypatch.setattr(ui_stats, "plot_exp_dest_matrix", lambda *_args, **_kwargs: called.append("matrix"))
+    monkeypatch.setattr(ui_stats, "plot_expediteur_volume", lambda *_args, **_kwargs: called.append("exp"))
+    monkeypatch.setattr(ui_stats, "plot_top_alerts", lambda *_args, **_kwargs: called.append("alerts"))
+    monkeypatch.setattr(ui_stats, "plot_quality_report", lambda *_args, **_kwargs: called.append("quality"))
+    monkeypatch.setattr(ui_stats, "plot_comparison", lambda *_args, **_kwargs: called.append("comparison"))
+
+    ui_stats._render_stats_visual_sections(df, "Annuel")
+    assert called == [
+        "weekly",
+        "dest",
+        "type",
+        "hour",
+        "heat",
+        "benev",
+        "matrix",
+        "exp",
+        "alerts",
+        "quality",
+        "comparison",
+    ]
+
+    pdf_path = tmp_path / "report.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4")
+    monkeypatch.setattr(ui_stats, "generate_year_pdf_report", lambda *_args, **_kwargs: pdf_path)
+    monkeypatch.setattr(ui_stats, "get_output_planning_dir", lambda: tmp_path)
+
+    ui_stats._render_stats_pdf_export(df)
+    assert any("Rapport généré" in msg for msg in stub.successes)
+    assert stub.download_calls == 1
+
+
+def test_render_tab_stats_main_branches(monkeypatch, tmp_path):
+    stub = _StubStActions()
+    monkeypatch.setattr(ui_stats, "st", stub)
+    monkeypatch.setattr(ui_stats, "_resolve_stats_default_planning_dir", lambda: tmp_path)
+    monkeypatch.setattr(ui_stats, "_render_stats_planning_dir_selector", lambda _default: tmp_path)
+
+    # Pas de trigger
+    monkeypatch.setattr(ui_stats, "_trigger_stats_loading", lambda: False)
+    ui_stats.render_tab_stats()
+    assert any("Charger / actualiser" in msg for msg in stub.infos)
+
+    # DataFrame vide après chargement
+    monkeypatch.setattr(ui_stats, "_trigger_stats_loading", lambda: True)
+    monkeypatch.setattr(ui_stats, "_load_stats_dataframe", lambda _p: pd.DataFrame())
+    ui_stats.render_tab_stats()
+    assert any("Aucun planning ASFmm détecté" in msg for msg in stub.infos)
+
+    # Filtres non exploitables puis intervalle vide
+    df = _sample_stats_df()
+    monkeypatch.setattr(ui_stats, "_load_stats_dataframe", lambda _p: df)
+    monkeypatch.setattr(ui_stats, "_render_stats_filters", lambda _df: None)
+    ui_stats.render_tab_stats()
+    assert any("Aucune donnée annuelle exploitable" in msg for msg in stub.warnings)
+
+    monkeypatch.setattr(ui_stats, "_render_stats_filters", lambda _df: (df, pd.DataFrame(), "Annuel"))
+    ui_stats.render_tab_stats()
+    assert any("Aucune donnée dans l'intervalle choisi." in msg for msg in stub.warnings)

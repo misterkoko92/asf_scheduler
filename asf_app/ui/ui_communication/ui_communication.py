@@ -266,6 +266,202 @@ def _load_onedrive_planning_ui() -> pd.DataFrame | None:
     return df_planning
 
 
+def _select_communication_planning_source() -> pd.DataFrame | None:
+    source_mode = st.radio(
+        "Source du planning pour la communication",
+        options=["session", "onedrive"],
+        format_func=lambda x: "Planning de la session" if x == "session" else "Planning OneDrive",
+        index=0,
+        horizontal=True,
+        key="comm_source_mode",
+    )
+    if source_mode == "session":
+        return _load_session_planning_ui()
+    return _load_onedrive_planning_ui()
+
+
+def _load_communication_parameters(paths):
+    return load_parameters(
+        tdb_path=paths.tableau_de_bord,
+        benev_path=paths.planning_benevoles,
+    )
+
+
+def _build_enriched_comm_dataframe(
+    *,
+    df_planning: pd.DataFrame,
+    df_paramdest: pd.DataFrame,
+    df_parambenev: pd.DataFrame,
+    tdb_path,
+) -> pd.DataFrame:
+    df_comm = build_df_comm(
+        df_planning=df_planning,
+        df_paramdest=df_paramdest,
+        df_parambenev=df_parambenev,
+    )
+    try:
+        df_be = get_shipments_df_cached(tdb_path=tdb_path)
+    except COMM_IO_ERRORS as exc:
+        logger.warning("Chargement MAG CENTRAL impossible: %s", exc)
+        df_be = pd.DataFrame()
+    map_dest_be = build_destinataire_mapping(df_be=df_be, df_planning=df_planning)
+    return fill_missing_destinataire(df_comm, map_dest_be)
+
+
+def _resolve_pdf_candidates_from_graph(week: int, year: int) -> list[dict]:
+    remote_dir = get_output_remote_dir(year)
+    items = cp.list_onedrive_files(remote_dir, recursive=False, suffixes=[".pdf"])
+    pattern_old = f"ASFmm - PLANNING SEMAINE N° {week:02d} - {year}*.pdf"
+    pattern_new = f"ASFmm - PLANNING SEMAINE {year}-{week:02d}-*.pdf"
+    return [
+        i
+        for i in items
+        if fnmatch.fnmatch(i.get("name", ""), pattern_old)
+        or fnmatch.fnmatch(i.get("name", ""), pattern_new)
+    ]
+
+
+def _resolve_pdf_candidates_from_local(week: int, year: int) -> list[Path]:
+    pattern_old = f"ASFmm - PLANNING SEMAINE N° {week:02d} - {year}*.pdf"
+    pattern_new = f"ASFmm - PLANNING SEMAINE {year}-{week:02d}-*.pdf"
+    base_pdf_dir = get_onedrive_root() / "Planning MAB" / f"ASFmm PLANNING {year}"
+    if not base_pdf_dir.exists():
+        return []
+    return sorted(
+        list(base_pdf_dir.glob(pattern_old)) + list(base_pdf_dir.glob(pattern_new)),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+
+
+def _resolve_pdf_attachment_path(week: int, year: int):
+    try:
+        if is_graph_onedrive():
+            candidates = _resolve_pdf_candidates_from_graph(week, year)
+            if not candidates:
+                return None
+            labels = [c.get("name", "") for c in candidates]
+            pdf_choice = st.radio(
+                "Choisir la version PDF à utiliser",
+                options=labels,
+                index=0,
+                horizontal=True,
+            )
+            chosen = candidates[labels.index(pdf_choice)]
+            remote_path = chosen.get("path", "")
+            if not remote_path:
+                return None
+            cache_root = get_tmp_dir() / "onedrive_cache" / "planning_pdf"
+            try:
+                local_path = safe_cache_path(cache_root, remote_path)
+            except ValueError:
+                st.error(f"Chemin OneDrive invalide : {remote_path}")
+                return None
+            if not local_path.exists():
+                cp.download_onedrive_file(remote_path, local_path, interactive=False)
+            return local_path if local_path.exists() else None
+
+        candidates_local = _resolve_pdf_candidates_from_local(week, year)
+        if not candidates_local:
+            return None
+        labels = [c.name for c in candidates_local]
+        pdf_choice = st.radio(
+            "Choisir la version PDF à utiliser",
+            options=labels,
+            index=0,
+            horizontal=True,
+        )
+        return candidates_local[labels.index(pdf_choice)]
+    except COMM_IO_ERRORS as exc:
+        logger.warning("Recherche PDF communication impossible: %s", exc)
+        return None
+
+
+def _render_whatsapp_section(df_comm: pd.DataFrame) -> None:
+    if st.button("Générer les messages WhatsApp", type="primary"):
+        msgs = generate_whatsapp_messages(df_comm)
+        st.session_state["whatsapp_messages"] = msgs
+        if msgs:
+            st.success(f"{len(msgs)} messages générés.")
+        else:
+            st.warning("Aucun message généré.")
+
+    msgs = st.session_state.get("whatsapp_messages", [])
+    if not msgs:
+        st.info("Aucun message WhatsApp généré.")
+        return
+
+    for idx, msg in enumerate(msgs):
+        bene = msg["benevole"]
+        tel = msg["telephone"]
+        st.markdown(f"**{bene} — {tel}**")
+        st.code(msg["message"])
+        if st.button(f"📲 Envoyer WhatsApp à {bene}", key=f"wa_{idx}_{bene}", type="primary"):
+            open_whatsapp_for_benevole(msg["url"])
+
+
+def _render_comm_sections_bar() -> str:
+    section = st.session_state.get("comm_section", "whatsapp")
+    cols = st.columns(5)
+    labels = [
+        ("whatsapp", "💬 WhatsApp"),
+        ("airfrance", "✈️ Air France"),
+        ("asf", "🏠 ASF Interne"),
+        ("dest", "📍 Destinations"),
+        ("exp", "📦 Expéditeurs"),
+    ]
+    for col, (key, label) in zip(cols, labels):
+        if col.button(label, type="primary" if section == key else "secondary"):
+            section = key
+            st.session_state["comm_section"] = key
+    return section
+
+
+def _render_selected_communication_section(
+    *,
+    section: str,
+    df_comm: pd.DataFrame,
+    df_paramdest: pd.DataFrame,
+    df_paramexpediteur: pd.DataFrame,
+    week: int,
+    year: int,
+    pdf_attach_path,
+) -> None:
+    if section == "whatsapp":
+        _render_whatsapp_section(df_comm)
+        return
+    if section == "airfrance":
+        render_email_airfrance_ui(
+            df_comm=df_comm,
+            attachment_path=None,
+            pdf_attachment_path=pdf_attach_path,
+        )
+        return
+    if section == "asf":
+        render_email_asf_ui(
+            df_comm=df_comm,
+            attachment_path=None,
+            pdf_attachment_path=pdf_attach_path,
+        )
+        return
+    if section == "dest":
+        render_email_destinations_ui(
+            df_comm=df_comm,
+            df_paramdest=df_paramdest,
+            week=week,
+            year=year,
+        )
+        return
+    if section == "exp":
+        render_email_expediteurs_ui(
+            df_comm=df_comm,
+            df_paramdest=df_paramdest,
+            df_paramexpediteur=df_paramexpediteur,
+            week=week,
+            year=year,
+        )
+
+
 # ==========================================================
 # UI PRINCIPALE
 # ==========================================================
@@ -275,62 +471,22 @@ def render_tab_communication():
     state = get_state()
     paths = get_excel_source_paths(state)
 
-    # -------------------------------------------------------
-    # 1) Choix de la source (session ou OneDrive)
-    # -------------------------------------------------------
-    source_mode = st.radio(
-        "Source du planning pour la communication",
-        options=["session", "onedrive"],
-        format_func=lambda x: "Planning de la session" if x == "session" else "Planning OneDrive",
-        index=0,
-        horizontal=True,
-        key="comm_source_mode",
-    )
-
-    if source_mode == "session":
-        df_planning = _load_session_planning_ui()
-    else:
-        df_planning = _load_onedrive_planning_ui()
+    df_planning = _select_communication_planning_source()
     if is_empty_dataframe(df_planning):
         return
 
-    # -------------------------------------------------------
-    # 2) Charger ParamDest / ParamBenev / ParamExp / ParamBE
-    # -------------------------------------------------------
-    df_paramdest, df_paramexpediteur, df_parambenev, df_parambe = load_parameters(
-        tdb_path=paths.tableau_de_bord,
-        benev_path=paths.planning_benevoles,
-    )
-
-    # Pièce jointe par défaut : recherche du PDF officiel uniquement
-    pdf_attach_path = None
-
-    # -------------------------------------------------------
-    # 3) Construction du fichier Communication
-    # -------------------------------------------------------
-    df_comm = build_df_comm(
+    df_paramdest, df_paramexpediteur, df_parambenev, _ = _load_communication_parameters(paths)
+    df_comm = _build_enriched_comm_dataframe(
         df_planning=df_planning,
         df_paramdest=df_paramdest,
-        df_parambenev=df_parambenev
+        df_parambenev=df_parambenev,
+        tdb_path=paths.tableau_de_bord,
     )
-
-    # Compléter Destinataire via mapping BE (MAG CENTRAL + planning), avec tolérance format
-    try:
-        df_be = get_shipments_df_cached(tdb_path=paths.tableau_de_bord)
-    except COMM_IO_ERRORS as exc:
-        logger.warning("Chargement MAG CENTRAL impossible: %s", exc)
-        df_be = pd.DataFrame()
-
-    map_dest_be = build_destinataire_mapping(df_be=df_be, df_planning=df_planning)
-    df_comm = fill_missing_destinataire(df_comm, map_dest_be)
 
     if df_comm.empty:
         st.error("❌ Impossible de générer df_comm (problème données).")
         return
 
-    # -------------------------------------------------------
-    # 4) Détection semaine
-    # -------------------------------------------------------
     week, year = _detect_week_year(df_comm)
     if week is None:
         st.error("Impossible de détecter la semaine depuis df_comm.")
@@ -338,60 +494,7 @@ def render_tab_communication():
 
     st.success(f"📅 Communication pour S{week} – {year}")
 
-    # Recherche du PDF dans OneDrive (format avec versions)
-    pdf_attach_path = None
-    try:
-        pattern_old = f"ASFmm - PLANNING SEMAINE N° {week:02d} - {year}*.pdf"
-        pattern_new = f"ASFmm - PLANNING SEMAINE {year}-{week:02d}-*.pdf"
-        if is_graph_onedrive():
-            remote_dir = get_output_remote_dir(year)
-            items = cp.list_onedrive_files(remote_dir, recursive=False, suffixes=[".pdf"])
-            candidates = [
-                i for i in items
-                if fnmatch.fnmatch(i.get("name", ""), pattern_old)
-                or fnmatch.fnmatch(i.get("name", ""), pattern_new)
-            ]
-            if candidates:
-                labels = [c.get("name", "") for c in candidates]
-                pdf_choice = st.radio(
-                    "Choisir la version PDF à utiliser",
-                    options=labels,
-                    index=0,
-                    horizontal=True,
-                )
-                chosen = candidates[labels.index(pdf_choice)]
-                remote_path = chosen.get("path", "")
-                if remote_path:
-                    cache_root = get_tmp_dir() / "onedrive_cache" / "planning_pdf"
-                    try:
-                        local_path = safe_cache_path(cache_root, remote_path)
-                    except ValueError:
-                        st.error(f"Chemin OneDrive invalide : {remote_path}")
-                        local_path = None
-                    if local_path and not local_path.exists():
-                        cp.download_onedrive_file(remote_path, local_path, interactive=False)
-                    if local_path and local_path.exists():
-                        pdf_attach_path = local_path
-        else:
-            base_pdf_dir = get_onedrive_root() / "Planning MAB" / f"ASFmm PLANNING {year}"
-            if base_pdf_dir.exists():
-                candidates = sorted(
-                    list(base_pdf_dir.glob(pattern_old)) + list(base_pdf_dir.glob(pattern_new)),
-                    key=lambda p: p.stat().st_mtime,
-                    reverse=True,
-                )
-                if candidates:
-                    labels = [c.name for c in candidates]
-                    pdf_choice = st.radio(
-                        "Choisir la version PDF à utiliser",
-                        options=labels,
-                        index=0,
-                        horizontal=True,
-                    )
-                    pdf_attach_path = candidates[labels.index(pdf_choice)]
-    except COMM_IO_ERRORS as exc:
-        logger.warning("Recherche PDF communication impossible: %s", exc)
-        pdf_attach_path = None
+    pdf_attach_path = _resolve_pdf_attachment_path(week, year)
 
     if pdf_attach_path:
         st.info(f"📎 PDF joint détecté : {Path(pdf_attach_path).name}")
@@ -409,73 +512,16 @@ def render_tab_communication():
 
     st.divider()
 
-    # Barre de boutons (comme onglet Paramètres)
-    section = st.session_state.get("comm_section", "whatsapp")
-    cols = st.columns(5)
-    labels = [
-        ("whatsapp", "💬 WhatsApp"),
-        ("airfrance", "✈️ Air France"),
-        ("asf", "🏠 ASF Interne"),
-        ("dest", "📍 Destinations"),
-        ("exp", "📦 Expéditeurs"),
-    ]
-    for col, (key, label) in zip(cols, labels):
-        if col.button(label, type="primary" if section == key else "secondary"):
-            section = key
-            st.session_state["comm_section"] = key
+    section = _render_comm_sections_bar()
 
     st.divider()
 
-    # Rendu du bloc sélectionné sur toute la largeur
-    if section == "whatsapp":
-        if st.button("Générer les messages WhatsApp", type="primary"):
-            msgs = generate_whatsapp_messages(df_comm)
-            st.session_state["whatsapp_messages"] = msgs
-
-            if msgs:
-                st.success(f"{len(msgs)} messages générés.")
-            else:
-                st.warning("Aucun message généré.")
-
-        msgs = st.session_state.get("whatsapp_messages", [])
-        if msgs:
-            for idx, msg in enumerate(msgs):
-                bene = msg["benevole"]
-                tel = msg["telephone"]
-                st.markdown(f"**{bene} — {tel}**")
-                st.code(msg["message"])
-                if st.button(f"📲 Envoyer WhatsApp à {bene}", key=f"wa_{idx}_{bene}", type="primary"):
-                    open_whatsapp_for_benevole(msg["url"])
-        else:
-            st.info("Aucun message WhatsApp généré.")
-
-    elif section == "airfrance":
-        render_email_airfrance_ui(
-            df_comm=df_comm,
-            attachment_path=None,
-            pdf_attachment_path=pdf_attach_path,
-        )
-
-    elif section == "asf":
-        render_email_asf_ui(
-            df_comm=df_comm,
-            attachment_path=None,
-            pdf_attachment_path=pdf_attach_path,
-        )
-
-    elif section == "dest":
-        render_email_destinations_ui(
-            df_comm=df_comm,
-            df_paramdest=df_paramdest,
-            week=week,
-            year=year
-        )
-
-    elif section == "exp":
-        render_email_expediteurs_ui(
-            df_comm=df_comm,
-            df_paramdest=df_paramdest,
-            df_paramexpediteur=df_paramexpediteur,
-            week=week,
-            year=year
-        )
+    _render_selected_communication_section(
+        section=section,
+        df_comm=df_comm,
+        df_paramdest=df_paramdest,
+        df_paramexpediteur=df_paramexpediteur,
+        week=week,
+        year=year,
+        pdf_attach_path=pdf_attach_path,
+    )

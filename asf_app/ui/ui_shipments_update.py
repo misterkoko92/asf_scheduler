@@ -199,6 +199,197 @@ def _build_vol_options(dest_iata: str, df_vols: pd.DataFrame, df_planning: pd.Da
     return options
 
 
+def _render_queue_batch_panel(
+    *,
+    queue,
+    preview_path,
+    selected_week: int,
+    selected_year: int,
+    df_vols: pd.DataFrame,
+    df_parambenev: pd.DataFrame,
+    df_dispos: pd.DataFrame,
+    df_paramdest: pd.DataFrame,
+) -> bool:
+    if not queue:
+        return True
+
+    st.divider()
+    st.subheader("Liste d'attente")
+    df_queue = _build_queue_dataframe(queue)
+    st.dataframe(df_queue, hide_index=True, width="stretch", height=240)
+
+    queue_labels = _build_queue_labels(queue)
+    sel_idx = st.selectbox(
+        "Sélectionner une modification",
+        options=list(range(len(queue_labels))),
+        format_func=lambda i: queue_labels[i],
+    )
+    col_edit, col_del, col_clear2 = st.columns([1, 1, 1])
+    with col_edit:
+        if st.button("Éditer"):
+            _apply_queue_action_to_session(
+                st.session_state,
+                queue=queue,
+                index=sel_idx,
+                action="edit",
+            )
+            st.rerun()
+    with col_del:
+        if st.button("Supprimer"):
+            transition = _apply_queue_action_to_session(
+                st.session_state,
+                queue=queue,
+                index=sel_idx,
+                action="delete",
+            )
+            if transition["message"]:
+                st.success(transition["message"])
+            st.rerun()
+    with col_clear2:
+        if st.button("Vider la liste", key="ship_update_clear_queue_2"):
+            transition = _apply_queue_action_to_session(
+                st.session_state,
+                queue=queue,
+                index=sel_idx,
+                action="clear",
+                clear_payloads_on_clear=True,
+            )
+            if transition["message"]:
+                st.success(transition["message"])
+            st.rerun()
+
+    col_apply, col_q1, col_mag = st.columns([1, 1, 2])
+    with col_q1:
+        increment_q1 = st.toggle(
+            "Incrémenter Q1",
+            value=True,
+            key="ship_update_increment_q1",
+        )
+    with col_mag:
+        write_mag_central = st.toggle(
+            "Écrire sur MAG CENTRAL source",
+            value=True,
+            key="ship_update_write_mag_central",
+        )
+    with col_apply:
+        apply_clicked = st.button(
+            "Valider toutes les modifications",
+            type="primary",
+        )
+
+    if not apply_clicked:
+        return True
+
+    apply_result = _execute_queue_apply_request(
+        queue=queue,
+        queue_path=st.session_state.get("ship_update_queue_planning_path"),
+        preview_path=preview_path,
+        queue_week=st.session_state.get("ship_update_queue_week", selected_week),
+        queue_year=st.session_state.get("ship_update_queue_year", selected_year),
+        selected_week=selected_week,
+        selected_year=selected_year,
+        df_vols=df_vols,
+        df_parambenev=df_parambenev,
+        df_dispos=df_dispos,
+        df_paramdest=df_paramdest,
+        increment_q1=increment_q1,
+        write_mag_central=write_mag_central,
+        tdb_source_path=get_tableau_de_bord_src(),
+        apply_updates_fn=apply_planning_updates_batch,
+        export_pdf_fn=export_first_sheet_to_pdf,
+    )
+
+    if apply_result["warning"]:
+        st.warning(str(apply_result["warning"]))
+    if apply_result["error"]:
+        st.error(str(apply_result["error"]))
+        return False
+
+    feedback = _collect_apply_result_feedback(
+        apply_result,
+        write_mag_central=write_mag_central,
+    )
+    for message in feedback["success_messages"]:
+        st.success(str(message))
+    for message in feedback["info_messages"]:
+        st.info(str(message))
+    for message in feedback["warning_messages"]:
+        st.warning(str(message))
+    for path_obj in feedback["open_paths"]:
+        _open_file_in_os(path_obj)
+
+    payloads = apply_result["payloads"]
+    st.session_state["ship_update_payloads"] = payloads
+    _clear_queue_state(st.session_state, clear_payloads=False)
+    st.success("Mises à jour validées. Choisissez qui prévenir ci-dessous.")
+    return True
+
+
+def _render_notifications_panel(
+    *,
+    payloads,
+    selected_week: int,
+    selected_year: int,
+    df_parambenev: pd.DataFrame,
+    df_paramdest: pd.DataFrame,
+    df_paramexpediteur: pd.DataFrame,
+) -> None:
+    st.divider()
+    st.subheader("Notifications")
+
+    notifications = _prepare_notification_context(
+        payloads,
+        default_week=selected_week,
+        default_year=selected_year,
+        df_parambenev=df_parambenev,
+        df_paramdest=df_paramdest,
+        df_paramexpediteur=df_paramexpediteur,
+        parse_version_from_name=_parse_version_from_name,
+        export_pdf_fn=export_first_sheet_to_pdf,
+        get_emails_for_destination=_get_emails_for_destination,
+        get_emails_for_expediteur=_get_emails_for_expediteur,
+    )
+    asf_draft = notifications["asf_draft"]
+    dest_drafts = notifications["dest_drafts"]
+    exp_drafts = notifications["exp_drafts"]
+
+    col_asf, col_dest, col_exp = st.columns(3)
+
+    with col_asf:
+        if st.button("Prévenir ASF + Bénévole", key="btn_mail_asf"):
+            _send_outlook_draft(
+                asf_draft,
+                create_outlook_draft_fn=create_outlook_draft,
+            )
+            st.success("Brouillon ASF ouvert.")
+
+    with col_dest:
+        if st.button("Prévenir Escale", key="btn_mail_dest"):
+            level, message = _send_named_outlook_drafts_with_feedback(
+                dest_drafts,
+                create_outlook_draft_fn=create_outlook_draft,
+                success_prefix="Brouillons Escale ouverts :",
+                empty_message="Aucun email ParamDest trouvé.",
+            )
+            if level == "success":
+                st.success(message)
+            else:
+                st.warning(message)
+
+    with col_exp:
+        if st.button("Prévenir Expéditeur", key="btn_mail_exp"):
+            level, message = _send_named_outlook_drafts_with_feedback(
+                exp_drafts,
+                create_outlook_draft_fn=create_outlook_draft,
+                success_prefix="Brouillons Expéditeur ouverts :",
+                empty_message="Aucun email expéditeur trouvé (ou expéditeur ASF).",
+            )
+            if level == "success":
+                st.success(message)
+            else:
+                st.warning(message)
+
+
 def render_tab_shipments_update():
     st.title("🚚 Mise à Jour expéditions")
 
@@ -544,170 +735,27 @@ def render_tab_shipments_update():
         st.success(str(add_result["message"]))
 
     queue = st.session_state.get("ship_update_queue", [])
-    if queue:
-        st.divider()
-        st.subheader("Liste d'attente")
-        df_queue = _build_queue_dataframe(queue)
-        st.dataframe(df_queue, hide_index=True, width="stretch", height=240)
-
-        queue_labels = _build_queue_labels(queue)
-        sel_idx = st.selectbox(
-            "Sélectionner une modification",
-            options=list(range(len(queue_labels))),
-            format_func=lambda i: queue_labels[i],
-        )
-        col_edit, col_del, col_clear2 = st.columns([1, 1, 1])
-        with col_edit:
-            if st.button("Éditer"):
-                _apply_queue_action_to_session(
-                    st.session_state,
-                    queue=queue,
-                    index=sel_idx,
-                    action="edit",
-                )
-                st.rerun()
-        with col_del:
-            if st.button("Supprimer"):
-                transition = _apply_queue_action_to_session(
-                    st.session_state,
-                    queue=queue,
-                    index=sel_idx,
-                    action="delete",
-                )
-                if transition["message"]:
-                    st.success(transition["message"])
-                st.rerun()
-        with col_clear2:
-            if st.button("Vider la liste", key="ship_update_clear_queue_2"):
-                transition = _apply_queue_action_to_session(
-                    st.session_state,
-                    queue=queue,
-                    index=sel_idx,
-                    action="clear",
-                    clear_payloads_on_clear=True,
-                )
-                if transition["message"]:
-                    st.success(transition["message"])
-                st.rerun()
-
-        col_apply, col_q1, col_mag = st.columns([1, 1, 2])
-        with col_q1:
-            increment_q1 = st.toggle(
-                "Incrémenter Q1",
-                value=True,
-                key="ship_update_increment_q1",
-            )
-        with col_mag:
-            write_mag_central = st.toggle(
-                "Écrire sur MAG CENTRAL source",
-                value=True,
-                key="ship_update_write_mag_central",
-            )
-        with col_apply:
-            apply_clicked = st.button(
-                "Valider toutes les modifications",
-                type="primary",
-            )
-
-        if apply_clicked:
-            apply_result = _execute_queue_apply_request(
-                queue=queue,
-                queue_path=st.session_state.get("ship_update_queue_planning_path"),
-                preview_path=preview_path,
-                queue_week=st.session_state.get("ship_update_queue_week", selected_week),
-                queue_year=st.session_state.get("ship_update_queue_year", selected_year),
-                selected_week=selected_week,
-                selected_year=selected_year,
-                df_vols=df_vols,
-                df_parambenev=df_parambenev,
-                df_dispos=df_dispos,
-                df_paramdest=df_paramdest,
-                increment_q1=increment_q1,
-                write_mag_central=write_mag_central,
-                tdb_source_path=get_tableau_de_bord_src(),
-                apply_updates_fn=apply_planning_updates_batch,
-                export_pdf_fn=export_first_sheet_to_pdf,
-            )
-
-            if apply_result["warning"]:
-                st.warning(str(apply_result["warning"]))
-            if apply_result["error"]:
-                st.error(str(apply_result["error"]))
-                return
-
-            feedback = _collect_apply_result_feedback(
-                apply_result,
-                write_mag_central=write_mag_central,
-            )
-            for message in feedback["success_messages"]:
-                st.success(str(message))
-            for message in feedback["info_messages"]:
-                st.info(str(message))
-            for message in feedback["warning_messages"]:
-                st.warning(str(message))
-            for path_obj in feedback["open_paths"]:
-                _open_file_in_os(path_obj)
-
-            payloads = apply_result["payloads"]
-            st.session_state["ship_update_payloads"] = payloads
-            _clear_queue_state(st.session_state, clear_payloads=False)
-            st.success("Mises à jour validées. Choisissez qui prévenir ci-dessous.")
+    if not _render_queue_batch_panel(
+        queue=queue,
+        preview_path=preview_path,
+        selected_week=selected_week,
+        selected_year=selected_year,
+        df_vols=df_vols,
+        df_parambenev=df_parambenev,
+        df_dispos=df_dispos,
+        df_paramdest=df_paramdest,
+    ):
+        return
 
     payloads = st.session_state.get("ship_update_payloads")
     if not payloads:
         return
 
-    st.divider()
-    st.subheader("Notifications")
-
-    notifications = _prepare_notification_context(
-        payloads,
-        default_week=selected_week,
-        default_year=selected_year,
+    _render_notifications_panel(
+        payloads=payloads,
+        selected_week=selected_week,
+        selected_year=selected_year,
         df_parambenev=df_parambenev,
         df_paramdest=df_paramdest,
         df_paramexpediteur=df_paramexpediteur,
-        parse_version_from_name=_parse_version_from_name,
-        export_pdf_fn=export_first_sheet_to_pdf,
-        get_emails_for_destination=_get_emails_for_destination,
-        get_emails_for_expediteur=_get_emails_for_expediteur,
     )
-    asf_draft = notifications["asf_draft"]
-    dest_drafts = notifications["dest_drafts"]
-    exp_drafts = notifications["exp_drafts"]
-
-    col_asf, col_dest, col_exp = st.columns(3)
-
-    with col_asf:
-        if st.button("Prévenir ASF + Bénévole", key="btn_mail_asf"):
-            _send_outlook_draft(
-                asf_draft,
-                create_outlook_draft_fn=create_outlook_draft,
-            )
-            st.success("Brouillon ASF ouvert.")
-
-    with col_dest:
-        if st.button("Prévenir Escale", key="btn_mail_dest"):
-            level, message = _send_named_outlook_drafts_with_feedback(
-                dest_drafts,
-                create_outlook_draft_fn=create_outlook_draft,
-                success_prefix="Brouillons Escale ouverts :",
-                empty_message="Aucun email ParamDest trouvé.",
-            )
-            if level == "success":
-                st.success(message)
-            else:
-                st.warning(message)
-
-    with col_exp:
-        if st.button("Prévenir Expéditeur", key="btn_mail_exp"):
-            level, message = _send_named_outlook_drafts_with_feedback(
-                exp_drafts,
-                create_outlook_draft_fn=create_outlook_draft,
-                success_prefix="Brouillons Expéditeur ouverts :",
-                empty_message="Aucun email expéditeur trouvé (ou expéditeur ASF).",
-            )
-            if level == "success":
-                st.success(message)
-            else:
-                st.warning(message)

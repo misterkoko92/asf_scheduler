@@ -15,8 +15,8 @@ Solidifier le projet (qualité, sécurité, maintenabilité, évolutivité) sans
 - Signaux de complexité (patterns `except/print` dans code + tests): `375`
 
 ## État courant (re-baseline 2026-02-13)
-- Tests: `480 passed`
-- Tests collectés: `480` (`pytest --collect-only -q`)
+- Tests: `483 passed`
+- Tests collectés: `483` (`pytest --collect-only -q`)
 - Couverture globale locale (`pytest-cov`): `78%` (`8624/11017`)
 - Qualité statique:
   - `ruff`: OK (`All checks passed`)
@@ -41,12 +41,18 @@ Solidifier le projet (qualité, sécurité, maintenabilité, évolutivité) sans
    - masquage tel/email/token dans logs/export diagnostic (`utils/security_redaction.py`, `ui_logs.py`, `logging_utils.py`)  
    - validation clé AF (rejet placeholder) côté `airfrance_api.py`  
    - outillage sécurité local ajouté (`tools/run_security.py`: secrets + dependency audit offline-aware)
-2. **Réduction des monolithes restants (R1)**  
-   - extractions non-fonctionnelles additionnelles sur `render_tab_simulation`, `render_tab_week_data`, `render_tab_params`, `render_tab_inputs`  
-   - poursuivre la réduction de `ui_shipments_update_helpers.py` (découpage par domaine)
-3. **Refactor solver/contrats (R2)**  
-   - formaliser le contrat solveur unique (I/O + diagnostics)  
-   - poursuivre la réduction des duplications V2/V3 autour de `solver_ortools_common.py`
+2. **Réduction des monolithes restants (R1, en cours)**  
+   - ✅ `ui_shipments_update`: extraction bloc file d’attente/validation batch + notifications (`_render_queue_batch_panel`, `_render_notifications_panel`)  
+   - ✅ `ui_params`: extraction sous-blocs (`_render_onedrive_sources_block`, `_render_block_selector`, `_render_paramoteur_block`, `_render_param_table_block`, `_render_paramail_block`)  
+   - ✅ `ui_inputs`: extraction panneaux (`_render_tdb_panel`, `_render_benev_panel`, `_render_vols_panel`, `_render_vols_api_controls`) + init/chargement (`_ensure_inputs_tmp_paths`, `_load_input_dataframes`)  
+   - ✅ `ui_communication`: extraction orchestration source planning / enrichissement communication / résolution PDF / sections WhatsApp+emails (`_select_communication_planning_source`, `_build_enriched_comm_dataframe`, `_resolve_pdf_attachment_path`, `_render_selected_communication_section`)  
+   - ✅ `export_service`: orchestration d’export découpée (contexte classeur, préparation des lignes, écriture des feuilles, finalisation versionnée/non versionnée)  
+   - ✅ `ui_stats`: orchestration `render_tab_stats` découpée (sélection dossier, trigger load, filtres, blocs KPI/visualisations/PDF)  
+   - ⏭️ prochain focus: poursuite du découpage de `ui_shipments_update_helpers.py` et de la couche `solver_ortools_v3` spécifique assignations
+3. **Refactor solver/contrats (R2, en cours avancé)**  
+   - ✅ séquence d’optimisation hiérarchique V2/V3 mutualisée dans `solver_ortools_common.py::run_hierarchical_priority_optimization`  
+   - ✅ simplification des solveurs V2/V3 (orchestration locale allégée, comportement inchangé validé par tests)  
+   - ⏭️ prochain focus: poursuivre la réduction de duplication spécifique V3 (assignations `z`) pour atteindre un contrat solveur quasi unique
 4. **Couverture résiduelle hors P2/S1 (P3)**  
    - modules encore faibles: `utils/excel_automation.py`, `asf_app/ui/ui_inputs.py`, `asf_app/ui/ui_params.py`, `asf_app/ui/ui_communication/ui_communication.py`
 5. **Industrialisation CI avancée (P3)**  
@@ -56,7 +62,7 @@ Solidifier le projet (qualité, sécurité, maintenabilité, évolutivité) sans
 ## Diagnostic global approfondi (2026-02-13)
 - Points forts consolidés:
   - zéro hotspot `except Exception` et `print` dans l’audit automatique
-  - socle tests en forte progression (`480` tests collectés)
+  - socle tests en forte progression (`483` tests collectés)
   - factorisation solver V2/V3 avancée via `scheduler/solver_ortools_common.py`
   - gates qualité/sécurité restaurées (`ruff`/`mypy`/`secret-scan` OK) + gate coverage CI dédié
   - chaîne sécurité locale opérationnelle (`run_security.py`) avec comportement offline explicite
@@ -83,7 +89,7 @@ Solidifier le projet (qualité, sécurité, maintenabilité, évolutivité) sans
   - `asf_app/ui/ui_shipments_update_helpers.py` (1720 lignes, helperization UI shipments)
   - `asf_app/services/export_service.py` (~1307 lignes, après extraction des helpers de rendu planning Excel + versioning/sortie + durcissement exceptions techniques)
   - `asf_app/ui/ui_simulation.py` (~1574 lignes, helpers de logique manuelle et bilans enrichis)
-  - `asf_app/ui/ui_communication/ui_communication.py` (~474 lignes, logique I/O PDF OneDrive/local encore à extraire)
+  - `asf_app/ui/ui_communication/ui_communication.py` (~527 lignes, orchestration source/PDF/sections extraite; optimisation structurelle restante possible)
   - `scheduler/config_paths.py` (~788 lignes, migration `RuntimePaths` finalisée sur `prepare_paths` + cache Graph runtime-aware)
   - `scheduler/solver_ortools_v3.py` (~1028 lignes)
   - `scheduler/solver_ortools.py` (~829 lignes)
@@ -113,6 +119,18 @@ Solidifier le projet (qualité, sécurité, maintenabilité, évolutivité) sans
 ## Journal d'actions
 | Date/Heure | Action | Résultat |
 |---|---|---|
+| 2026-02-13 | R1 multi-lots: refactor non fonctionnel `export_service` (découpage orchestration export: contexte classeur, préparation data, écriture, finalisation skip-versioning/versionnée) | OK |
+| 2026-02-13 | R1 multi-lots: refactor non fonctionnel `ui_stats` (découpage orchestration `render_tab_stats` + helpers de sélection dossier/filtres/KPI/sections/PDF) | OK |
+| 2026-02-13 | Renforcement tests `ui_stats` (helpers d’orchestration + smoke render) | OK |
+| 2026-02-13 | Validation multi-lots R1: `pytest -q` (`483 passed`), ciblés export (`35 passed`) + stats (`10 passed`), `ruff` OK, `mypy` OK | OK |
+| 2026-02-13 | R1 one-pass: refactor non fonctionnel `ui_communication` (découpage source planning, enrichissement `df_comm`, résolution PDF, sections WhatsApp/emails) | OK |
+| 2026-02-13 | Validation lot R1 (`ui_communication`): `pytest -q` (`480 passed`), ciblés communication (`27 passed`), `ruff` OK, `mypy` OK | OK |
+| 2026-02-13 | R1 one-pass: refactor non fonctionnel `ui_params` (découpage bloc OneDrive, sélection bloc, Paramoteur, Param*, ParaMail) | OK |
+| 2026-02-13 | R1 one-pass: refactor non fonctionnel `ui_inputs` (découpage panneaux TDB/Bénévoles/Vols + logique API/excel + init/chargement TMP) | OK |
+| 2026-02-13 | Validation lot R1 (ui_params/ui_inputs): `pytest -q` (`480 passed`), ciblés UI (`16 passed`), `ruff` OK, `mypy` OK | OK |
+| 2026-02-13 | R1/R2 one-pass: mutualisation des phases d’optimisation hiérarchique V2/V3 dans `solver_ortools_common.py` + simplification `solver_ortools.py` / `solver_ortools_v3.py` | OK |
+| 2026-02-13 | R1 one-pass: extraction UI `ui_shipments_update` du panneau file d’attente/validation batch + notifications en helpers dédiés | OK |
+| 2026-02-13 | Validation lot R1/R2: `pytest -q` (`480 passed`), ciblés solveur/UI (`68 passed`), `ruff` OK, `mypy` OK | OK |
 | 2026-02-13 | Fermeture C1: nettoyage artefacts/dev-config (`.vscode/settings.json` sorti de l’index, `.vscode/` ignoré) | OK |
 | 2026-02-13 | Fermeture C1: ajout runbook qualité (`RUNBOOK_QUALITY.md`) + plan mypy package-par-package (`MYPY_ROLLOUT_PLAN.md`) | OK |
 | 2026-02-13 | Fermeture Q1: ajout dashboard hebdo (`tools/quality_dashboard.py`, `QUALITY_DASHBOARD.md`, `QUALITY_DASHBOARD_HISTORY.csv`) + target `run_quality.py dashboard` + hook pre-commit manuel | OK |
