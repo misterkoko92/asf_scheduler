@@ -14,12 +14,14 @@ Solidifier le projet (qualité, sécurité, maintenabilité, évolutivité) sans
 - Fichiers suivis dans le repo (approx): `244`
 - Signaux de complexité (patterns `except/print` dans code + tests): `375`
 
-## État courant (re-baseline 2026-02-13)
-- Tests: `483 passed`
-- Tests collectés: `483` (`pytest --collect-only -q`)
-- Couverture globale locale (`pytest-cov`): `78%` (`8624/11017`)
+## État courant (mise à jour 2026-02-13)
+- Tests: `729 passed`
+- Tests collectés: `729` (`pytest --collect-only -q`)
+- Couverture locale:
+  - périmètre hardening (`asf_app + scheduler + loaders`): `~91%` (validation `tools/run_quality.py all`)
+  - dashboard global (`asf_app + scheduler + loaders + utils`): `91.46%`
 - Qualité statique:
-  - `ruff`: OK (`All checks passed`)
+  - `ruff`: OK (`tools/run_quality.py all`)
   - `mypy`: OK (`Success: no issues found in 101 source files`)
 - Sécurité:
   - `tools/scan_secrets.py`: OK (`no suspicious hardcoded secret found`)
@@ -54,7 +56,7 @@ Solidifier le projet (qualité, sécurité, maintenabilité, évolutivité) sans
    - ✅ simplification des solveurs V2/V3 (orchestration locale allégée, comportement inchangé validé par tests)  
    - ⏭️ prochain focus: poursuivre la réduction de duplication spécifique V3 (assignations `z`) pour atteindre un contrat solveur quasi unique
 4. **Couverture résiduelle hors P2/S1 (P3)**  
-   - modules encore faibles: `utils/excel_automation.py`, `asf_app/ui/ui_inputs.py`, `asf_app/ui/ui_params.py`, `asf_app/ui/ui_communication/ui_communication.py`
+   - modules encore faibles (global dashboard): `solver_ortools_v3.py`, `services/planning_exports_service.py`, `ui/ui_communication/email_expediteurs_ui.py`, `services/shipments_update_service.py`, `load_params.py`
 5. **Industrialisation CI avancée (P3)**  
    - monter progressivement le seuil coverage CI (75 -> 80) en gardant la stabilité des releases
    - exploiter le dashboard hebdo (`QUALITY_DASHBOARD.md`) pour piloter les lots coverage
@@ -62,13 +64,13 @@ Solidifier le projet (qualité, sécurité, maintenabilité, évolutivité) sans
 ## Diagnostic global approfondi (2026-02-13)
 - Points forts consolidés:
   - zéro hotspot `except Exception` et `print` dans l’audit automatique
-  - socle tests en forte progression (`483` tests collectés)
+  - socle tests en forte progression (`729` tests collectés)
   - factorisation solver V2/V3 avancée via `scheduler/solver_ortools_common.py`
   - gates qualité/sécurité restaurées (`ruff`/`mypy`/`secret-scan` OK) + gate coverage CI dédié
   - chaîne sécurité locale opérationnelle (`run_security.py`) avec comportement offline explicite
   - dashboard qualité hebdo opérationnel (`tools/quality_dashboard.py`, `QUALITY_DASHBOARD.md`)
 - Risques actifs:
-  - **couverture insuffisante** sur des modules UI/automation encore lourds (`ui_inputs`, `ui_params`, `ui_communication`, `excel_automation`)
+  - **zones de couverture encore faibles** sur des modules communication/loaders (notamment `outlook.py`, `pdf_attachments.py`, `load_vols_api.py`)
   - **monolithes persistants** (fonctions 200-500+ lignes) augmentant le coût de maintenance
   - **outillage sensible aux régressions rapides** (imports/typage/tests outillage sécurité) nécessitant discipline CI
 - Top dette technique (taille/fonctions):
@@ -119,6 +121,35 @@ Solidifier le projet (qualité, sécurité, maintenabilité, évolutivité) sans
 ## Journal d'actions
 | Date/Heure | Action | Résultat |
 |---|---|---|
+| 2026-02-13 | Q1 multi-lots low-risk: couverture renforcée `load_vols.py` / `load_vols_api.py` (fallbacks parsing, wrappers cache, branches API sheet) | OK |
+| 2026-02-13 | Validation qualité globale: `tools/run_quality.py all` => `729 passed`, couverture globale `91.46%` | OK |
+| 2026-02-13 | Refresh suivi: `tools/quality_dashboard.py --refresh` + `tools/hardening_audit.py` | OK |
+| 2026-02-13 | Q1 multi-lots low-risk: ajout de tests ciblés `ui_inputs` / `ui_week_data` / `ui_stats` (branches fallback, erreurs, orchestration UI) | OK |
+| 2026-02-13 | Validation qualité globale: `tools/run_quality.py all` => `718 passed`, couverture globale `91.08%` | OK |
+| 2026-02-13 | Refresh suivi: `tools/quality_dashboard.py --refresh` + `tools/hardening_audit.py` | OK |
+| 2026-02-13 | Q1 multi-lots low-risk: couverture renforcée sur `runtime`, `logging_utils`, `helpers_email_tables`, `email_asf_ui`, `email_destinations_ui`, `ui_logs`, `load_shipments` | OK |
+| 2026-02-13 | Validation qualité globale: `tools/run_quality.py all` => `693 passed`, couverture globale `90.03%` | OK |
+| 2026-02-13 | Refresh suivi: `tools/quality_dashboard.py --refresh` + `tools/hardening_audit.py` | OK |
+| 2026-02-13 | Q1 lot additionnel: couverture `input_service.py` (erreurs sources, fallback loader vols, message source bénévoles) | OK |
+| 2026-02-13 | Q1 lot additionnel: couverture `airfrance_api.py` (branches config/env/secrets, validation API key, erreurs HTTP, fallback extraction routes, quotas/throttle) | OK |
+| 2026-02-13 | Validation qualité finale passe 10 lots: `tools/run_quality.py all` => `670 passed`, couverture globale `89.29%`, dashboard/audit régénérés | OK |
+| 2026-02-13 | Q1 lot additionnel: couverture `state.py` (helpers état/session/context), `load_params.py` (cache wrappers + fallback cache clear), `data_sources.py` (branches Protocol/base/composite + API guards) | OK |
+| 2026-02-13 | Q1 lot additionnel: couverture `datetime_utils.py` (branches date/heure/fallback) + `ui_inputs.py` (refresh graph/local, erreurs sources, chargement API sheet) | OK |
+| 2026-02-13 | Validation finale de la passe: `tools/run_quality.py all` => `653 passed`, couverture globale `88.90%`, dashboard/audit régénérés | OK |
+| 2026-02-13 | Q1 lot additionnel: couverture `universal_loader` + `helpers_email_tables` (tests dédiés + cas erreur/fallback/formatage HTML) | OK |
+| 2026-02-13 | Validation finale passe multi-lots: `tools/run_quality.py all` OK (`620 passed`, couverture `87.92%`) + refresh dashboard/audit | OK |
+| 2026-02-13 | Q1 multi-lots low-risk: ajout tests ciblés `export_pdf`, `load_params`, `be_manager`, `format_rules`, `planning_exports_service`, `load_vols`, `datetime_utils`, `config_paths` | OK |
+| 2026-02-13 | Validation lots ciblés: `.venv/bin/python -m pytest -q` (sélection modules) => `85 passed` | OK |
+| 2026-02-13 | Validation globale qualité: `pytest -q` (`612 passed`) + `tools/run_quality.py all` (ruff/mypy/couverture OK, `87.76%`) + refresh dashboard + audit régénéré | OK |
+| 2026-02-13 | R1 lot monolithe: découpage non-fonctionnel `ui_week_data` (extraction helpers `_prepare_be_display_dataframe`, `_prepare_benevoles_dataframe`, `_prepare_flights_dataframe`) | OK |
+| 2026-02-13 | Q1 lots couverture: nouveaux tests `solver_router`/`files_service`/`stats_loader`/`load_shipments` + extensions `ui_week_data` | OK |
+| 2026-02-13 | Validation multi-lots: `pytest -q` (`566 passed`), `ruff` OK, `mypy` OK, couverture globale `86%` (`8891/10372`) | OK |
+| 2026-02-13 | Lots R1+Q1 multi-cibles: refactor non fonctionnel orchestration `ui_inputs` (`_render_graph_onedrive_auth_section`, `_resolve_inputs_session_context`, `_render_inputs_panels`) et `ui_communication` (`_build_communication_payload`, `_render_pdf_attachment_status`, `_render_communication_preview`) | OK |
+| 2026-02-13 | Lots couverture: ajout tests branches Graph/Windows/loaders (`tests/test_ui_inputs_refactor_helpers.py`, `tests/test_ui_communication_payload_helpers.py`, `tests/test_outlook_windows.py`, `tests/test_pdf_attachments_graph.py`, extensions `tests/test_load_vols_api.py`) | OK |
+| 2026-02-13 | Validation lot: `pytest -q` (`544 passed`), couverture globale `85%` (`8785/10358`) | OK |
+| 2026-02-13 | Rafraîchissement docs qualité (`QUALITY_DASHBOARD.md`, `QUALITY_DASHBOARD_HISTORY.csv`, `HARDENING_AUDIT_REPORT.md`) via scripts outillage | OK |
+| 2026-02-13 | Lot couverture: ajout tests `excel_automation`, `settings`, `ui_simulation` render/helpers, `ui_inputs`, `ui_communication`, `ui_stats`, `ui_params`, `ui_planning/utils` | OK |
+| 2026-02-13 | Validation lot couverture: `pytest -q` (`514 passed`), couverture hardening `85%`, `ruff` OK | OK |
 | 2026-02-13 | R1 multi-lots: refactor non fonctionnel `export_service` (découpage orchestration export: contexte classeur, préparation data, écriture, finalisation skip-versioning/versionnée) | OK |
 | 2026-02-13 | R1 multi-lots: refactor non fonctionnel `ui_stats` (découpage orchestration `render_tab_stats` + helpers de sélection dossier/filtres/KPI/sections/PDF) | OK |
 | 2026-02-13 | Renforcement tests `ui_stats` (helpers d’orchestration + smoke render) | OK |

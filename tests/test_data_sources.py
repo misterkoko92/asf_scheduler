@@ -2,13 +2,20 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from scheduler.data_sources import (
     AsfBenevDataSource,
     AsfWmsDataSource,
+    BaseDataSource,
     CompositeDataSource,
     ExcelDataSource,
     ExcelSourcePaths,
+    ExternalRepoPaths,
+    _detect_repo_root,
+    _format_time,
+    _parse_iso_date,
+    _unwrap_list,
     resolve_data_source,
 )
 
@@ -256,3 +263,137 @@ def test_composite_data_source_prefers_available_over_base(tmp_path):
     # volunteers_source indisponible -> fallback base
     assert composite.load_param_benev().iloc[0]["Benevole"] == "base"
     assert composite.load_benevoles_df().iloc[0]["Benevole"] == "base"
+
+
+def test_base_data_source_methods_raise_not_implemented():
+    base = BaseDataSource()
+    with pytest.raises(NotImplementedError):
+        base.load_param_be()
+    with pytest.raises(NotImplementedError):
+        base.load_param_dest()
+    with pytest.raises(NotImplementedError):
+        base.load_param_benev()
+    with pytest.raises(NotImplementedError):
+        base.load_shipments_df()
+    with pytest.raises(NotImplementedError):
+        base.load_vols_df()
+    with pytest.raises(NotImplementedError):
+        base.load_benevoles_df()
+
+
+def test_detect_repo_root_and_external_paths(monkeypatch, tmp_path):
+    monkeypatch.setenv("ASF_WMS_ROOT", str(tmp_path / "wms"))
+    monkeypatch.setenv("ASF_BENEV_ROOT", str(tmp_path / "benev"))
+    assert _detect_repo_root("ASF_WMS_ROOT", "fallback") == (tmp_path / "wms").resolve()
+    paths = ExternalRepoPaths.detect()
+    assert paths.wms_root == (tmp_path / "wms").resolve()
+    assert paths.benev_root == (tmp_path / "benev").resolve()
+
+
+def test_unwrap_and_format_helpers_cover_all_variants():
+    assert _unwrap_list(None) == []
+    assert _unwrap_list({"results": [1, 2]}) == [1, 2]
+    assert _unwrap_list([3]) == [3]
+    assert str(_parse_iso_date("2026-01-23")) == "2026-01-23"
+    assert _format_time("13h05") == "13:05"
+
+
+def test_asf_wms_get_post_raise_when_api_url_missing(tmp_path):
+    ds = AsfWmsDataSource(tmp_path, enabled=True)
+    with pytest.raises(RuntimeError, match="ASF_WMS_API_URL"):
+        ds._get("integrations/test")
+    with pytest.raises(RuntimeError, match="ASF_WMS_API_URL"):
+        ds._post("integrations/test", {})
+
+
+def test_asf_benev_get_post_raise_when_api_url_missing(tmp_path):
+    ds = AsfBenevDataSource(tmp_path, enabled=True)
+    with pytest.raises(RuntimeError, match="ASF_BENEV_API_URL"):
+        ds._get("integrations/test")
+    with pytest.raises(RuntimeError, match="ASF_BENEV_API_URL"):
+        ds._post("integrations/test", {})
+
+
+def test_asf_sources_default_param_and_not_implemented_methods(tmp_path):
+    wms = AsfWmsDataSource(tmp_path, enabled=False)
+    benev = AsfBenevDataSource(tmp_path, enabled=False)
+
+    assert wms.is_available() is False
+    assert benev.is_available() is False
+    assert wms.load_param_be().iloc[0]["Type"] == "AUTRE"
+
+    with pytest.raises(NotImplementedError):
+        wms.load_vols_df()
+    with pytest.raises(NotImplementedError):
+        wms.load_benevoles_df()
+    with pytest.raises(NotImplementedError):
+        benev.load_param_be()
+    with pytest.raises(NotImplementedError):
+        benev.load_param_dest()
+    with pytest.raises(NotImplementedError):
+        benev.load_shipments_df()
+    with pytest.raises(NotImplementedError):
+        benev.load_vols_df()
+
+
+def test_asf_benev_load_benevoles_df_handles_invalid_ids(monkeypatch, tmp_path):
+    monkeypatch.setenv("ASF_BENEV_API_URL", "https://benev.example.test/api")
+    ds = AsfBenevDataSource(tmp_path, enabled=True)
+    monkeypatch.setattr(
+        ds,
+        "_get",
+        lambda path, params=None: [{"volunteer_id": "x", "date": "2026-01-20", "start_time": "08:00", "end_time": "09:00"}]
+        if path == "integrations/availabilities/"
+        else [{"volunteer_id": 7, "full_name": "Alice", "constraints": {}}],
+    )
+    param_benev = pd.DataFrame([{"ID": "bad", "Benevole": "Unknown"}])
+    out = ds.load_benevoles_df(param_benev)
+    assert len(out) == 1
+    assert out.iloc[0]["Benevole"] == ""
+    assert out.iloc[0]["Heure_Arrivee"] == "08:00"
+
+
+def test_composite_can_use_dedicated_vols_source():
+    class _Source:
+        def __init__(self, value):
+            self.value = value
+
+        def is_available(self):
+            return True
+
+        def load_param_be(self):
+            return pd.DataFrame([{"Type": self.value}])
+
+        def load_param_dest(self):
+            return pd.DataFrame([{"Dest_IATA": self.value}])
+
+        def load_param_benev(self):
+            return pd.DataFrame([{"Benevole": self.value}])
+
+        def load_shipments_df(self, param_be=None, *, planifiables_only=True):
+            _ = param_be, planifiables_only
+            return pd.DataFrame([{"BE_Numero": self.value}])
+
+        def load_vols_df(self, param_dest=None):
+            _ = param_dest
+            return pd.DataFrame([{"Numero_Vol": self.value}])
+
+        def load_benevoles_df(self, param_benev=None):
+            _ = param_benev
+            return pd.DataFrame([{"Benevole": self.value}])
+
+    composite = CompositeDataSource(base=_Source("base"), vols_source=_Source("vols"))
+    assert composite.load_param_dest().iloc[0]["Dest_IATA"] == "vols"
+    assert composite.load_vols_df().iloc[0]["Numero_Vol"] == "vols"
+
+
+def test_resolve_data_source_composite_and_unknown(monkeypatch, tmp_path):
+    monkeypatch.setenv("ASF_WMS_ENABLE", "1")
+    monkeypatch.setenv("ASF_BENEV_ENABLE", "1")
+    paths = ExternalRepoPaths(wms_root=tmp_path / "wms", benev_root=tmp_path / "benev")
+
+    source = resolve_data_source("composite", external_paths=paths)
+    assert isinstance(source, CompositeDataSource)
+
+    unknown = resolve_data_source("unknown", external_paths=paths)
+    assert isinstance(unknown, ExcelDataSource)

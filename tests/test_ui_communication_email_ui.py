@@ -150,6 +150,44 @@ def test_render_email_asf_ui_reports_generation_error(monkeypatch):
     assert any("Échec de création du mail ASF" in msg for msg in stub.errors)
 
 
+def test_render_email_asf_ui_detects_week_year_and_success_with_attachment(monkeypatch, tmp_path):
+    stub = _StubSt()
+    stub._button_values["📤 Générer le mail ASF Interne"] = True
+    monkeypatch.setattr(asf_ui, "st", stub)
+    monkeypatch.setattr(
+        asf_ui,
+        "get_email_defaults",
+        lambda: {"asf_interne": {"to": "to@example.org", "cc": "cc@example.org", "bcc": "bcc@example.org"}},
+    )
+    payloads: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        asf_ui,
+        "generate_asf_email",
+        lambda **kwargs: payloads.append(kwargs) or True,
+    )
+
+    pdf_path = tmp_path / "planning.pdf"
+    pdf_path.write_text("pdf", encoding="utf-8")
+    asf_ui.render_email_asf_ui(
+        df_comm=pd.DataFrame({"DATE": ["2026-01-19"]}),
+        pdf_attachment_path=pdf_path,
+    )
+
+    assert payloads
+    assert payloads[0]["week"] == 4
+    assert payloads[0]["year"] == 2026
+    assert payloads[0]["attachments"] == [str(pdf_path)]
+    assert any("Pièce jointe" in msg for msg in stub.infos)
+    assert any("Brouillon ASF Interne créé" in msg for msg in stub.successes)
+
+
+def test_render_email_asf_ui_reports_error_when_week_year_cannot_be_detected(monkeypatch):
+    stub = _StubSt()
+    monkeypatch.setattr(asf_ui, "st", stub)
+    asf_ui.render_email_asf_ui(df_comm=pd.DataFrame({"X": ["2026-01-19"]}))
+    assert any("Impossible de détecter la semaine / année" in msg for msg in stub.errors)
+
+
 def test_render_email_destinations_ui_covers_empty_and_single_destination_paths(monkeypatch):
     stub = _StubSt()
     monkeypatch.setattr(dest_ui, "st", stub)
@@ -179,6 +217,48 @@ def test_render_email_destinations_ui_covers_empty_and_single_destination_paths(
 
     assert any("2 mails Destinations générés" in msg for msg in stub2.successes)
     assert any("Échec pour la destination RUN" in msg for msg in stub2.errors)
+
+
+def test_render_email_destinations_ui_warns_when_paramdest_missing(monkeypatch):
+    stub = _StubSt()
+    monkeypatch.setattr(dest_ui, "st", stub)
+
+    dest_ui.render_email_destinations_ui(
+        df_comm=pd.DataFrame([{"Destination": "RUN"}]),
+        df_paramdest=pd.DataFrame(),
+        week=4,
+        year=2026,
+    )
+    assert any("ParamDest non chargé" in msg for msg in stub.warnings)
+
+
+def test_render_email_destinations_ui_handles_empty_destination_values(monkeypatch):
+    stub = _StubSt()
+    monkeypatch.setattr(dest_ui, "st", stub)
+
+    dest_ui.render_email_destinations_ui(
+        df_comm=pd.DataFrame([{"Destination": None}, {"Destination": None}]),
+        df_paramdest=pd.DataFrame([{"Dest_IATA": "RUN"}]),
+        week=4,
+        year=2026,
+    )
+    assert any("Aucune destination trouvée" in msg for msg in stub.infos)
+
+
+def test_render_email_destinations_ui_individual_success_path(monkeypatch):
+    stub = _StubSt()
+    stub._button_values["📤 Générer le mail pour RUN"] = True
+    stub._selectbox_values["Sélectionner une destination pour un envoi individuel"] = "RUN"
+    monkeypatch.setattr(dest_ui, "st", stub)
+    monkeypatch.setattr(dest_ui, "generate_destination_email_for_destination", lambda **_kwargs: True)
+
+    dest_ui.render_email_destinations_ui(
+        df_comm=pd.DataFrame([{"Destination": "RUN"}]),
+        df_paramdest=pd.DataFrame([{"Dest_IATA": "RUN"}]),
+        week=4,
+        year=2026,
+    )
+    assert any("Mail Destination pour RUN généré" in msg for msg in stub.successes)
 
 
 def test_render_email_expediteurs_ui_covers_global_and_targeted_send(monkeypatch):

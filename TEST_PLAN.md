@@ -60,6 +60,22 @@ pytest tests/test_core_scheduler.py
    - Edit Vols and BE in manual tab.
    - Verify save preserves validations + conditional formatting.
 
+## Manual Tests - Critical Business Scenarios
+1) Multi-stop routing allocation and display
+   - Example flight: `CDG-SSG-DLA`.
+   - Expected allocation behavior:
+     - `CDG-SSG` and `CDG-DLA` are candidate destinations.
+     - One physical flight (same date/time/number) can serve only one destination.
+     - In conflict, first routing destination wins.
+   - Expected display behavior:
+     - Routing shown in UI/export remains the real routing (`CDG-SSG-DLA`), not a simplified destination-only routing.
+2) Missing stop in ParamDest
+   - A stop in routing is absent from `ParamDest` (ex: `SSG`) while final destination exists (ex: `DLA`).
+   - Expected: destination present in ParamDest remains planifiable; flight should not be dropped globally.
+3) Air France API `timeOriginType`
+   - Compare `S`, `M`, `P` for same flight/day.
+   - Expected: verify which timestamp feeds departure hour (`scheduled` vs `latestPublished`) and confirm exported planning uses the intended one.
+
 ## OneDrive Graph Mode (Streamlit Cloud or local)
 1) Device code auth
    - Trigger login, enter code, confirm token cache.
@@ -97,3 +113,7 @@ For each test case, log:
 - Pass/Fail
 - Notes or screenshot
 - Files used
+
+## Current Quality Snapshot (2026-02-13)
+- Automated tests: `729 passed`
+- Coverage hardening scope (`asf_app + scheduler + loaders + utils`): `91.46%`

@@ -95,6 +95,69 @@ def test_load_be_moteur_success_formats_and_sorts(monkeypatch, tmp_path):
     assert set(["Type", "Destination", "IATA", "Nb_Colis", "Equiv_colis", "Priorité"]).issubset(df.columns)
 
 
+def test_prepare_be_display_dataframe_maps_destination_and_label():
+    src = pd.DataFrame(
+        [
+            {
+                "BE_Numero": "260001",
+                "IATA": "RUN",
+                "Destination": "RUN",
+                "Nb_Colis": 2,
+                "Type": "MM",
+            }
+        ]
+    )
+
+    out = ui_week_data._prepare_be_display_dataframe(src, iata_to_city={"RUN": "SAINT-DENIS"})
+
+    assert len(out) == 1
+    assert out.iloc[0]["Destination"] == "SAINT-DENIS"
+    assert "Label" in out.columns
+    assert "RUN" in str(out.iloc[0]["Label"])
+
+
+def test_prepare_benevoles_dataframe_filters_invalid_slots():
+    state = SimpleNamespace(
+        api_start_date=None,
+        api_end_date=None,
+        df_benev=pd.DataFrame(
+            [
+                {"Nom": "Alice", "Date": "16/02/26", "Heure_Arrivee": "08:00", "Heure_Depart": "13:00"},
+                {"Nom": "Bob", "Date": "16/02/26", "Heure_Arrivee": "", "Heure_Depart": "13:00"},
+            ]
+        ),
+    )
+
+    out = ui_week_data._prepare_benevoles_dataframe(state, week=8)
+
+    assert len(out) == 1
+    assert out.iloc[0]["Nom"] == "Alice"
+    assert out.iloc[0]["Arrivée"] != ""
+    assert out.iloc[0]["Départ"] != ""
+
+
+def test_prepare_flights_dataframe_returns_empty_when_no_vols(monkeypatch):
+    state = SimpleNamespace(
+        df_vols=pd.DataFrame(),
+        df_param_dest=pd.DataFrame(),
+        df_be=pd.DataFrame(),
+        api_start_date=None,
+        api_end_date=None,
+    )
+    monkeypatch.setattr(
+        ui_week_data,
+        "get_excel_source_paths",
+        lambda _state: SimpleNamespace(vols="dummy.xlsx"),
+    )
+    import loaders.load_vols as lv
+
+    monkeypatch.setattr(lv, "load_vols_df", lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    out = ui_week_data._prepare_flights_dataframe(state, week=8, iata_to_city={})
+
+    assert out.empty
+
+
 class _StubWeekContainer:
     def __enter__(self):
         return self

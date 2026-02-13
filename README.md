@@ -199,6 +199,11 @@ source .venv/bin/activate
 python -m pytest
 ```
 
+Snapshot qualité (2026-02-13):
+- `514` tests passés
+- `85%` de couverture sur le périmètre `asf_app + scheduler + utils`
+- dashboard global (incluant `loaders`): voir `QUALITY_DASHBOARD.md`
+
 ## 🏭 Outillage Qualité (P2)
 
 Installation outillage local :

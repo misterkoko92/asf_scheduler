@@ -240,3 +240,81 @@ def test_copy_to_tmp_non_strict_uses_placeholder_on_copy_error(tmp_path, monkeyp
 
     assert out.exists()
     assert out.name == "TABLEAU_DE_BORD.xlsx"
+
+
+def test_get_planning_dirs_and_maquette_path(tmp_path):
+    runtime = _build_runtime(tmp_path)
+    planning_mab = runtime.asf_onedrive / "Planning MAB"
+    year_dir = planning_mab / "ASFmm PLANNING 2026"
+    other_dir = planning_mab / "ASFmm PLANNING 2025"
+    planning_mab.mkdir(parents=True, exist_ok=True)
+    year_dir.mkdir(parents=True, exist_ok=True)
+    other_dir.mkdir(parents=True, exist_ok=True)
+    runtime.output_planning_dir.mkdir(parents=True, exist_ok=True)
+    runtime.planning_template.parent.mkdir(parents=True, exist_ok=True)
+    runtime.planning_template.write_text("tpl", encoding="utf-8")
+
+    dirs = cp.get_planning_dirs(year=2026, runtime=runtime)
+    assert dirs[0] == year_dir.resolve()
+    assert runtime.output_planning_dir.resolve() in dirs
+
+    # Sans maquette OneDrive, fallback template
+    assert cp.get_planning_maquette_path(runtime=runtime) == runtime.planning_template
+
+
+def test_get_planning_maquette_prefers_onedrive_file(tmp_path):
+    runtime = _build_runtime(tmp_path)
+    runtime.planning_maquette_onedrive.parent.mkdir(parents=True, exist_ok=True)
+    runtime.planning_maquette_onedrive.write_text("onedrive", encoding="utf-8")
+    assert cp.get_planning_maquette_path(runtime=runtime) == runtime.planning_maquette_onedrive
+
+
+def test_remote_path_for_local_unknown_path_returns_none(tmp_path):
+    runtime = _build_runtime(tmp_path)
+    unknown = tmp_path / "other.xlsx"
+    unknown.write_text("x", encoding="utf-8")
+    assert cp.remote_path_for_local(unknown, runtime=runtime) is None
+
+
+def test_sync_local_file_to_onedrive_returns_false_when_not_graph(tmp_path):
+    runtime = replace(_build_runtime(tmp_path), use_graph_onedrive=False)
+    assert cp.sync_local_file_to_onedrive(tmp_path / "x.xlsx", runtime=runtime) is False
+
+
+def test_sync_local_file_to_onedrive_returns_false_when_remote_cannot_be_resolved(tmp_path):
+    runtime = replace(_build_runtime(tmp_path), use_graph_onedrive=True)
+    local = tmp_path / "other.xlsx"
+    local.write_text("x", encoding="utf-8")
+    assert cp.sync_local_file_to_onedrive(local, runtime=runtime) is False
+
+
+def test_device_flow_helpers_return_none_or_false_when_no_client(monkeypatch):
+    monkeypatch.setattr(cp, "get_graph_client", lambda **_kwargs: None)
+    assert cp.begin_onedrive_device_flow() is None
+    assert cp.complete_onedrive_device_flow({}) is False
+
+
+def test_download_upload_list_helpers_handle_non_graph_or_auth_required(tmp_path, monkeypatch):
+    runtime = replace(_build_runtime(tmp_path), use_graph_onedrive=False)
+    assert cp.download_onedrive_file("A/B.xlsx", tmp_path / "x.xlsx", runtime=runtime) is False
+    assert cp.upload_onedrive_file(tmp_path / "x.xlsx", "A/B.xlsx", runtime=runtime) is False
+    assert cp.list_onedrive_files("A", runtime=runtime) == []
+
+    runtime_graph = replace(_build_runtime(tmp_path), use_graph_onedrive=True)
+    from scheduler.onedrive_graph import GraphAuthRequired
+
+    class _FakeClient:
+        def download_file(self, *_args, **_kwargs):
+            raise GraphAuthRequired("auth")
+
+        def upload_file(self, *_args, **_kwargs):
+            raise GraphAuthRequired("auth")
+
+        def list_files_recursive(self, *_args, **_kwargs):
+            raise GraphAuthRequired("auth")
+
+    monkeypatch.setattr(cp, "get_graph_client", lambda **_kwargs: _FakeClient())
+
+    assert cp.download_onedrive_file("A/B.xlsx", tmp_path / "x.xlsx", runtime=runtime_graph) is False
+    assert cp.upload_onedrive_file(tmp_path / "x.xlsx", "A/B.xlsx", runtime=runtime_graph) is False
+    assert cp.list_onedrive_files("A", recursive=True, runtime=runtime_graph) == []

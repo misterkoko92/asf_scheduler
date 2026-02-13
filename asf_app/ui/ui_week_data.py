@@ -135,6 +135,237 @@ def load_be_moteur():
     return df_be, None
 
 
+def _prepare_be_display_dataframe(
+    df_be: pd.DataFrame | None,
+    *,
+    iata_to_city: dict[str, str],
+) -> pd.DataFrame:
+    if df_be is None or df_be.empty:
+        return pd.DataFrame()
+
+    out = df_be.copy()
+    if "Destination" in out.columns:
+        out["Destination"] = out.apply(
+            lambda r: iata_to_city.get(
+                str(r.get("IATA", "")).upper(),
+                str(r.get("Destination", "")),
+            ),
+            axis=1,
+        )
+
+    def _label_be(row):
+        return format_be_label(
+            dest=str(row.get("IATA", row.get("Destination", ""))),
+            be_num=str(row.get("BE_Numero", "")),
+            nb_colis=row.get("Nb_Colis", row.get("BE_Nb_Colis", "")),
+            be_type=row.get("Type", ""),
+            status="moteur",
+            date_str=row.get("Date_Vol", ""),
+        )
+
+    out["Label"] = out.apply(_label_be, axis=1)
+    return out
+
+
+def _prepare_benevoles_dataframe(state, week: int | None) -> pd.DataFrame:
+    if state.df_benev is None or state.df_benev.empty:
+        return pd.DataFrame()
+
+    tmp = state.df_benev.copy()
+    tmp["Date_dt"] = robust_to_datetime(tmp["Date"])
+
+    if state.api_start_date and state.api_end_date:
+        mask = (tmp["Date_dt"] >= coerce_datetime(state.api_start_date)) & (
+            tmp["Date_dt"] <= coerce_datetime(state.api_end_date)
+        )
+        tmp = tmp[mask]
+    elif week:
+        tmp = tmp[tmp["Date_dt"].dt.isocalendar().week == week]
+
+    tmp["Date_fmt"] = format_date_series(tmp["Date_dt"], fmt="%d/%m/%y")
+    df_benev = tmp[
+        [
+            "Nom",
+            "Date_fmt",
+            "Heure_Arrivee",
+            "Heure_Depart",
+        ]
+    ].rename(
+        columns={
+            "Date_fmt": "Date",
+            "Heure_Arrivee": "Arrivée_brut",
+            "Heure_Depart": "Départ_brut",
+        }
+    )
+
+    arr_dt = parse_time_series(
+        df_benev["Arrivée_brut"],
+        allow_hour_only=True,
+        allow_general_fallback=True,
+        strip_spaces=True,
+        lowercase=True,
+    )
+    dep_dt = parse_time_series(
+        df_benev["Départ_brut"],
+        allow_hour_only=True,
+        allow_general_fallback=True,
+        strip_spaces=True,
+        lowercase=True,
+    )
+    valid_mask = arr_dt.notna() & dep_dt.notna()
+
+    arr_fmt = format_time_series(
+        arr_dt + pd.Timedelta(hours=3),
+        fmt="%Hh%M",
+        allow_general_fallback=True,
+    ).fillna("")
+    dep_fmt = format_time_series(
+        dep_dt,
+        fmt="%Hh%M",
+        allow_general_fallback=True,
+    ).fillna("")
+
+    df_benev["Arrivée"] = arr_fmt
+    df_benev["Départ"] = dep_fmt
+    df_benev["Date_dt"] = robust_to_datetime(df_benev["Date"])
+
+    if state.api_start_date and state.api_end_date:
+        start_dt = coerce_datetime(state.api_start_date)
+        end_dt = coerce_datetime(state.api_end_date)
+        mask = (df_benev["Date_dt"] >= start_dt) & (df_benev["Date_dt"] <= end_dt)
+        df_benev = df_benev[mask]
+    elif week:
+        df_benev = df_benev[df_benev["Date_dt"].dt.isocalendar().week == week]
+
+    df_benev = df_benev[valid_mask]
+    return df_benev[["Nom", "Date", "Arrivée", "Départ"]]
+
+
+def _prepare_flights_dataframe(state, week: int | None, iata_to_city: dict[str, str]) -> pd.DataFrame:
+    if state.df_vols is None or (hasattr(state.df_vols, "empty") and state.df_vols.empty):
+        try:
+            from loaders.load_vols import load_vols_df
+
+            paths = get_excel_source_paths(state)
+            state.df_vols = load_vols_df(vols_path=paths.vols, param_dest_df=state.df_param_dest)
+        except (ImportError, FileNotFoundError, OSError, KeyError, RuntimeError, TypeError, ValueError):
+            state.df_vols = None
+
+    if state.df_vols is None or state.df_vols.empty:
+        return pd.DataFrame()
+
+    vols_df = state.df_vols.copy()
+    vols_df["Date_dt"] = parse_date_series(vols_df["Date_Vol"], allow_dayfirst_false=False)
+
+    if state.api_start_date and state.api_end_date:
+        start_dt = parse_date_value(state.api_start_date, allow_dayfirst_false=False)
+        end_dt = parse_date_value(state.api_end_date, allow_dayfirst_false=False)
+        vols_df = vols_df[(vols_df["Date_dt"] >= start_dt) & (vols_df["Date_dt"] <= end_dt)]
+    elif week:
+        vols_df = vols_df[vols_df["Date_dt"].dt.isocalendar().week == week]
+
+    iata_set = set()
+    try:
+        df_be_planif, _ = load_be_moteur()
+        for _, rr in df_be_planif.iterrows():
+            i = str(rr.get("IATA", "")).strip().upper()
+            if len(i) == 3:
+                iata_set.add(i)
+    except (AttributeError, KeyError, TypeError, ValueError):
+        pass
+    try:
+        if state.df_be is not None and not state.df_be.empty:
+            df_be_d = state.df_be[state.df_be.get("Status_BE", "").astype(str).str.strip() == "D"]
+            for _, rr in df_be_d.iterrows():
+                i = str(rr.get("Dest_IATA", rr.get("IATA", ""))).strip().upper()
+                if len(i) == 3:
+                    iata_set.add(i)
+    except (AttributeError, KeyError, TypeError, ValueError):
+        pass
+    allow_all_dest = len(iata_set) == 0
+    logger.debug("[Vols dispo] IATA BE D: %s", sorted(iata_set))
+
+    rows_map: dict[tuple[str, str, str, str, str], dict[str, object]] = {}
+    for _, r in vols_df.iterrows():
+        dtdt = r.get("Date_dt")
+        if pd.isna(dtdt):
+            continue
+        heure_str = normalize_hour_value(r.get("Heure_Vol", ""), allow_general_fallback=True)
+        if not heure_str:
+            continue
+        routing_raw = str(r.get("Routing", "")) or ""
+        parts = [p.strip().upper() for p in routing_raw.replace(" ", "").replace(",", "-").split("-") if p]
+        if len(parts) > 1 and parts[-1] == "CDG":
+            parts = parts[:-1]
+        if len(parts) < 2:
+            continue
+        for idx in range(1, len(parts)):
+            dest_iata = parts[idx]
+            dest_city = iata_to_city.get(dest_iata, dest_iata)
+            if (not allow_all_dest) and dest_iata not in iata_set:
+                continue
+            sub_route = "-".join(parts)
+            label = format_vol_label(
+                dtdt,
+                dest_iata,
+                r.get("Numero_Vol", ""),
+                heure_str,
+                sub_route,
+                r.get("Source", "excel"),
+            )
+            date_str = format_date_value(dtdt, fmt="%d/%m/%y", default="")
+            numero_vol = str(r.get("Numero_Vol", "")).strip()
+            source = str(r.get("Source", "excel")).strip() or "excel"
+            source_priority = 0 if source.lower() == "api" else 1
+            row_key = (
+                str(dest_iata).strip().upper(),
+                date_str,
+                str(heure_str).strip(),
+                numero_vol,
+                sub_route,
+            )
+            row_payload = {
+                "Destination": dest_city,
+                "Date": date_str,
+                "Heure": heure_str,
+                "Routing": sub_route,
+                "Numero_Vol": numero_vol,
+                "IATA": dest_iata,
+                "Source": source,
+                "Label": label,
+                "_source_priority": source_priority,
+            }
+            existing = rows_map.get(row_key)
+            existing_priority = existing.get("_source_priority", 99) if existing is not None else 99
+            if isinstance(existing_priority, (int, float, str)):
+                try:
+                    existing_priority_int = int(existing_priority)
+                except (TypeError, ValueError):
+                    existing_priority_int = 99
+            else:
+                existing_priority_int = 99
+            if existing is None or source_priority < existing_priority_int:
+                rows_map[row_key] = row_payload
+
+    df_flights = pd.DataFrame(rows_map.values())
+    if df_flights.empty:
+        return df_flights
+
+    df_flights = df_flights.drop(columns=["_source_priority"], errors="ignore")
+    df_flights = df_flights.sort_values(
+        ["Destination", "Date", "Heure", "Numero_Vol"],
+        kind="mergesort",
+    ).reset_index(drop=True)
+    if "HEURE_MIN" in df_flights.columns:
+        df_flights["HEURE_MIN"] = pd.to_numeric(df_flights["HEURE_MIN"], errors="coerce")
+
+    logger.debug("[Vols dispo] Lignes retenues: %s", len(df_flights))
+    if not df_flights.empty:
+        logger.debug("[Vols dispo] Dates: %s", sorted(df_flights["Date"].unique().tolist()))
+        logger.debug("[Vols dispo] Dest: %s", sorted(df_flights["Destination"].unique().tolist()))
+    return df_flights
+
+
 # ======================================================================
 # Onglet Données Semaine
 # ======================================================================
@@ -150,33 +381,15 @@ def render_tab_week_data():
     col1, col2, col3 = st.columns(3, gap="medium")
 
     # Mapping ParamDest pour affichages (ville <-> IATA)
-    iata_to_city, city_to_iata = build_iata_city_maps(state.df_param_dest)
+    iata_to_city, _city_to_iata = build_iata_city_maps(state.df_param_dest)
 
     # ==========================================================================
     # BE PLANIFIABLES
     # ==========================================================================
     df_be, err = load_be_moteur()
     if df_be is None:
-        df_be = pd.DataFrame()
         st.error(f"❌ Erreur BE moteur : {err}")
-    else:
-        # Affichage Destination = Ville si possible
-        if "Destination" in df_be.columns:
-            df_be["Destination"] = df_be.apply(
-                lambda r: iata_to_city.get(str(r.get("IATA", "")).upper(), str(r.get("Destination", ""))),
-                axis=1
-            )
-        # Label standard
-        def _label_be(row):
-            return format_be_label(
-                dest=str(row.get("IATA", row.get("Destination", ""))),
-                be_num=str(row.get("BE_Numero", "")),
-                nb_colis=row.get("Nb_Colis", row.get("BE_Nb_Colis", "")),
-                be_type=row.get("Type", ""),
-                status="moteur",
-                date_str=row.get("Date_Vol", ""),
-            )
-        df_be["Label"] = df_be.apply(_label_be, axis=1)
+    df_be = _prepare_be_display_dataframe(df_be, iata_to_city=iata_to_city)
 
     with col1:
         bloc_with_sort(
@@ -190,84 +403,7 @@ def render_tab_week_data():
     # ==========================================================================
     # BÉNÉVOLES — FORMAT + MASQUAGE
     # ==========================================================================
-    if state.df_benev is not None and not state.df_benev.empty:
-
-        tmp = state.df_benev.copy()
-        tmp["Date_dt"] = robust_to_datetime(tmp["Date"])
-
-        if state.api_start_date and state.api_end_date:
-            mask = (tmp["Date_dt"] >= coerce_datetime(state.api_start_date)) & (
-                tmp["Date_dt"] <= coerce_datetime(state.api_end_date)
-            )
-            tmp = tmp[mask]
-        elif week:
-            tmp = tmp[tmp["Date_dt"].dt.isocalendar().week == week]
-
-        tmp["Date_fmt"] = format_date_series(tmp["Date_dt"], fmt="%d/%m/%y")
-
-        # --- extraction brute ---
-        df_benev = tmp[[
-            "Nom",
-            "Date_fmt",
-            "Heure_Arrivee",
-            "Heure_Depart"
-        ]].rename(columns={
-            "Date_fmt": "Date",
-            "Heure_Arrivee": "Arrivée_brut",
-            "Heure_Depart": "Départ_brut"
-        })
-
-        # --- parsing minimal ---
-        arr_dt = parse_time_series(
-            df_benev["Arrivée_brut"],
-            allow_hour_only=True,
-            allow_general_fallback=True,
-            strip_spaces=True,
-            lowercase=True,
-        )
-        dep_dt = parse_time_series(
-            df_benev["Départ_brut"],
-            allow_hour_only=True,
-            allow_general_fallback=True,
-            strip_spaces=True,
-            lowercase=True,
-        )
-        valid_mask = arr_dt.notna() & dep_dt.notna()
-
-        # --- format final ---
-        arr_fmt = format_time_series(
-            arr_dt + pd.Timedelta(hours=3),
-            fmt="%Hh%M",
-            allow_general_fallback=True,
-        ).fillna("")
-        dep_fmt = format_time_series(
-            dep_dt,
-            fmt="%Hh%M",
-            allow_general_fallback=True,
-        ).fillna("")
-
-        df_benev["Arrivée"] = arr_fmt
-        df_benev["Départ"] = dep_fmt
-
-        # --- MASQUAGE : si arrivée vide OU départ vide → ligne supprimée ---
-        # Filtre période choisie (prioritaire si définie)
-        df_benev["Date_dt"] = robust_to_datetime(df_benev["Date"])
-        if state.api_start_date and state.api_end_date:
-            start_dt = coerce_datetime(state.api_start_date)
-            end_dt = coerce_datetime(state.api_end_date)
-            mask = (df_benev["Date_dt"] >= start_dt) & (df_benev["Date_dt"] <= end_dt)
-            df_benev = df_benev[mask]
-        elif week:
-            df_benev = df_benev[df_benev["Date_dt"].dt.isocalendar().week == week]
-
-        # Garder uniquement les bénévoles avec créneaux valides
-        df_benev = df_benev[valid_mask]
-
-        # on ne garde que les 4 colonnes utiles
-        df_benev = df_benev[["Nom", "Date", "Arrivée", "Départ"]]
-
-    else:
-        df_benev = pd.DataFrame()
+    df_benev = _prepare_benevoles_dataframe(state, week)
 
     with col2:
         bloc_with_sort(
@@ -278,122 +414,7 @@ def render_tab_week_data():
             min_height=50
         )
 
-    # ==========================================================================
-    # VOLS — reconstruction propre par segment
-    # ==========================================================================
-    # Si le dataframe vols n'est pas chargé, on tente un chargement direct
-    if state.df_vols is None or (hasattr(state.df_vols, "empty") and state.df_vols.empty):
-        try:
-            from loaders.load_vols import load_vols_df
-            paths = get_excel_source_paths(state)
-            state.df_vols = load_vols_df(vols_path=paths.vols, param_dest_df=state.df_param_dest)
-        except (ImportError, FileNotFoundError, OSError, KeyError, RuntimeError, TypeError, ValueError):
-            state.df_vols = None
-
-    def _parse_time_val(val):
-        return normalize_hour_value(val, allow_general_fallback=True)
-
-    if state.df_vols is not None and not state.df_vols.empty:
-        vols_df = state.df_vols.copy()
-        vols_df["Date_dt"] = parse_date_series(vols_df["Date_Vol"], allow_dayfirst_false=False)
-
-        # Période choisie
-        if state.api_start_date and state.api_end_date:
-            start_dt = parse_date_value(state.api_start_date, allow_dayfirst_false=False)
-            end_dt = parse_date_value(state.api_end_date, allow_dayfirst_false=False)
-            vols_df = vols_df[(vols_df["Date_dt"] >= start_dt) & (vols_df["Date_dt"] <= end_dt)]
-        elif week:
-            vols_df = vols_df[vols_df["Date_dt"].dt.isocalendar().week == week]
-
-        def fmt_hour(v):
-            return _parse_time_val(v)
-
-        # Destinations éligibles (BE statut D) — matching sur IATA
-        iata_set = set()
-        try:
-            df_be_planif, _ = load_be_moteur()
-            for _, rr in df_be_planif.iterrows():
-                i = str(rr.get("IATA", "")).strip().upper()
-                if len(i) == 3:
-                    iata_set.add(i)
-        except (AttributeError, KeyError, TypeError, ValueError):
-            pass
-        try:
-            if state.df_be is not None and not state.df_be.empty:
-                df_be_d = state.df_be[state.df_be.get("Status_BE", "").astype(str).str.strip() == "D"]
-                for _, rr in df_be_d.iterrows():
-                    i = str(rr.get("Dest_IATA", rr.get("IATA", ""))).strip().upper()
-                    if len(i) == 3:
-                        iata_set.add(i)
-        except (AttributeError, KeyError, TypeError, ValueError):
-            pass
-        allow_all_dest = len(iata_set) == 0
-        logger.debug("[Vols dispo] IATA BE D: %s", sorted(iata_set))
-
-        rows_map: dict[tuple[str, str, str, str, str], dict[str, object]] = {}
-        for _, r in vols_df.iterrows():
-            dtdt = r.get("Date_dt")
-            if pd.isna(dtdt):
-                continue
-            heure_str = fmt_hour(r.get("Heure_Vol", ""))
-            if not heure_str:
-                continue
-            routing_raw = str(r.get("Routing", "")) or ""
-            parts = [p.strip().upper() for p in routing_raw.replace(" ", "").replace(",", "-").split("-") if p]
-            # si le dernier est CDG (retour), on le retire pour l'affichage
-            if len(parts) > 1 and parts[-1] == "CDG":
-                parts = parts[:-1]
-            if len(parts) < 2:
-                continue
-            # chaque segment vérifie si la destination est dans les BE
-            for idx in range(1, len(parts)):
-                dest_iata = parts[idx]
-                dest_city = iata_to_city.get(dest_iata, dest_iata)
-                if (not allow_all_dest) and dest_iata not in iata_set:
-                    continue
-                # Affiche toujours le routing complet (sans retour CDG), même si la destination est un stop intermédiaire
-                sub_route = "-".join(parts)
-                label = format_vol_label(dtdt, dest_iata, r.get("Numero_Vol", ""), heure_str, sub_route, r.get("Source", "excel"))
-                date_str = format_date_value(dtdt, fmt="%d/%m/%y", default="")
-                numero_vol = str(r.get("Numero_Vol", "")).strip()
-                source = str(r.get("Source", "excel")).strip() or "excel"
-                source_priority = 0 if source.lower() == "api" else 1
-                row_key = (
-                    str(dest_iata).strip().upper(),
-                    date_str,
-                    str(heure_str).strip(),
-                    numero_vol,
-                    sub_route,
-                )
-                row_payload = {
-                    "Destination": dest_city,
-                    "Date": date_str,
-                    "Heure": heure_str,
-                    "Routing": sub_route,
-                    "Numero_Vol": numero_vol,
-                    "IATA": dest_iata,
-                    "Source": source,
-                    "Label": label,
-                    "_source_priority": source_priority,
-                }
-                existing = rows_map.get(row_key)
-                if existing is None or source_priority < int(existing.get("_source_priority", 99)):
-                    rows_map[row_key] = row_payload
-
-        df_flights = pd.DataFrame(rows_map.values())
-
-        if not df_flights.empty:
-            df_flights = df_flights.drop(columns=["_source_priority"], errors="ignore")
-            df_flights = df_flights.sort_values(["Destination", "Date", "Heure", "Numero_Vol"], kind="mergesort").reset_index(drop=True)
-            if "HEURE_MIN" in df_flights.columns:
-                df_flights["HEURE_MIN"] = pd.to_numeric(df_flights["HEURE_MIN"], errors="coerce")
-        logger.debug("[Vols dispo] Lignes retenues: %s", len(df_flights))
-        if not df_flights.empty:
-            logger.debug("[Vols dispo] Dates: %s", sorted(df_flights["Date"].unique().tolist()))
-            logger.debug("[Vols dispo] Dest: %s", sorted(df_flights["Destination"].unique().tolist()))
-
-    else:
-        df_flights = pd.DataFrame()
+    df_flights = _prepare_flights_dataframe(state, week, iata_to_city)
 
     with col3:
         bloc_with_sort(

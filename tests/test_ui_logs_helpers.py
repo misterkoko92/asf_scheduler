@@ -235,3 +235,135 @@ def test_render_tab_logs_download_is_redacted(monkeypatch, tmp_path):
     downloaded = bytes(raw_downloads[0]["data"]).decode("utf-8")
     assert "supersecretvalue123456" not in downloaded
     assert "***REDACTED***" in downloaded
+
+
+def test_pretty_mtime_returns_na_on_error(monkeypatch, tmp_path):
+    monkeypatch.setattr(ui_logs.os.path, "getmtime", lambda _p: (_ for _ in ()).throw(OSError("boom")))
+    assert ui_logs.pretty_mtime(tmp_path / "x.log") == "N/A"
+
+
+def test_read_log_file_reports_error_on_failure(monkeypatch, tmp_path):
+    errors: list[str] = []
+    monkeypatch.setattr(ui_logs.st, "error", lambda msg: errors.append(str(msg)))
+    monkeypatch.setattr(Path, "read_text", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("boom")))
+    assert ui_logs.read_log_file(tmp_path / "x.log") == ""
+    assert any("Erreur lors de la lecture des logs" in msg for msg in errors)
+
+
+def test_build_logs_export_bundle_handles_version_read_error(monkeypatch, tmp_path):
+    version_dir = tmp_path / "app"
+    version_dir.mkdir(parents=True, exist_ok=True)
+    version_file = version_dir / "VERSION"
+    version_file.write_text("1.2.3", encoding="utf-8")
+    monkeypatch.setattr(ui_logs.cp, "BASE_DIR", version_dir)
+
+    orig_read_text = Path.read_text
+
+    def _read_text(self, *args, **kwargs):
+        if self == version_file:
+            raise OSError("no-read")
+        return orig_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", _read_text)
+    payload = ui_logs.build_logs_export_bundle(tmp_path / "missing.log")
+    with zipfile.ZipFile(io.BytesIO(payload), "r") as zf:
+        context = zf.read("context.txt").decode("utf-8")
+        assert "app_version=unknown" in context
+
+
+class _MissingLogPath:
+    def exists(self):
+        return False
+
+    def touch(self):
+        raise OSError("touch-fail")
+
+    def __str__(self):
+        return "missing.log"
+
+
+def test_render_tab_logs_missing_file_touch_error_is_ignored(monkeypatch):
+    stub = _StubLogsSt()
+    monkeypatch.setattr(ui_logs, "st", stub)
+    monkeypatch.setattr(ui_logs, "LOG_FILE", _MissingLogPath())
+    monkeypatch.setattr(ui_logs, "build_logs_export_bundle", lambda _p: b"zip")
+
+    ui_logs.render_tab_logs()
+    assert any("Aucun log trouvé" in msg for msg in stub.infos)
+
+
+def test_render_tab_logs_handles_raw_bytes_read_failure(monkeypatch, tmp_path):
+    stub = _StubLogsSt()
+    monkeypatch.setattr(ui_logs, "st", stub)
+    log_path = tmp_path / "asf_scheduler.log"
+    log_path.write_text("hello", encoding="utf-8")
+    monkeypatch.setattr(ui_logs, "LOG_FILE", log_path)
+    monkeypatch.setattr(ui_logs, "build_logs_export_bundle", lambda _p: b"zip")
+
+    orig_read_bytes = Path.read_bytes
+
+    def _read_bytes(self, *args, **kwargs):
+        if self == log_path:
+            raise OSError("raw-fail")
+        return orig_read_bytes(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_bytes", _read_bytes)
+    ui_logs.render_tab_logs()
+    assert any("Erreur lecture brut" in msg for msg in stub.errors)
+
+
+class _StubLogsNoRerun(_StubLogsSt):
+    def __getattribute__(self, name):
+        if name == "rerun":
+            raise AttributeError
+        return super().__getattribute__(name)
+
+    def experimental_rerun(self):
+        raise RuntimeError("rerun-fail")
+
+
+def test_render_tab_logs_reload_fallback_handles_experimental_error(monkeypatch, tmp_path):
+    stub = _StubLogsNoRerun()
+    stub._buttons["🔄 Recharger"] = True
+    monkeypatch.setattr(ui_logs, "st", stub)
+    log_path = tmp_path / "asf_scheduler.log"
+    log_path.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(ui_logs, "LOG_FILE", log_path)
+    monkeypatch.setattr(ui_logs, "build_logs_export_bundle", lambda _p: b"zip")
+    ui_logs.render_tab_logs()
+
+
+class _BadParent:
+    def mkdir(self, *args, **kwargs):
+        _ = args, kwargs
+        raise OSError("onedrive-denied")
+
+
+class _BadOneDrivePath:
+    parent = _BadParent()
+
+    def __str__(self):
+        return "onedrive.log"
+
+
+def test_render_tab_logs_diagnostic_reports_local_and_onedrive_permissions(monkeypatch, tmp_path):
+    stub = _StubLogsSt()
+    stub._checkbox = True
+    monkeypatch.setattr(ui_logs, "st", stub)
+    log_path = tmp_path / "asf_scheduler.log"
+    log_path.write_text("hello", encoding="utf-8")
+    monkeypatch.setattr(ui_logs, "LOG_FILE", log_path)
+    monkeypatch.setattr(ui_logs, "LOG_FILE_ONEDRIVE", _BadOneDrivePath())
+    monkeypatch.setattr(ui_logs, "build_logs_export_bundle", lambda _p: b"zip")
+
+    orig_open = Path.open
+
+    def _open(self, *args, **kwargs):
+        if self == log_path:
+            raise OSError("local-denied")
+        return orig_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", _open)
+    ui_logs.render_tab_logs()
+    assert any("Écriture locale impossible" in msg for msg in stub.errors)
+    assert any("OneDrive inaccessible" in msg for msg in stub.errors)

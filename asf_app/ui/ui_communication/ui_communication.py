@@ -462,6 +462,49 @@ def _render_selected_communication_section(
         )
 
 
+def _build_communication_payload(paths):
+    df_planning = _select_communication_planning_source()
+    if is_empty_dataframe(df_planning):
+        return None
+
+    df_paramdest, df_paramexpediteur, df_parambenev, _ = _load_communication_parameters(paths)
+    df_comm = _build_enriched_comm_dataframe(
+        df_planning=df_planning,
+        df_paramdest=df_paramdest,
+        df_parambenev=df_parambenev,
+        tdb_path=paths.tableau_de_bord,
+    )
+    if df_comm.empty:
+        st.error("❌ Impossible de générer df_comm (problème données).")
+        return None
+
+    week, year = _detect_week_year(df_comm)
+    if week is None:
+        st.error("Impossible de détecter la semaine depuis df_comm.")
+        return None
+
+    return {
+        "df_comm": df_comm,
+        "df_paramdest": df_paramdest,
+        "df_paramexpediteur": df_paramexpediteur,
+        "week": week,
+        "year": year,
+    }
+
+
+def _render_pdf_attachment_status(pdf_attach_path) -> None:
+    if pdf_attach_path:
+        st.info(f"📎 PDF joint détecté : {Path(pdf_attach_path).name}")
+    else:
+        st.warning("📎 Pas de planning PDF trouvé - ajouter le manuellement.")
+
+
+def _render_communication_preview(df_comm: pd.DataFrame) -> None:
+    with st.expander("📋 Aperçu Planning (Enrichi)", expanded=False):
+        df_display = build_communication_display_dataframe(df_comm)
+        st.dataframe(df_display, hide_index=True, width="stretch", height=320)
+
+
 # ==========================================================
 # UI PRINCIPALE
 # ==========================================================
@@ -471,44 +514,23 @@ def render_tab_communication():
     state = get_state()
     paths = get_excel_source_paths(state)
 
-    df_planning = _select_communication_planning_source()
-    if is_empty_dataframe(df_planning):
+    payload = _build_communication_payload(paths)
+    if payload is None:
         return
 
-    df_paramdest, df_paramexpediteur, df_parambenev, _ = _load_communication_parameters(paths)
-    df_comm = _build_enriched_comm_dataframe(
-        df_planning=df_planning,
-        df_paramdest=df_paramdest,
-        df_parambenev=df_parambenev,
-        tdb_path=paths.tableau_de_bord,
-    )
-
-    if df_comm.empty:
-        st.error("❌ Impossible de générer df_comm (problème données).")
-        return
-
-    week, year = _detect_week_year(df_comm)
-    if week is None:
-        st.error("Impossible de détecter la semaine depuis df_comm.")
-        return
+    df_comm = payload["df_comm"]
+    df_paramdest = payload["df_paramdest"]
+    df_paramexpediteur = payload["df_paramexpediteur"]
+    week = payload["week"]
+    year = payload["year"]
 
     st.success(f"📅 Communication pour S{week} – {year}")
 
     pdf_attach_path = _resolve_pdf_attachment_path(week, year)
-
-    if pdf_attach_path:
-        st.info(f"📎 PDF joint détecté : {Path(pdf_attach_path).name}")
-    else:
-        st.warning("📎 Pas de planning PDF trouvé - ajouter le manuellement.")
+    _render_pdf_attachment_status(pdf_attach_path)
 
     st.divider()
-
-    # ----------------------------------------------------------------------
-    # 📋 Aperçu planning enrichi (formats BE/Vol/Heure)
-    # ----------------------------------------------------------------------
-    with st.expander("📋 Aperçu Planning (Enrichi)", expanded=False):
-        df_display = build_communication_display_dataframe(df_comm)
-        st.dataframe(df_display, hide_index=True, width="stretch", height=320)
+    _render_communication_preview(df_comm)
 
     st.divider()
 

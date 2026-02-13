@@ -492,6 +492,53 @@ def _render_vols_panel(state, cloud_mode: bool) -> None:
 # UI PRINCIPALE
 # -------------------------------------------------------------------------
 
+def _render_graph_onedrive_auth_section() -> None:
+    if not is_graph_onedrive():
+        return
+    st.info("Mode OneDrive Graph actif. Connexion requise pour charger/écrire les fichiers.")
+    client = cp.get_graph_client()
+    if client is None:
+        st.error("Graph non configuré : vérifier ASF_GRAPH_CLIENT_ID / ASF_GRAPH_TENANT_ID.")
+        return
+    if client.acquire_token_silent() is not None:
+        st.success("Connexion OneDrive active.")
+        return
+
+    flow_key = "graph_device_flow"
+    if flow_key not in st.session_state and st.button("🔑 Se connecter à OneDrive"):
+        st.session_state[flow_key] = cp.begin_onedrive_device_flow()
+    flow = st.session_state.get(flow_key)
+    if flow and flow.get("message"):
+        st.info(flow["message"])
+        if st.button("✅ J'ai terminé l'authentification"):
+            ok = cp.complete_onedrive_device_flow(flow)
+            if ok:
+                st.success("Connexion OneDrive validée.")
+                st.session_state.pop(flow_key, None)
+                st.rerun()
+
+
+def _resolve_inputs_session_context():
+    ctx = get_session_context()
+    if ctx is not None:
+        return ctx
+    try:
+        return ensure_session_context(strict_sources=True)
+    except FileNotFoundError as exc:
+        st.session_state["source_error"] = str(exc)
+        return None
+
+
+def _render_inputs_panels(state, cloud_mode: bool) -> None:
+    col_tdb, col_benev, col_vols = st.columns(3)
+    with col_tdb:
+        _render_tdb_panel(state, cloud_mode)
+    with col_benev:
+        _render_benev_panel(state, cloud_mode)
+    with col_vols:
+        _render_vols_panel(state, cloud_mode)
+
+
 def render_tab_inputs():
     st.header("📁 Fichiers d’entrée — OneDrive + TMP")
     state = get_state()
@@ -502,36 +549,8 @@ def render_tab_inputs():
     if cloud_mode and not is_graph_onedrive():
         st.warning(CLOUD_MESSAGE)
 
-    if is_graph_onedrive():
-        st.info("Mode OneDrive Graph actif. Connexion requise pour charger/écrire les fichiers.")
-        client = cp.get_graph_client()
-        if client is None:
-            st.error("Graph non configuré : vérifier ASF_GRAPH_CLIENT_ID / ASF_GRAPH_TENANT_ID.")
-        else:
-            token_ok = client.acquire_token_silent() is not None
-            if token_ok:
-                st.success("Connexion OneDrive active.")
-            else:
-                flow_key = "graph_device_flow"
-                if flow_key not in st.session_state and st.button("🔑 Se connecter à OneDrive"):
-                    st.session_state[flow_key] = cp.begin_onedrive_device_flow()
-                flow = st.session_state.get(flow_key)
-                if flow and flow.get("message"):
-                    st.info(flow["message"])
-                    if st.button("✅ J'ai terminé l'authentification"):
-                        ok = cp.complete_onedrive_device_flow(flow)
-                        if ok:
-                            st.success("Connexion OneDrive validée.")
-                            st.session_state.pop(flow_key, None)
-                            st.rerun()
-
-    ctx = get_session_context()
-    if ctx is None:
-        try:
-            ctx = ensure_session_context(strict_sources=True)
-        except FileNotFoundError as exc:
-            st.session_state["source_error"] = str(exc)
-            ctx = None
+    _render_graph_onedrive_auth_section()
+    ctx = _resolve_inputs_session_context()
 
     _ensure_inputs_tmp_paths(state, ctx)
     _load_input_dataframes(state, cloud_mode)
@@ -540,11 +559,4 @@ def render_tab_inputs():
         refresh_all(state)
 
     pick_planning_dates(state)
-
-    col_tdb, col_benev, col_vols = st.columns(3)
-    with col_tdb:
-        _render_tdb_panel(state, cloud_mode)
-    with col_benev:
-        _render_benev_panel(state, cloud_mode)
-    with col_vols:
-        _render_vols_panel(state, cloud_mode)
+    _render_inputs_panels(state, cloud_mode)

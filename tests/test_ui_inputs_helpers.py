@@ -310,3 +310,100 @@ def test_render_tab_inputs_smoke_excel_mode(monkeypatch, tmp_path):
     assert state.vols_tmp == vols
     assert calls == ["tdb:False", "benev:False", "vols:False"]
     assert stub.errors == []
+
+
+def test_load_files_skip_when_data_already_loaded(tmp_path):
+    state = _build_state(tmp_path)
+    state.df_be = pd.DataFrame([{"x": 1}])
+    state.df_param_be = pd.DataFrame([{"x": 1}])
+    state.df_param_dest = pd.DataFrame([{"x": 1}])
+    state.df_benev = pd.DataFrame([{"x": 1}])
+    state.df_param_benev = pd.DataFrame([{"x": 1}])
+    state.df_vols = pd.DataFrame([{"x": 1}])
+
+    # No exception and no mutation expected when force=False
+    ui_inputs.load_tdb_file(state, force=False)
+    ui_inputs.load_benev_file(state, force=False)
+    ui_inputs.load_vols_file(state, force=False)
+
+    assert state.df_be is not None
+    assert state.df_benev is not None
+    assert state.df_vols is not None
+
+
+def test_refresh_all_shows_error_when_sources_missing(monkeypatch, tmp_path):
+    stub = _StubInputsSt()
+    monkeypatch.setattr(ui_inputs, "st", stub)
+    state = _build_state(tmp_path)
+    monkeypatch.setattr(
+        ui_inputs,
+        "refresh_session_context",
+        lambda strict_sources=True: (_ for _ in ()).throw(FileNotFoundError("missing source files")),
+    )
+
+    ui_inputs.refresh_all(state)
+    assert any("missing source files" in msg for msg in stub.errors)
+
+
+def test_refresh_from_onedrive_graph_mode_downloads_then_reloads(monkeypatch, tmp_path):
+    stub = _StubInputsSt()
+    monkeypatch.setattr(ui_inputs, "st", stub)
+    monkeypatch.setattr(ui_inputs, "is_graph_onedrive", lambda: True)
+    monkeypatch.setattr(ui_inputs, "sync_state_paths_to_engine", lambda _state: None)
+    monkeypatch.setattr(ui_inputs, "get_tmp_dir", lambda: tmp_path)
+    monkeypatch.setattr(ui_inputs, "get_vols_remote", lambda: "remote/Vols.xlsx")
+
+    def _fake_download(_remote, dst, **_kwargs):
+        Path(dst).write_bytes(b"x")
+        return True
+
+    monkeypatch.setattr(ui_inputs.cp, "download_onedrive_file", _fake_download)
+    state = _build_state(tmp_path)
+    calls: list[bool] = []
+    src = tmp_path / "src_vols.xlsx"
+    src.write_bytes(b"x")
+    ui_inputs.refresh_from_onedrive(state, src, "vols", lambda _state, force=False: calls.append(bool(force)))
+
+    assert state.vols_tmp == tmp_path / "vols.xlsx"
+    assert calls == [True]
+    assert any("Rechargé depuis OneDrive" in msg for msg in stub.successes)
+
+
+def test_refresh_from_onedrive_shows_error_on_download_failure(monkeypatch, tmp_path):
+    stub = _StubInputsSt()
+    monkeypatch.setattr(ui_inputs, "st", stub)
+    monkeypatch.setattr(ui_inputs, "is_graph_onedrive", lambda: True)
+    monkeypatch.setattr(ui_inputs, "get_tmp_dir", lambda: tmp_path)
+    monkeypatch.setattr(ui_inputs, "get_vols_remote", lambda: "remote/Vols.xlsx")
+    monkeypatch.setattr(
+        ui_inputs.cp,
+        "download_onedrive_file",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("download failed")),
+    )
+    state = _build_state(tmp_path)
+    src = tmp_path / "src_vols.xlsx"
+    src.write_bytes(b"x")
+
+    ui_inputs.refresh_from_onedrive(state, src, "vols", lambda *_args, **_kwargs: None)
+    assert any("Erreur refresh OneDrive" in msg for msg in stub.errors)
+
+
+def test_try_load_api_sheet_into_tmp_state_success_and_failure(monkeypatch, tmp_path):
+    state = _build_state(tmp_path)
+    state.df_param_dest = pd.DataFrame([{"Dest_IATA": "RUN"}])
+    monkeypatch.setattr(
+        "loaders.load_vols_api.copy_api_sheet_to_tmp",
+        lambda _sheet_name: None,
+    )
+    monkeypatch.setattr(
+        "loaders.load_vols.load_vols_df",
+        lambda **_kwargs: pd.DataFrame([{"Numero_Vol": "AF 652"}]),
+    )
+    ui_inputs._try_load_api_sheet_into_tmp_state(state, "API-S04-2026")
+    assert state.df_vols is not None and not state.df_vols.empty
+
+    monkeypatch.setattr(
+        "loaders.load_vols_api.copy_api_sheet_to_tmp",
+        lambda _sheet_name: (_ for _ in ()).throw(OSError("boom")),
+    )
+    ui_inputs._try_load_api_sheet_into_tmp_state(state, "API-S04-2026")

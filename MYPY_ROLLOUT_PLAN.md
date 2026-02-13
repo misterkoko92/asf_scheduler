@@ -10,6 +10,7 @@ Un package passe a l'etape suivante seulement si:
 - aucun contournement fragile (`type: ignore` inutile) n'est ajoute
 
 ## Etat Courant
+- Validation courante: `mypy` vert (`Success: no issues found in 101 source files`).
 Deja actives:
 - `asf_app.ui.ui_stats.stats_processor`
 - `asf_app.ui.ui_communication.whatsapp_handler`

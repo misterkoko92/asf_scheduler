@@ -32,3 +32,64 @@ def test_format_flight_number_and_date_helpers(monkeypatch):
 
     monkeypatch.setattr(fr, "coerce_datetime", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("boom")))
     assert fr.format_date("bad-date") == ""
+
+
+def test_private_helpers_handle_edge_cases():
+    class _BadStr:
+        def __str__(self):
+            raise ValueError("boom")
+
+    assert fr._to_str(None) == ""
+    assert fr._to_str(_BadStr()) == ""
+    assert fr._digits("AF 0652") == "0652"
+    assert fr._to_datetime(float("nan")) is None
+    assert fr._to_datetime(datetime(2026, 1, 23, 10, 0)).year == 2026
+
+
+def test_format_be_numero_rejects_negative_or_invalid_suffix():
+    assert fr.format_be_numero("-1", datetime(2025, 1, 23), None) == (None, None)
+    assert fr.format_be_numero("abc", datetime(2025, 1, 23), None) == (None, None)
+
+
+def test_format_flight_number_returns_company_when_number_not_positive():
+    assert fr.format_flight_number("AF", "0000") == "AF"
+    assert fr.format_flight_number("AF", "ABC") == "AF"
+
+
+def test_format_date_supports_long_and_default():
+    val = datetime(2026, 1, 19)  # Monday
+    assert fr.format_date(val, mode="long").startswith("LUN ")
+    assert fr.format_date(val) == "19/01/2026"
+
+
+def test_communication_wrappers_delegate_to_identifier_and_datetime_helpers():
+    assert fr.format_be_number("250001") == "250001"
+    assert fr.format_vol_number("AF652") == "652"
+    assert fr.format_be_display("250001").startswith("BE ")
+    assert fr.format_vol_display("652").startswith("AF ")
+    assert fr.format_date_fr_long_slash("2026-01-19").startswith("Lundi")
+    assert fr.format_date_fr_words("2026-01-19").startswith("Lundi")
+    assert fr.format_heure_hh_mm("10:05") == "10h05"
+
+
+def test_infer_be_year_falls_back_to_current_year(monkeypatch):
+    class _FakeDateTime(datetime):
+        @classmethod
+        def today(cls):
+            return cls(2030, 1, 1)
+
+    monkeypatch.setattr(fr, "datetime", _FakeDateTime)
+    assert fr.infer_be_year(None, None) == 2030
+
+
+def test_extract_be_suffix_handles_empty_nan_and_none():
+    assert fr.extract_be_suffix("") is None
+    assert fr.extract_be_suffix("nan") is None
+    assert fr.extract_be_suffix(None) is None
+
+
+def test_to_dt_handles_objects_with_to_pydatetime_and_invalid():
+    ts = pd.Timestamp("2026-01-23 10:00:00")
+    assert fr._to_dt(ts) == ts.to_pydatetime()
+    assert fr._to_dt(None) is None
+    assert fr._to_dt("invalid") is None

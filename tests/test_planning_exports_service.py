@@ -154,3 +154,70 @@ def test_load_planning_preview_graph_invalid_path(monkeypatch, tmp_path):
     assert df is None
     assert path is None
     assert "Chemin OneDrive invalide" in msg
+
+
+def test_load_planning_preview_local_falls_back_to_pattern_candidate(tmp_path, monkeypatch):
+    root = tmp_path / "onedrive"
+    base = root / "Planning MAB" / "ASFmm PLANNING 2026"
+    base.mkdir(parents=True, exist_ok=True)
+    candidate = base / "Custom PLANNING 05 2026.xlsx"
+    with pd.ExcelWriter(candidate) as writer:
+        pd.DataFrame({"A": [1]}).to_excel(writer, sheet_name="Planning S05", index=False)
+
+    monkeypatch.setattr("asf_app.services.planning_exports_service.is_graph_onedrive", lambda: False)
+    monkeypatch.setattr("asf_app.services.planning_exports_service.get_onedrive_root", lambda: root)
+
+    df_out, msg, used_path = load_planning_preview_with_path(5, 2026, None)
+    assert used_path == candidate
+    assert df_out is not None and not df_out.empty
+    assert "utilisation de" in msg
+
+
+def test_load_planning_preview_local_reports_missing_expected_sheets(tmp_path, monkeypatch):
+    root = tmp_path / "onedrive"
+    base = root / "Planning MAB" / "ASFmm PLANNING 2026"
+    base.mkdir(parents=True, exist_ok=True)
+    exact = base / "ASFmm - PLANNING SEMAINE 2026-05-01.xlsx"
+    with pd.ExcelWriter(exact) as writer:
+        pd.DataFrame({"A": [1]}).to_excel(writer, sheet_name="Other", index=False)
+
+    monkeypatch.setattr("asf_app.services.planning_exports_service.is_graph_onedrive", lambda: False)
+    monkeypatch.setattr("asf_app.services.planning_exports_service.get_onedrive_root", lambda: root)
+
+    df_out, msg, used_path = load_planning_preview_with_path(5, 2026, None)
+    assert df_out is None
+    assert used_path == exact
+    assert "Impossible de lire les feuilles" in msg
+
+
+def test_load_planning_preview_graph_downloads_cache_file(monkeypatch, tmp_path):
+    local_cache = tmp_path / "cache.xlsx"
+
+    def _fake_download(_remote: str, local_path: Path, **_kwargs):
+        with pd.ExcelWriter(local_path) as writer:
+            pd.DataFrame({"A": [1]}).to_excel(writer, sheet_name="Export planning", index=False)
+        return True
+
+    monkeypatch.setattr("asf_app.services.planning_exports_service.is_graph_onedrive", lambda: True)
+    monkeypatch.setattr("asf_app.services.planning_exports_service.get_tmp_dir", lambda: tmp_path)
+    monkeypatch.setattr("asf_app.services.planning_exports_service.find_planning_files_for_week", lambda *_a, **_k: ["remote/planning.xlsx"])
+    monkeypatch.setattr("asf_app.services.planning_exports_service.safe_cache_path", lambda *_a, **_k: local_cache)
+    monkeypatch.setattr(cp, "download_onedrive_file", _fake_download)
+
+    df_out, msg, used_path = load_planning_preview_with_path(5, 2026, None)
+    assert used_path == local_cache
+    assert df_out is not None and not df_out.empty
+    assert "Export planning" in msg
+
+
+def test_available_weeks_from_exports_local_parses_old_pattern(tmp_path, monkeypatch):
+    root = tmp_path / "onedrive"
+    base_dir = root / "Planning MAB" / "ASFmm PLANNING 2026"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    (base_dir / "ASFmm - PLANNING SEMAINE N° 08 - 2026 v2.xlsx").touch()
+
+    monkeypatch.setattr("asf_app.services.planning_exports_service.is_graph_onedrive", lambda: False)
+    monkeypatch.setattr("asf_app.services.planning_exports_service.get_onedrive_root", lambda: root)
+
+    weeks = available_weeks_from_exports()
+    assert (8, 2026) in weeks
