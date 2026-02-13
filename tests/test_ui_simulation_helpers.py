@@ -185,6 +185,44 @@ def test_build_vol_selector_data_for_unplanned_and_planned():
     assert "déjà utilisé" in labels2[0]
 
 
+def test_build_vol_selector_data_deduplicates_multistop_physical_flight():
+    df_vols_filt = pd.DataFrame(
+        [
+            {
+                "Date_Vol": "2026-02-16",
+                "Numero_Vol": "AF822",
+                "Heure_Vol": "11h00",
+                "Routing": "CDG-SSG-DLA",
+                "IATA": "SSG",
+                "Destination": "SSG",
+            },
+            {
+                "Date_Vol": "2026-02-16",
+                "Numero_Vol": "AF822",
+                "Heure_Vol": "11h00",
+                "Routing": "CDG-SSG-DLA",
+                "IATA": "DLA",
+                "Destination": "DLA",
+            },
+        ]
+    )
+    plan_df = pd.DataFrame()
+    planned_row = pd.Series({"Date_Vol": "2026-02-16", "Numero_Vol": "AF822"})
+
+    labels, values, idx = _build_vol_selector_data(
+        df_vols_filt,
+        plan_df,
+        code_iata_be="DLA",
+        planned_row=planned_row,
+    )
+
+    assert idx == 0
+    assert len(values) == 1
+    assert values[0] == ("2026-02-16", "AF822", "11h00")
+    assert labels[0].count("AF 822") == 1
+    assert labels[0].count("CDG-SSG-DLA") == 1
+
+
 def test_compute_bene_status_and_selector_data():
     benev_existing = pd.DataFrame(
         [

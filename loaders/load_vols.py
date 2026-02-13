@@ -390,14 +390,20 @@ def load_vols_df(
         if not dest_iata:
             continue
 
-        origin_iata = ""
-        if routing:
-            origin_iata = str(routing[0]).strip().upper()
-        elif routing_full:
-            origin_iata = str(routing_full[0]).strip().upper()
-        if not origin_iata:
-            origin_iata = "CDG"
-        routing_use = [origin_iata, dest_iata]
+        routing_display_parts = [
+            str(code).strip().upper()
+            for code in (routing_full or routing or [])
+            if str(code).strip()
+        ]
+        if not routing_display_parts:
+            origin_iata = ""
+            if routing:
+                origin_iata = str(routing[0]).strip().upper()
+            elif routing_full:
+                origin_iata = str(routing_full[0]).strip().upper()
+            if not origin_iata:
+                origin_iata = "CDG"
+            routing_display_parts = [origin_iata, dest_iata]
 
         dest_city = iata_to_city.get(dest_iata, dest_iata)
         raw_num = str(v.get("flight_number", "")).strip()
@@ -412,7 +418,7 @@ def load_vols_df(
             "Numero_Vol": f"AF {num_formatted}",
             "Destination": dest_city,
             "IATA": dest_iata,
-            "Routing": "-".join(routing_use),
+            "Routing": "-".join(routing_display_parts),
             "Route_Pos": pd.to_numeric(v.get("route_pos", 1), errors="coerce"),
             "Max_Colis": v.get("max_colis_base"),
             "Source": v.get("source", "excel"),

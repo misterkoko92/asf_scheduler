@@ -130,7 +130,7 @@ def test_load_vols_df_expands_multistop_routes_per_destination(tmp_path):
     monday_ssg = monday[monday["IATA"] == "SSG"].iloc[0]
     assert int(monday_dla["Max_Colis"]) == 20
     assert pd.isna(monday_ssg["Max_Colis"])
-    assert monday_dla["Routing"] == "CDG-DLA"
-    assert monday_ssg["Routing"] == "CDG-SSG"
+    assert monday_dla["Routing"] == "CDG-SSG-DLA"
+    assert monday_ssg["Routing"] == "CDG-SSG-DLA"
     assert int(monday_dla["Route_Pos"]) == 2
     assert int(monday_ssg["Route_Pos"]) == 1

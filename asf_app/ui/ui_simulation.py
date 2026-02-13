@@ -452,15 +452,45 @@ def _build_vol_selector_data(
     code_iata_be: str,
     planned_row: pd.Series | None,
 ) -> tuple[list[str], list[tuple[str, str, str]], int]:
-    vol_options = []
+    plan_numero = (
+        plan_df["Numero_Vol"].astype(str)
+        if "Numero_Vol" in plan_df.columns
+        else pd.Series("", index=plan_df.index, dtype=str)
+    )
+    plan_date = (
+        plan_df["Date_Vol"].astype(str)
+        if "Date_Vol" in plan_df.columns
+        else pd.Series("", index=plan_df.index, dtype=str)
+    )
+
+    selected_rows_by_flight: dict[tuple[str, str, str], tuple[int, pd.Series]] = {}
+    flight_order: list[tuple[str, str, str]] = []
     for _, row in df_vols_filt.iterrows():
+        vol_num = str(row.get("Numero_Vol", "")).strip()
+        date_raw = str(row.get("Date_Vol", "")).strip()
+        heure_raw = str(row.get("Heure_Vol", "")).strip()
+        flight_key = (date_raw, vol_num, heure_raw)
+
+        code_iata_up = str(code_iata_be or "").strip().upper()
+        iata_up = str(row.get("IATA", "")).strip().upper()
+        dest_up = str(row.get("Destination", "")).strip().upper()
+        is_direct_match = bool(code_iata_up) and (iata_up == code_iata_up or dest_up == code_iata_up)
+        match_score = 0 if is_direct_match else 1
+
+        current_choice = selected_rows_by_flight.get(flight_key)
+        if current_choice is None:
+            selected_rows_by_flight[flight_key] = (match_score, row)
+            flight_order.append(flight_key)
+        elif match_score < current_choice[0]:
+            selected_rows_by_flight[flight_key] = (match_score, row)
+
+    vol_options = []
+    for flight_key in flight_order:
+        _, row = selected_rows_by_flight[flight_key]
         vol_num = row.get("Numero_Vol", "")
         date_raw = row.get("Date_Vol", "")
         heure_raw = row.get("Heure_Vol", "")
-        already = (
-            (plan_df.get("Numero_Vol", "").astype(str) == str(vol_num))
-            & (plan_df.get("Date_Vol", "").astype(str) == str(date_raw))
-        ).any()
+        already = ((plan_numero == str(vol_num)) & (plan_date == str(date_raw))).any()
         status = "déjà utilisé" if already else "disponible"
         date_dt = None
         try:

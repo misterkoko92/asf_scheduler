@@ -330,7 +330,7 @@ def render_tab_week_data():
         allow_all_dest = len(iata_set) == 0
         logger.debug("[Vols dispo] IATA BE D: %s", sorted(iata_set))
 
-        rows = []
+        rows_map: dict[tuple[str, str, str, str, str], dict[str, object]] = {}
         for _, r in vols_df.iterrows():
             dtdt = r.get("Date_dt")
             if pd.isna(dtdt):
@@ -354,20 +354,36 @@ def render_tab_week_data():
                 # Affiche toujours le routing complet (sans retour CDG), même si la destination est un stop intermédiaire
                 sub_route = "-".join(parts)
                 label = format_vol_label(dtdt, dest_iata, r.get("Numero_Vol", ""), heure_str, sub_route, r.get("Source", "excel"))
-                rows.append({
+                date_str = format_date_value(dtdt, fmt="%d/%m/%y", default="")
+                numero_vol = str(r.get("Numero_Vol", "")).strip()
+                source = str(r.get("Source", "excel")).strip() or "excel"
+                source_priority = 0 if source.lower() == "api" else 1
+                row_key = (
+                    str(dest_iata).strip().upper(),
+                    date_str,
+                    str(heure_str).strip(),
+                    numero_vol,
+                    sub_route,
+                )
+                row_payload = {
                     "Destination": dest_city,
-                    "Date": format_date_value(dtdt, fmt="%d/%m/%y", default=""),
+                    "Date": date_str,
                     "Heure": heure_str,
                     "Routing": sub_route,
-                    "Numero_Vol": r.get("Numero_Vol", ""),
+                    "Numero_Vol": numero_vol,
                     "IATA": dest_iata,
-                    "Source": r.get("Source", "excel"),
+                    "Source": source,
                     "Label": label,
-                })
+                    "_source_priority": source_priority,
+                }
+                existing = rows_map.get(row_key)
+                if existing is None or source_priority < int(existing.get("_source_priority", 99)):
+                    rows_map[row_key] = row_payload
 
-        df_flights = pd.DataFrame(rows)
+        df_flights = pd.DataFrame(rows_map.values())
 
         if not df_flights.empty:
+            df_flights = df_flights.drop(columns=["_source_priority"], errors="ignore")
             df_flights = df_flights.sort_values(["Destination", "Date", "Heure", "Numero_Vol"], kind="mergesort").reset_index(drop=True)
             if "HEURE_MIN" in df_flights.columns:
                 df_flights["HEURE_MIN"] = pd.to_numeric(df_flights["HEURE_MIN"], errors="coerce")

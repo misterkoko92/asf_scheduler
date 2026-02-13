@@ -190,7 +190,7 @@ def _build_flights_week_table(
     df_v = df_flights.copy()
     df_v["Date_dt"] = parse_date_series(df_v["Date"]).dt.date
 
-    flights: dict[tuple[str, date], list[tuple[str, bool]]] = {}
+    flights: dict[tuple[str, date], dict[str, bool]] = {}
     for _, row in df_v.iterrows():
         dest = str(row.get("Destination", "")).strip()
         d = row.get("Date_dt")
@@ -207,7 +207,8 @@ def _build_flights_week_table(
         label = " - ".join(label_parts)
         key = (dest, d)
         compatible = _is_compatible(d, hmin)
-        flights.setdefault(key, []).append((label, compatible))
+        labels_map = flights.setdefault(key, {})
+        labels_map[label] = labels_map.get(label, False) or compatible
 
     dests = sorted(
         {
@@ -239,7 +240,7 @@ def _build_flights_week_table(
             if key not in flights:
                 continue
             row_dest = dest_display.get(dest, dest)
-            items = flights[key]
+            items = list(flights[key].items())
             table.loc[row_dest, label] = "\n".join([lab for lab, _ in items])
             if any(ok for _, ok in items):
                 status.loc[row_dest, label] = "compatible"

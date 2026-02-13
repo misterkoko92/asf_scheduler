@@ -164,3 +164,41 @@ def test_build_flights_week_table_empty_input():
     )
     assert table.empty
     assert status.empty
+
+
+def test_build_flights_week_table_deduplicates_same_flight_label():
+    week_dates = _week_4_2026_dates()
+    day_labels = _build_day_labels(week_dates)
+    df_flights = pd.DataFrame(
+        [
+            {
+                "Destination": "DLA",
+                "Date": "19/01/26",
+                "Heure": "11h00",
+                "Routing": "CDG-SSG-DLA",
+                "Numero_Vol": "AF822",
+            },
+            {
+                "Destination": "DLA",
+                "Date": "19/01/26",
+                "Heure": "11h00",
+                "Routing": "CDG-SSG-DLA",
+                "Numero_Vol": "AF822",
+            },
+        ]
+    )
+    df_be = pd.DataFrame([{"Destination": "DLA", "Nb_Colis": 2}])
+    benev_by_date = {date(2026, 1, 19): [(600, 720)]}
+
+    table, status = _build_flights_week_table(
+        df_flights,
+        df_be=df_be,
+        week_dates=week_dates,
+        day_labels=day_labels,
+        benev_by_date=benev_by_date,
+    )
+
+    monday = day_labels[0]
+    cell = table.loc["DLA (2)", monday]
+    assert cell.count("AF 822 - SSG-DLA") == 1
+    assert status.loc["DLA (2)", monday] == "compatible"
