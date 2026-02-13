@@ -1,6 +1,6 @@
 # Hardening Audit Report
 
-- Generated: 2026-02-13 20:08:59 CET
+- Generated: 2026-02-13 20:50:28 CET
 - Python files scanned: 101
 
 ## Largest Files
@@ -55,5 +55,5 @@
 - none
 
 ## Tracked Runtime Artifacts (to review)
-- `.vscode/settings.json`
+- none
 

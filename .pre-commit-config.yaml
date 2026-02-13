@@ -38,3 +38,10 @@ repos:
         language: system
         pass_filenames: false
         stages: [manual]
+
+      - id: quality-dashboard
+        name: quality dashboard
+        entry: python3 tools/run_quality.py dashboard
+        language: system
+        pass_filenames: false
+        stages: [manual]

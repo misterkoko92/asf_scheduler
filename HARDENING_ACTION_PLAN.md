@@ -15,9 +15,9 @@ Solidifier le projet (qualité, sécurité, maintenabilité, évolutivité) sans
 - Signaux de complexité (patterns `except/print` dans code + tests): `375`
 
 ## État courant (re-baseline 2026-02-13)
-- Tests: `460 passed`
-- Tests collectés: `460` (`pytest --collect-only -q`)
-- Couverture globale locale (`pytest-cov`): `77%` (`8560/11078`)
+- Tests: `480 passed`
+- Tests collectés: `480` (`pytest --collect-only -q`)
+- Couverture globale locale (`pytest-cov`): `78%` (`8624/11017`)
 - Qualité statique:
   - `ruff`: OK (`All checks passed`)
   - `mypy`: OK (`Success: no issues found in 101 source files`)
@@ -26,7 +26,7 @@ Solidifier le projet (qualité, sécurité, maintenabilité, évolutivité) sans
   - `tools/run_security.py secrets`: OK
   - `tools/run_security.py deps`: skip contrôlé en offline (`ASF_FAIL_ON_OFFLINE_AUDIT=0`)
 - Hygiène dépôt:
-  - artefacts runtime sortis de l’index Git: `Bilan.xlsx`, `Planning.xlsx`, `engine_run_stats.json`, `test_api/export_vols.xlsx`
+  - artefacts runtime sortis de l’index Git: `Bilan.xlsx`, `Planning.xlsx`, `engine_run_stats.json`, `test_api/export_vols.xlsx`, `.vscode/settings.json`
 
 ## Backlog priorisé
 1. Audit technique exhaustif (complexité, dette, duplication, robustesse erreurs, sécurité).
@@ -48,19 +48,21 @@ Solidifier le projet (qualité, sécurité, maintenabilité, évolutivité) sans
    - formaliser le contrat solveur unique (I/O + diagnostics)  
    - poursuivre la réduction des duplications V2/V3 autour de `solver_ortools_common.py`
 4. **Couverture résiduelle hors P2/S1 (P3)**  
-   - modules encore faibles: `ui_logs.py` et `ui_manual.py` sont remontés; restent surtout `asf_app/ui/email_defaults.py`, `asf_app/config/email_defaults.py`, `state_planning.py`
+   - modules encore faibles: `utils/excel_automation.py`, `asf_app/ui/ui_inputs.py`, `asf_app/ui/ui_params.py`, `asf_app/ui/ui_communication/ui_communication.py`
 5. **Industrialisation CI avancée (P3)**  
-   - monter progressivement le seuil coverage CI (70 -> 75 -> 80) en gardant la stabilité des releases
+   - monter progressivement le seuil coverage CI (75 -> 80) en gardant la stabilité des releases
+   - exploiter le dashboard hebdo (`QUALITY_DASHBOARD.md`) pour piloter les lots coverage
 
 ## Diagnostic global approfondi (2026-02-13)
 - Points forts consolidés:
   - zéro hotspot `except Exception` et `print` dans l’audit automatique
-  - socle tests en forte progression (`458` tests collectés)
+  - socle tests en forte progression (`480` tests collectés)
   - factorisation solver V2/V3 avancée via `scheduler/solver_ortools_common.py`
   - gates qualité/sécurité restaurées (`ruff`/`mypy`/`secret-scan` OK) + gate coverage CI dédié
   - chaîne sécurité locale opérationnelle (`run_security.py`) avec comportement offline explicite
+  - dashboard qualité hebdo opérationnel (`tools/quality_dashboard.py`, `QUALITY_DASHBOARD.md`)
 - Risques actifs:
-  - **couverture insuffisante** sur quelques modules non critiques UI/config (email defaults, state planning)
+  - **couverture insuffisante** sur des modules UI/automation encore lourds (`ui_inputs`, `ui_params`, `ui_communication`, `excel_automation`)
   - **monolithes persistants** (fonctions 200-500+ lignes) augmentant le coût de maintenance
   - **outillage sensible aux régressions rapides** (imports/typage/tests outillage sécurité) nécessitant discipline CI
 - Top dette technique (taille/fonctions):
@@ -111,6 +113,14 @@ Solidifier le projet (qualité, sécurité, maintenabilité, évolutivité) sans
 ## Journal d'actions
 | Date/Heure | Action | Résultat |
 |---|---|---|
+| 2026-02-13 | Fermeture C1: nettoyage artefacts/dev-config (`.vscode/settings.json` sorti de l’index, `.vscode/` ignoré) | OK |
+| 2026-02-13 | Fermeture C1: ajout runbook qualité (`RUNBOOK_QUALITY.md`) + plan mypy package-par-package (`MYPY_ROLLOUT_PLAN.md`) | OK |
+| 2026-02-13 | Fermeture Q1: ajout dashboard hebdo (`tools/quality_dashboard.py`, `QUALITY_DASHBOARD.md`, `QUALITY_DASHBOARD_HISTORY.csv`) + target `run_quality.py dashboard` + hook pre-commit manuel | OK |
+| 2026-02-13 | Fermeture Q1: extension incrémentale `check_untyped_defs` (`asf_app.config.email_defaults`, `asf_app.ui.email_defaults`, `asf_app.ui.ui_planning.state_planning`) | OK |
+| 2026-02-13 | Validation fermeture C1/Q1: `pytest -q` (`480 passed`), `coverage=78.28%` (gate `75%` vert), `ruff` OK, `mypy` OK, `run_security.py secrets` OK | OK |
+| 2026-02-13 | C1 one-pass: renforcement couverture config/UI email defaults + état planning (`tests/test_email_defaults.py`, `tests/test_state_planning.py`) | OK |
+| 2026-02-13 | Q1 one-pass: durcissement gate coverage local/CI à `75%` (`tools/run_quality.py`, `.github/workflows/build.yml`, `README.md`) | OK |
+| 2026-02-13 | Validation C1/Q1: `475 passed`, `coverage=78.28%` (gate `75%` vert), `ruff` OK, `mypy` OK | OK |
 | 2026-02-13 | R2: extraction du contrat d’extraction solveur V2/V3 dans `scheduler/solver_ortools_common.py::extract_solver_results` + simplification wrappers `_extract_results` | OK |
 | 2026-02-13 | R1: extraction helpers `ui_simulation` (state/session, mode selector, préparation export, filtrage vols période, résolution path source) + suppression code mort `_build_export_with_diff` | OK |
 | 2026-02-13 | Validation lot R1/R2: `pytest -q` (`460 passed`), ciblés solveur/UI (`32 passed`), `ruff` OK, `mypy` OK | OK |

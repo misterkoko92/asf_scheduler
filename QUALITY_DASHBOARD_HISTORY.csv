@@ -1,0 +1,4 @@
+generated_at,iso_week,branch,commit,tests_collected,coverage_percent,coverage_target,gate_ruff,gate_mypy,gate_coverage,gate_secrets,gate_deps
+2026-02-13 20:46:47 CET,2026-W07,main,08793f4,479,78.28,75,pass,pass,pass,fail,not_run
+2026-02-13 20:47:48 CET,2026-W07,main,08793f4,479,78.28,75,pass,pass,pass,pass,not_run
+2026-02-13 20:49:20 CET,2026-W07,main,08793f4,480,78.28,75,pass,pass,pass,pass,not_run

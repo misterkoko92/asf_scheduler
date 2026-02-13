@@ -227,7 +227,8 @@ Commandes directes équivalentes :
 ruff check asf_app scheduler loaders utils tests --config .ruff.toml
 mypy --config-file mypy.ini asf_app scheduler loaders utils
 pytest -q --cov=asf_app --cov=scheduler --cov=loaders --cov=utils --cov-report=term-missing --cov-report=xml
-ASF_COVERAGE_MIN=70 python tools/run_quality.py coverage
+ASF_COVERAGE_MIN=75 python tools/run_quality.py coverage
+python tools/run_quality.py dashboard
 python tools/run_security.py all
 ```
 
@@ -241,7 +242,12 @@ Notes :
   (si offline, le check est ignoré par défaut; forcer l'échec avec `ASF_FAIL_ON_OFFLINE_AUDIT=1`)
 - Les faux positifs du scanner peuvent être neutralisés via `.secret-scan-allowlist` (regex explicites et tracées).
 - La CI exécute aussi ce scan dans le job bloquant `security`.
-- Le job CI `coverage` applique un seuil progressif (`COVERAGE_MIN`, défaut `70`) avant le build multi-OS.
+- Le job CI `coverage` applique un seuil progressif (`COVERAGE_MIN`, défaut `75`) avant le build multi-OS.
+- Le dashboard qualité hebdo se génère avec `python tools/quality_dashboard.py --refresh`.
+
+Runbooks:
+- `RUNBOOK_QUALITY.md` : exploitation qualité hebdomadaire / gestion incidents.
+- `MYPY_ROLLOUT_PLAN.md` : trajectoire package-par-package pour `check_untyped_defs`.
 
 ## 💬 Support / contributions
 

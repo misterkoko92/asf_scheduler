@@ -11,7 +11,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 QUALITY_SCOPE = ["asf_app", "scheduler", "loaders", "utils", "tests"]
-DEFAULT_COVERAGE_MIN = "70"
+DEFAULT_COVERAGE_MIN = "75"
 
 
 def _resolve_python() -> str:
@@ -85,11 +85,21 @@ def run_coverage(python_exec: str) -> int:
     )
 
 
+def run_dashboard(python_exec: str) -> int:
+    return _run(
+        [
+            python_exec,
+            "tools/quality_dashboard.py",
+            "--refresh",
+        ]
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run repository quality checks.")
     parser.add_argument(
         "target",
-        choices=["ruff", "mypy", "coverage", "all"],
+        choices=["ruff", "mypy", "coverage", "dashboard", "all"],
         nargs="?",
         default="all",
     )
@@ -104,6 +114,8 @@ def main() -> int:
         exit_code = max(exit_code, run_mypy(python_exec))
     if args.target in {"coverage", "all"}:
         exit_code = max(exit_code, run_coverage(python_exec))
+    if args.target == "dashboard":
+        exit_code = max(exit_code, run_dashboard(python_exec))
 
     return int(exit_code)
 

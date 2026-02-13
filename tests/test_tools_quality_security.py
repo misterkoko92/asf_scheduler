@@ -36,6 +36,7 @@ def test_run_quality_main_dispatches_targets(monkeypatch):
     monkeypatch.setattr(mod, "run_ruff", lambda py: calls.append(f"ruff:{py}") or 0)
     monkeypatch.setattr(mod, "run_mypy", lambda py: calls.append(f"mypy:{py}") or 0)
     monkeypatch.setattr(mod, "run_coverage", lambda py: calls.append(f"coverage:{py}") or 0)
+    monkeypatch.setattr(mod, "run_dashboard", lambda py: calls.append(f"dashboard:{py}") or 0)
 
     monkeypatch.setattr(mod.sys, "argv", ["run_quality.py", "ruff"])
     assert mod.main() == 0
@@ -45,6 +46,11 @@ def test_run_quality_main_dispatches_targets(monkeypatch):
     monkeypatch.setattr(mod.sys, "argv", ["run_quality.py", "all"])
     assert mod.main() == 0
     assert calls == ["ruff:python3", "mypy:python3", "coverage:python3"]
+
+    calls.clear()
+    monkeypatch.setattr(mod.sys, "argv", ["run_quality.py", "dashboard"])
+    assert mod.main() == 0
+    assert calls == ["dashboard:python3"]
 
 
 def test_scan_secrets_should_scan_filters_path_and_suffix():
