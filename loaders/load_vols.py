@@ -1,34 +1,39 @@
 # loaders/load_vols.py
 # -*- coding: utf-8 -*-
 
-from datetime import datetime, date, time
-from typing import List, Dict, Any
+import logging
+from datetime import date, datetime, time
 from pathlib import Path
+from typing import Any, Dict, List
+from zipfile import BadZipFile
+
 import pandas as pd
 
-from scheduler.config_paths import (
-    TABLEAU_DE_BORD,
-    VOLS,
-    VOLS_SRC,
-    SHEET_PARAM_DEST,
-    SHEET_VOLS,
-)
 import scheduler.config_paths as cp
-
+from loaders.load_params import get_param_dest
 from loaders.universal_loader import load_and_normalize
 from scheduler.column_map import (
-    column_map_param_dest,
     column_map_vols,
 )
-from loaders.load_params import get_param_dest
-from utils.datetime_utils import (
-    parse_date_series,
-    parse_time_series,
-    normalize_hour_str,
-    hour_min_from_series,
+from scheduler.config_paths import (
+    SHEET_VOLS,
+    TABLEAU_DE_BORD,
+    VOLS,
 )
 from utils.cache_utils import file_mtime
+from utils.datetime_utils import (
+    hour_min_from_series,
+    normalize_hour_str,
+    parse_date_series,
+    parse_time_series,
+)
 from utils.ui_notifications import warn_ui
+
+logger = logging.getLogger("ASF-SCHEDULER")
+
+# Compat tests/monkeypatch: keep direct module attribute.
+VOLS_SRC = cp.VOLS_SRC
+
 
 # =====================================================================
 # PARSING UNIFIÉ : DATES, HEURES, ROUTING
@@ -40,7 +45,7 @@ def parse_date(v) -> date | None:
         if pd.isna(dt):
             return None
         return dt.date()
-    except Exception:
+    except (TypeError, ValueError, AttributeError):
         return None
 
 
@@ -57,14 +62,14 @@ def parse_excel_time(v) -> time | None:
     for fmt in ("%H:%M", "%H:%M:%S"):
         try:
             return datetime.strptime(s, fmt).time()
-        except Exception:
+        except ValueError:
             pass
 
     try:
         vf = float(v)
         sec = int(vf * 86400)
         return time(sec // 3600, (sec % 3600) // 60, sec % 60)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -98,6 +103,38 @@ def clean_city(v: str) -> str:
     )
 
 
+def _normalize_flight_number(raw: object) -> str:
+    value = str(raw or "").strip()
+    if not value:
+        return ""
+    clean_value = value.replace("AF", "").replace("af", "").strip()
+    try:
+        return str(int(float(clean_value)))
+    except (TypeError, ValueError, OverflowError):
+        digits = "".join(ch for ch in clean_value if ch.isdigit())
+        return digits if digits else clean_value
+
+
+def _unique_ordered_codes(codes: List[str]) -> List[str]:
+    deduped: List[str] = []
+    seen: set[str] = set()
+    for code in codes:
+        clean_code = str(code or "").strip().upper()
+        if not clean_code or clean_code in seen:
+            continue
+        deduped.append(clean_code)
+        seen.add(clean_code)
+    return deduped
+
+
+def _destinations_from_routing(routing: List[str], fallback_iata: str | None = None) -> List[str]:
+    if len(routing) > 1:
+        return _unique_ordered_codes(routing[1:])
+    if fallback_iata:
+        return _unique_ordered_codes([fallback_iata])
+    return []
+
+
 # =====================================================================
 # CHARGEMENT DES VOLS — VERSION STABLE
 # =====================================================================
@@ -112,7 +149,7 @@ def load_vols(
     Retourne TOUJOURS une liste (jamais None).
     """
 
-    print("\n=== LOAD_VOLS ===")
+    logger.info("LOAD_VOLS start")
 
     # --------------------------------------------------------------
     # 1) ParamDest → ville → IATA / capacité
@@ -129,22 +166,22 @@ def load_vols(
     for _, r in df_param.iterrows():
         raw_ville = str(r.get("Dest_Ville", "")).strip().upper()
         ville_clean = clean_city(raw_ville)
-        iata = str(r.get("Dest_IATA", "")).strip().upper()
+        iata_code = str(r.get("Dest_IATA", "")).strip().upper()
 
         raw_cap = str(r.get("Max_Colis_Par_Vol", "")).strip()
         try:
             cap = int(raw_cap) if raw_cap else None
-        except Exception:
+        except (TypeError, ValueError):
             cap = None
 
         if raw_ville:
-            ville_to_iata[raw_ville] = iata
+            ville_to_iata[raw_ville] = iata_code
         if ville_clean:
-            ville_to_iata[ville_clean] = iata
-        if iata:
-            iata_to_capacity[iata] = cap
+            ville_to_iata[ville_clean] = iata_code
+        if iata_code:
+            iata_to_capacity[iata_code] = cap
 
-    print(f"ParamDest chargés : {len(df_param)} lignes")
+    logger.info("ParamDest charges: %s lignes", len(df_param))
 
     # --------------------------------------------------------------
     # 2) Vols.xlsx (onglet Vols) — source principale
@@ -170,10 +207,10 @@ def load_vols(
                 df_api[new] = df_api[old]
         return df_api
 
-    print(f"Vols bruts : {len(df_vols)}")
+    logger.info("Vols bruts: %s", len(df_vols))
     try:
-        print(df_vols.head(5))
-    except Exception:
+        logger.debug("Vols bruts apercu:\n%s", df_vols.head(5).to_string(index=False))
+    except (TypeError, ValueError, AttributeError):
         pass
 
     vols_dict: Dict[str, Dict[str, Any]] = {}
@@ -184,14 +221,7 @@ def load_vols(
         if not num:
             continue
         # normalisation numéro de vol (int -> str sans décimale) et suppression préfixe AF éventuel
-        num_clean = num.replace("AF", "").replace("af", "").strip()
-        try:
-            num_int = int(float(num_clean))
-            num = str(num_int)
-        except Exception:
-            # fallback: extraire les chiffres si possible
-            digits = "".join(ch for ch in num_clean if ch.isdigit())
-            num = digits if digits else num_clean
+        num = _normalize_flight_number(num)
 
         d = parse_date(r.get("Date_Vol"))
         if d is None:
@@ -209,36 +239,45 @@ def load_vols(
             routing = routing[:-1]
 
         # IATA : via ParamDest OU via routing
-        iata = (
+        resolved_iata: str | None = (
             ville_to_iata.get(city_clean)
             or ville_to_iata.get(raw_city)
             or (routing[1] if len(routing) > 1 else None)
         )
 
-        cap = iata_to_capacity.get(iata)
-
-        dest_iata = routing[1] if len(routing) > 1 else ""
-        if not dest_iata:
+        origin_iata = routing[0] if routing else "CDG"
+        route_pos_map: Dict[str, int] = {}
+        for idx, code in enumerate(routing[1:], start=1):
+            normalized_code = str(code or "").strip().upper()
+            if normalized_code and normalized_code not in route_pos_map:
+                route_pos_map[normalized_code] = idx
+        destinations = _destinations_from_routing(routing, fallback_iata=resolved_iata)
+        if not destinations:
             continue
 
-        flight_id = f"{num}_{d}_{dest_iata}"
-
-        vols_dict[flight_id] = {
-            "flight_number": str(num).zfill(4),
-            "date": d,
-            "departure_time": t,
-            "routing": routing,
-            "max_colis_base": cap,
-            "source": "excel",
-        }
+        for dest_iata in destinations:
+            route_pos = route_pos_map.get(dest_iata, 1)
+            cap = iata_to_capacity.get(dest_iata)
+            flight_id = f"{num}_{d}_{dest_iata}"
+            vols_dict[flight_id] = {
+                "flight_number": str(num).zfill(4),
+                "date": d,
+                "departure_time": t,
+                "routing": [origin_iata, dest_iata],
+                "routing_full": routing or [origin_iata, dest_iata],
+                "dest_iata": dest_iata,
+                "route_pos": route_pos,
+                "max_colis_base": cap,
+                "source": "excel",
+            }
 
     # ------------------------------------------------------------------
     # 2bis) Onglets API-Sxx-YYYY (fichier source) + fallback si aucun vol
     # ------------------------------------------------------------------
-    def _ingest_api_sheets(path_excel: str):
+    def _ingest_api_sheets(path_excel: Path | str):
         try:
-            api_book = pd.read_excel(path_excel, sheet_name=None, dtype=str, engine="openpyxl")
-        except Exception:
+            api_book = pd.read_excel(str(path_excel), sheet_name=None, dtype=str, engine="openpyxl")
+        except (FileNotFoundError, OSError, ValueError, BadZipFile):
             warn_ui(f"Impossible de lire les onglets API dans {path_excel}.")
             return
         for sheet_name, df_api in api_book.items():
@@ -251,13 +290,7 @@ def load_vols(
                 num_raw = str(r.get("Numero_Vol", "")).strip()
                 if not num_raw:
                     continue
-                num_clean = num_raw.replace("AF", "").replace("af", "").strip()
-                try:
-                    num_int = int(float(num_clean))
-                    num_api = str(num_int)
-                except Exception:
-                    digits = "".join(ch for ch in num_clean if ch.isdigit())
-                    num_api = digits if digits else num_clean
+                num_api = _normalize_flight_number(num_raw)
 
                 d = parse_date(r.get("Date_Vol"))
                 if d is None:
@@ -272,43 +305,57 @@ def load_vols(
                 cap = r.get("Max_Colis")
                 try:
                     cap = int(cap) if cap not in ("", None) else None
-                except Exception:
+                except (TypeError, ValueError):
                     cap = None
 
-                # Crée une entrée par destination, avec le routing complet (sans retour CDG)
                 full_route = routing_full
-                for idx in range(1, len(full_route)):
-                    dest_key = full_route[idx]
+                origin_iata = full_route[0]
+                route_pos_map: Dict[str, int] = {}
+                for idx, code in enumerate(full_route[1:], start=1):
+                    normalized_code = str(code or "").strip().upper()
+                    if normalized_code and normalized_code not in route_pos_map:
+                        route_pos_map[normalized_code] = idx
+                destinations = _destinations_from_routing(full_route)
+                for dest_key in destinations:
+                    route_pos = route_pos_map.get(dest_key, 1)
+                    cap_for_dest = iata_to_capacity.get(dest_key)
+                    max_colis = cap_for_dest if cap_for_dest is not None else cap
                     flight_id = f"{num_api}_{d}_{dest_key}"
                     vols_dict[flight_id] = {
                         "flight_number": str(num_api).zfill(4),
                         "date": d,
                         "departure_time": t,
-                        "routing": full_route,
-                        "max_colis_base": cap,
+                        "routing": [origin_iata, dest_key],
+                        "routing_full": full_route,
+                        "dest_iata": dest_key,
+                        "route_pos": route_pos,
+                        "max_colis_base": max_colis,
                         "source": "api",
                     }
 
     # Ingestion des feuilles API du source
-    vols_src_path = vols_path or cp.VOLS_SRC
+    vols_src_path = vols_path or VOLS_SRC
     _ingest_api_sheets(vols_src_path)
     # Fallback : si aucun vol retenu après le sheet principal, on lit aussi les feuilles API de la copie TMP
     if not vols_dict:
         _ingest_api_sheets(vols_path or cp.VOLS)
 
-    print(f"➡ Vols retenus : {len(vols_dict)}")
+    logger.info("Vols retenus: %s", len(vols_dict))
 
     if vols_dict:
-        print("\n=== DEBUG VOLS NORMALISÉS (aperçu) ===")
+        logger.debug("DEBUG VOLS NORMALISES (apercu)")
         for i, v in enumerate(list(vols_dict.values())[:10]):
-            print(
-                f" - Vol {v['flight_number']} | "
-                f"Date={v['date']} | Heure={v['departure_time']} | "
-                f"Routing={v['routing']} | Max={v['max_colis_base']}"
+            logger.debug(
+                "Vol %s | Date=%s | Heure=%s | Routing=%s | Max=%s",
+                v["flight_number"],
+                v["date"],
+                v["departure_time"],
+                v["routing"],
+                v["max_colis_base"],
             )
-        print("====================================\n")
+        logger.debug("Fin debug vols normalises")
     else:
-        print("⚠️ Aucun vol après normalisation.\n")
+        logger.warning("Aucun vol apres normalisation.")
 
     # 🔥 RETURN FINAL — TOUJOURS UNE LISTE
     return list(vols_dict.values())
@@ -334,16 +381,30 @@ def load_vols_df(
     rows = []
     for v in vols:
         routing = v.get("routing", [])
-        # Routing complet sans retour CDG (si présent)
-        routing_use = routing
+        routing_full = v.get("routing_full", routing)
+        dest_iata = str(v.get("dest_iata", "")).strip().upper()
+        if not dest_iata and len(routing) > 1:
+            dest_iata = str(routing[1]).strip().upper()
+        if not dest_iata and len(routing_full) > 1:
+            dest_iata = str(routing_full[1]).strip().upper()
+        if not dest_iata:
+            continue
 
-        dest_iata = routing_use[1] if len(routing_use) > 1 else ""
+        origin_iata = ""
+        if routing:
+            origin_iata = str(routing[0]).strip().upper()
+        elif routing_full:
+            origin_iata = str(routing_full[0]).strip().upper()
+        if not origin_iata:
+            origin_iata = "CDG"
+        routing_use = [origin_iata, dest_iata]
+
         dest_city = iata_to_city.get(dest_iata, dest_iata)
         raw_num = str(v.get("flight_number", "")).strip()
         num_formatted = raw_num
         try:
             num_formatted = str(int(raw_num))  # retire les zéros superflus
-        except Exception:
+        except (TypeError, ValueError):
             pass
         rows.append({
             "Date_Vol": v.get("date"),
@@ -352,6 +413,7 @@ def load_vols_df(
             "Destination": dest_city,
             "IATA": dest_iata,
             "Routing": "-".join(routing_use),
+            "Route_Pos": pd.to_numeric(v.get("route_pos", 1), errors="coerce"),
             "Max_Colis": v.get("max_colis_base"),
             "Source": v.get("source", "excel"),
         })
@@ -359,6 +421,7 @@ def load_vols_df(
     df = pd.DataFrame(rows)
     if not df.empty:
         df["Max_Colis"] = pd.to_numeric(df["Max_Colis"], errors="coerce").astype("Int64")
+        df["Route_Pos"] = pd.to_numeric(df["Route_Pos"], errors="coerce").fillna(1).astype(int)
         df = df.drop_duplicates(subset=["Date_Vol", "Numero_Vol", "Destination"]).reset_index(drop=True)
         # Formattage heures / dates via helpers
         if "Date_Vol" in df.columns:
@@ -384,7 +447,7 @@ try:
         tpath = tdb_path or TABLEAU_DE_BORD
         return _get_vols_df_cached(str(vpath), file_mtime(vpath), str(tpath), file_mtime(tpath))
 
-except Exception:
+except ImportError:
     def get_vols_df_cached(vols_path: Path | None = None, tdb_path: Path | None = None) -> pd.DataFrame:
         return load_vols_df(vols_path=vols_path)
 
@@ -394,5 +457,5 @@ def clear_vols_cache() -> None:
     if cached is not None and hasattr(cached, "clear"):
         try:
             cached.clear()
-        except Exception:
+        except (AttributeError, RuntimeError):
             pass
