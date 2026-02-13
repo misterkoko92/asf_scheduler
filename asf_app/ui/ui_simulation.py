@@ -11,7 +11,7 @@ from scheduler.planning_schema import normalize_planning_df
 from scheduler.planning_views import build_export_view
 from scheduler.solver_router import get_solver_version
 from utils.benevole_utils import count_benevoles_with_dispo
-from utils.datetime_utils import coerce_datetime, parse_date_series
+from utils.datetime_utils import coerce_datetime, parse_date_series, parse_time_series
 from utils.ui_helpers import (
     build_iata_city_maps,
     format_be_label,
@@ -41,28 +41,278 @@ def _style_manual_df(df: pd.DataFrame):
     return df_display.style.apply(_apply, axis=None)
 
 
-def _recompute_bilan(df_plan: pd.DataFrame) -> pd.DataFrame:
-    if df_plan is None or df_plan.empty:
-        return pd.DataFrame()
-    cols = []
-    for _, row in df_plan.iterrows():
-        nb_colis = row.get("BE_Nb_Colis", row.get("BE_Nb_Colis_MAG", 0))
-        nb_equiv = row.get("BE_Nb_Equiv", row.get("Equiv_Colis", 0))
-        cols.append(
-            {
-                "Date_Vol": row.get("Date_Vol", ""),
-                "Numero_Vol": row.get("Numero_Vol", ""),
-                "Destination": row.get("Destination", ""),
-                "BE_Numero": row.get("BE_Numero", ""),
-                "Nb_Colis": nb_colis if pd.notna(nb_colis) else 0,
-                "Nb_Equiv": nb_equiv if pd.notna(nb_equiv) else 0,
-                "Partant": "OUI",
-                "Raison": "MANUEL" if row.get("_MANUEL", False) else "OK",
-                "BE_Destinataire": row.get("BE_Destinataire", ""),
-                "_MANUEL": bool(row.get("_MANUEL", False)),
-            }
+def _normalize_be_key(value: object) -> str:
+    return (
+        str(value if value is not None else "")
+        .replace(".0", "")
+        .strip()
+    )
+
+
+def _to_int_or_zero(value: object) -> int:
+    try:
+        if pd.isna(value):
+            return 0
+    except (TypeError, ValueError):
+        pass
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _build_reason_context(
+    *,
+    df_plan: pd.DataFrame | None,
+    df_vols_src: pd.DataFrame | None,
+    df_dispo_src: pd.DataFrame | None,
+    start_dt,
+    end_dt,
+) -> dict[str, object]:
+    context: dict[str, object] = {
+        "vols": pd.DataFrame(),
+        "dispos": pd.DataFrame(),
+        "plan_load": {},
+    }
+
+    if df_vols_src is not None and not df_vols_src.empty:
+        vols = df_vols_src.copy()
+        vols["_Dest_Code"] = (
+            vols.get("IATA", vols.get("Dest_IATA", vols.get("Destination", pd.Series(dtype=object))))
+            .astype(str)
+            .str.strip()
+            .str.upper()
         )
-    return pd.DataFrame(cols)
+        vols["_Date_dt"] = parse_date_series(vols.get("Date_Vol", pd.Series(dtype=object)))
+        if start_dt is not None and end_dt is not None:
+            vols = vols[(vols["_Date_dt"] >= start_dt) & (vols["_Date_dt"] <= end_dt)]
+        vols["_Vol_Numero"] = vols.get("Numero_Vol", pd.Series(dtype=object)).astype(str).str.strip()
+        vols_hour_dt = parse_time_series(
+            vols.get("Heure_Vol", pd.Series(dtype=object)),
+            allow_hour_only=True,
+            allow_general_fallback=True,
+            strip_spaces=True,
+            lowercase=True,
+        )
+        vols["_Heure_Min"] = (
+            vols_hour_dt.dt.hour.fillna(0).astype(int) * 60
+            + vols_hour_dt.dt.minute.fillna(0).astype(int)
+        )
+        invalid_hour = vols_hour_dt.isna()
+        vols.loc[invalid_hour, "_Heure_Min"] = pd.NA
+        vols["_Date_only"] = vols["_Date_dt"].dt.date
+        vols["_Max_Colis"] = pd.to_numeric(vols.get("Max_Colis", pd.Series(dtype=object)), errors="coerce")
+        context["vols"] = vols
+
+    if df_dispo_src is not None and not df_dispo_src.empty:
+        dispos = df_dispo_src.copy()
+        if "Date_dt" in dispos.columns:
+            dispos["_Date_dt"] = coerce_datetime(dispos["Date_dt"], errors="coerce")
+        else:
+            dispos["_Date_dt"] = parse_date_series(dispos.get("Date", pd.Series(dtype=object)))
+        if start_dt is not None and end_dt is not None:
+            dispos = dispos[(dispos["_Date_dt"] >= start_dt) & (dispos["_Date_dt"] <= end_dt)]
+        arr_col = "Heure_Arrivee_time" if "Heure_Arrivee_time" in dispos.columns else "Heure_Arrivee"
+        dep_col = "Heure_Depart_time" if "Heure_Depart_time" in dispos.columns else "Heure_Depart"
+        arr_dt = parse_time_series(
+            dispos.get(arr_col, pd.Series(dtype=object)),
+            allow_hour_only=True,
+            allow_general_fallback=True,
+            strip_spaces=True,
+            lowercase=True,
+        )
+        dep_dt = parse_time_series(
+            dispos.get(dep_col, pd.Series(dtype=object)),
+            allow_hour_only=True,
+            allow_general_fallback=True,
+            strip_spaces=True,
+            lowercase=True,
+        )
+        dispos["_Arr_Min"] = arr_dt.dt.hour.fillna(0).astype(int) * 60 + arr_dt.dt.minute.fillna(0).astype(int)
+        dispos["_Dep_Min"] = dep_dt.dt.hour.fillna(0).astype(int) * 60 + dep_dt.dt.minute.fillna(0).astype(int)
+        dispos.loc[arr_dt.isna(), "_Arr_Min"] = pd.NA
+        dispos.loc[dep_dt.isna(), "_Dep_Min"] = pd.NA
+        dispos["_Date_only"] = dispos["_Date_dt"].dt.date
+        context["dispos"] = dispos
+
+    if df_plan is not None and not df_plan.empty:
+        plan_local = df_plan.copy()
+        plan_local["_Date_dt"] = parse_date_series(plan_local.get("Date_Vol", pd.Series(dtype=object)))
+        heure_dt = parse_time_series(
+            plan_local.get("Heure_Vol", pd.Series(dtype=object)),
+            allow_hour_only=True,
+            allow_general_fallback=True,
+            strip_spaces=True,
+            lowercase=True,
+        )
+        plan_local["_Heure_Min"] = heure_dt.dt.hour.fillna(0).astype(int) * 60 + heure_dt.dt.minute.fillna(0).astype(int)
+        plan_local.loc[heure_dt.isna(), "_Heure_Min"] = pd.NA
+        plan_local["_Date_only"] = plan_local["_Date_dt"].dt.date
+        plan_local["_Vol_Numero"] = plan_local.get("Numero_Vol", pd.Series(dtype=object)).astype(str).str.strip()
+        plan_local["_Charge"] = pd.to_numeric(
+            plan_local.get("BE_Nb_Equiv", plan_local.get("Equiv_Colis", plan_local.get("BE_Nb_Colis", 0))),
+            errors="coerce",
+        ).fillna(0)
+        load_map = (
+            plan_local.groupby(["_Date_only", "_Heure_Min", "_Vol_Numero"], dropna=True)["_Charge"].sum().to_dict()
+        )
+        context["plan_load"] = load_map
+
+    return context
+
+
+def _infer_non_affectation_reason(
+    *,
+    dest_code: str,
+    reason_context: dict[str, object],
+) -> str:
+    if not dest_code:
+        return "Destination manquante"
+
+    vols = reason_context.get("vols", pd.DataFrame())
+    dispos = reason_context.get("dispos", pd.DataFrame())
+    plan_load = reason_context.get("plan_load", {})
+
+    if vols is None or vols.empty:
+        return f"Aucun vol vers {dest_code} sur la période"
+
+    vols_dest = vols[vols["_Dest_Code"] == str(dest_code).upper()].copy()
+    if vols_dest.empty:
+        return f"Aucun vol vers {dest_code} sur la période"
+
+    vols_sched = vols_dest[vols_dest["_Date_only"].notna() & vols_dest["_Heure_Min"].notna()].copy()
+    if vols_sched.empty:
+        return f"Vols vers {dest_code} sans horaire exploitable"
+
+    if dispos is None or dispos.empty:
+        return "Aucun bénévole disponible sur les créneaux vols"
+
+    has_benev_available = False
+    for _, flight in vols_sched.iterrows():
+        day_rows = dispos[dispos["_Date_only"] == flight["_Date_only"]]
+        if day_rows.empty:
+            continue
+        ok_rows = day_rows[
+            day_rows["_Arr_Min"].notna()
+            & day_rows["_Dep_Min"].notna()
+            & (day_rows["_Arr_Min"] <= int(flight["_Heure_Min"]))
+            & (day_rows["_Dep_Min"] >= int(flight["_Heure_Min"]))
+        ]
+        if not ok_rows.empty:
+            has_benev_available = True
+            break
+    if not has_benev_available:
+        return "Aucun bénévole disponible sur les créneaux vols"
+
+    cap_known = vols_sched["_Max_Colis"].notna().any()
+    if cap_known:
+        has_remaining_capacity = False
+        for _, flight in vols_sched.iterrows():
+            cap = flight.get("_Max_Colis")
+            if pd.isna(cap):
+                has_remaining_capacity = True
+                break
+            key = (flight["_Date_only"], flight["_Heure_Min"], flight["_Vol_Numero"])
+            used = float(plan_load.get(key, 0))
+            if used < float(cap):
+                has_remaining_capacity = True
+                break
+        if not has_remaining_capacity:
+            return "Capacité vols atteinte sur la période"
+
+    return "Conflit de contraintes (priorités/quotas)"
+
+
+def _recompute_bilan(
+    df_plan: pd.DataFrame,
+    *,
+    df_be_src: pd.DataFrame | None = None,
+    df_vols_src: pd.DataFrame | None = None,
+    df_dispo_src: pd.DataFrame | None = None,
+    start_dt=None,
+    end_dt=None,
+) -> pd.DataFrame:
+    cols = []
+    reason_context: dict[str, object] | None = None
+    if (df_vols_src is not None and not df_vols_src.empty) or (
+        df_dispo_src is not None and not df_dispo_src.empty
+    ):
+        reason_context = _build_reason_context(
+            df_plan=df_plan,
+            df_vols_src=df_vols_src,
+            df_dispo_src=df_dispo_src,
+            start_dt=start_dt,
+            end_dt=end_dt,
+        )
+
+    df_plan_local = pd.DataFrame()
+    if df_plan is not None and not df_plan.empty:
+        df_plan_local = df_plan.copy()
+        df_plan_local["_BE_Key"] = df_plan_local.get("BE_Numero", "").apply(_normalize_be_key)
+        df_plan_local = df_plan_local[df_plan_local["_BE_Key"] != ""]
+
+        for _, row in df_plan_local.iterrows():
+            nb_colis = row.get("BE_Nb_Colis", row.get("BE_Nb_Colis_MAG", 0))
+            nb_equiv = row.get("BE_Nb_Equiv", row.get("Equiv_Colis", 0))
+            cols.append(
+                {
+                    "Date_Vol": row.get("Date_Vol", ""),
+                    "Numero_Vol": row.get("Numero_Vol", ""),
+                    "Destination": row.get("Destination", ""),
+                    "BE_Numero": row.get("_BE_Key", ""),
+                    "Nb_Colis": nb_colis if pd.notna(nb_colis) else 0,
+                    "Nb_Equiv": nb_equiv if pd.notna(nb_equiv) else 0,
+                    "Partant": "OUI",
+                    "Raison": "MANUEL" if row.get("_MANUEL", False) else "OK",
+                    "BE_Destinataire": row.get("BE_Destinataire", ""),
+                    "_MANUEL": bool(row.get("_MANUEL", False)),
+                }
+            )
+
+    if df_be_src is not None and not df_be_src.empty:
+        df_be_local = df_be_src.copy()
+        df_be_local["_BE_Key"] = df_be_local.get("BE_Numero", "").apply(_normalize_be_key)
+        df_be_local = df_be_local[df_be_local["_BE_Key"] != ""].copy()
+
+        planned_keys = set(df_plan_local.get("_BE_Key", pd.Series(dtype=str)))
+        non_planifies = (
+            df_be_local[~df_be_local["_BE_Key"].isin(planned_keys)]
+            .drop_duplicates(subset=["_BE_Key"], keep="first")
+        )
+        for _, row in non_planifies.iterrows():
+            nb_colis = row.get("BE_Nb_Colis", row.get("BE_Nb_Colis_MAG", 0))
+            nb_equiv = row.get("Equiv_Colis", row.get("BE_Nb_Equiv", 0))
+            raison_val = row.get("Raison", "")
+            raison_raw = "" if pd.isna(raison_val) else str(raison_val).strip()
+            dest_code = str(row.get("Destination", "")).strip().upper()
+            if reason_context is not None:
+                inferred_reason = _infer_non_affectation_reason(
+                    dest_code=dest_code,
+                    reason_context=reason_context,
+                )
+            else:
+                inferred_reason = "NON AFFECTE"
+            cols.append(
+                {
+                    "Date_Vol": "",
+                    "Numero_Vol": "",
+                    "Destination": dest_code,
+                    "BE_Numero": row.get("_BE_Key", ""),
+                    "Nb_Colis": nb_colis if pd.notna(nb_colis) else 0,
+                    "Nb_Equiv": nb_equiv if pd.notna(nb_equiv) else 0,
+                    "Partant": "NON",
+                    "Raison": raison_raw or inferred_reason,
+                    "BE_Destinataire": row.get("BE_Destinataire", ""),
+                    "_MANUEL": False,
+                }
+            )
+
+    out = pd.DataFrame(cols)
+    if out.empty:
+        return out
+    out["Partant_Order"] = out["Partant"].map({"OUI": 0, "NON": 1}).fillna(2)
+    out = out.sort_values(["Partant_Order", "BE_Numero"], kind="mergesort").drop(columns=["Partant_Order"])
+    return out.reset_index(drop=True)
 
 
 def _recompute_vols(df_plan: pd.DataFrame) -> pd.DataFrame:
@@ -105,15 +355,95 @@ def _recompute_benev(df_plan: pd.DataFrame) -> pd.DataFrame:
     return df[df["Benevole"].astype(str).str.strip() != ""]
 
 
-def _recompute_dest_stats(df_plan: pd.DataFrame) -> pd.DataFrame:
+def _recompute_dest_stats(
+    df_plan: pd.DataFrame,
+    *,
+    df_vols_src: pd.DataFrame | None = None,
+    df_paramdest: pd.DataFrame | None = None,
+    start_dt=None,
+    end_dt=None,
+) -> pd.DataFrame:
     if df_plan is None or df_plan.empty:
         return pd.DataFrame()
+
+    def _norm_dest(series: pd.Series) -> pd.Series:
+        out = series.astype(str).str.strip().str.upper()
+        return out.replace({"NAN": "", "NONE": "", "<NA>": ""})
+
+    def _build_dest_maps(df_param: pd.DataFrame | None) -> tuple[dict[str, str], dict[str, str]]:
+        iata_to_city: dict[str, str] = {}
+        city_to_iata: dict[str, str] = {}
+        if df_param is None or df_param.empty:
+            return iata_to_city, city_to_iata
+        for _, row in df_param.iterrows():
+            iata = str(row.get("Dest_IATA", "")).strip().upper()
+            city = str(row.get("Dest_Ville", row.get("Destination", ""))).strip().upper()
+            if not iata:
+                continue
+            iata_to_city[iata] = city or iata
+            if city:
+                city_to_iata[city] = iata
+        return iata_to_city, city_to_iata
+
+    iata_to_city, city_to_iata = _build_dest_maps(df_paramdest)
+
+    def _dest_to_key(value: object) -> str:
+        raw = str(value if value is not None else "").strip().upper()
+        if raw in ("", "NAN", "NONE", "<NA>"):
+            return ""
+        if raw in iata_to_city:
+            return raw
+        if raw in city_to_iata:
+            return city_to_iata[raw]
+        return raw
+
+    def _build_allowed_days_map(df_param: pd.DataFrame | None) -> dict[str, set[int]]:
+        if df_param is None or df_param.empty:
+            return {}
+        days_cols = [
+            "Freq_Lundi",
+            "Freq_Mardi",
+            "Freq_Mercredi",
+            "Freq_Jeudi",
+            "Freq_Vendredi",
+            "Freq_Samedi",
+            "Freq_Dimanche",
+        ]
+        out: dict[str, set[int]] = {}
+        for _, row in df_param.iterrows():
+            dest = str(row.get("Dest_IATA", "")).strip().upper()
+            if not dest:
+                continue
+            allowed: set[int] = set()
+            for idx, col in enumerate(days_cols):
+                val = row.get(col, 0)
+                sval = str(val).strip().lower()
+                if val == 1 or sval == "1" or sval == "ok":
+                    allowed.add(idx)
+            out[dest] = allowed
+        return out
+
+    def _parse_hour_key(series: pd.Series) -> pd.Series:
+        parsed = parse_time_series(
+            series,
+            allow_hour_only=True,
+            allow_general_fallback=True,
+            strip_spaces=True,
+            lowercase=True,
+        )
+        return parsed.dt.strftime("%H:%M").fillna(series.astype(str).str.strip())
+
     df = df_plan.copy()
     df["_MANUEL"] = df.get("_MANUEL", False)
+    df["_Dest_Raw"] = _norm_dest(df.get("Destination", pd.Series(dtype=object)))
+    df["_Dest_Key"] = df["_Dest_Raw"].apply(_dest_to_key)
+    df = df[df["_Dest_Key"] != ""].copy()
+    df["Destination"] = df["_Dest_Key"].map(iata_to_city).fillna(df["_Dest_Raw"])
     agg = (
-        df.groupby("Destination", as_index=False)
+        df.groupby("_Dest_Key", as_index=False)
         .agg(
             {
+                "Destination": "first",
                 "BE_Numero": "count",
                 "BE_Nb_Colis": "sum",
                 "BE_Nb_Equiv": "sum",
@@ -122,7 +452,79 @@ def _recompute_dest_stats(df_plan: pd.DataFrame) -> pd.DataFrame:
         )
         .rename(columns={"BE_Numero": "Nb_BE", "BE_Nb_Colis": "Nb_Colis", "BE_Nb_Equiv": "Nb_Equiv"})
     )
-    return agg
+
+    # Vols utilisés (uniques) depuis le planning final
+    plan_keys = df.copy()
+    plan_keys["_Dest_Key"] = plan_keys.get("_Dest_Key", plan_keys.get("Destination", pd.Series(dtype=object)).apply(_dest_to_key))
+    plan_keys["_Date_dt"] = parse_date_series(plan_keys.get("Date_Vol", pd.Series(dtype=object)))
+    plan_keys["_Heure_Key"] = _parse_hour_key(plan_keys.get("Heure_Vol", pd.Series(dtype=object)))
+    plan_keys["_Vol_Numero"] = plan_keys.get("Numero_Vol", pd.Series(dtype=object)).astype(str).str.strip()
+    used_counts = (
+        plan_keys[["_Dest_Key", "_Date_dt", "_Heure_Key", "_Vol_Numero"]]
+        .dropna(subset=["_Dest_Key", "_Date_dt"])
+        .query("_Dest_Key != ''")
+        .drop_duplicates()
+        .groupby("_Dest_Key")
+        .size()
+        .to_dict()
+    )
+
+    # Vols existants (uniques) depuis df_vols, filtrés par jours autorisés ParamDest
+    existing_counts: dict[str, int] = {}
+    if df_vols_src is not None and not df_vols_src.empty:
+        vols = df_vols_src.copy()
+        vols["_Dest_Raw"] = _norm_dest(
+            vols.get("IATA", vols.get("Dest_IATA", vols.get("Destination", pd.Series(dtype=object))))
+        )
+        vols["_Dest_Key"] = vols["_Dest_Raw"].apply(_dest_to_key)
+        vols["_Date_dt"] = parse_date_series(vols.get("Date_Vol", pd.Series(dtype=object)))
+        vols["_Heure_Key"] = _parse_hour_key(vols.get("Heure_Vol", pd.Series(dtype=object)))
+        vols["_Vol_Numero"] = vols.get("Numero_Vol", pd.Series(dtype=object)).astype(str).str.strip()
+        vols = vols[vols["_Dest_Key"] != ""]
+
+        if start_dt is not None and end_dt is not None:
+            vols = vols[(vols["_Date_dt"] >= start_dt) & (vols["_Date_dt"] <= end_dt)]
+
+        allowed_days_map = _build_allowed_days_map(df_paramdest)
+        if not vols.empty and allowed_days_map:
+            keep = []
+            for _, row in vols.iterrows():
+                dest = str(row.get("_Dest_Key", "")).strip().upper()
+                dt_val = row.get("_Date_dt")
+                if pd.isna(dt_val):
+                    keep.append(False)
+                    continue
+                allowed = allowed_days_map.get(dest, set())
+                if not allowed:
+                    keep.append(True)
+                    continue
+                keep.append(int(dt_val.weekday()) in allowed)
+            vols = vols[pd.Series(keep, index=vols.index)]
+
+        existing_counts = (
+            vols[["_Dest_Key", "_Date_dt", "_Heure_Key", "_Vol_Numero"]]
+            .dropna(subset=["_Dest_Key", "_Date_dt"])
+            .query("_Dest_Key != ''")
+            .drop_duplicates()
+            .groupby("_Dest_Key")
+            .size()
+            .astype(int)
+            .to_dict()
+        )
+
+    agg["Nb_Vols_Existant"] = agg["_Dest_Key"].map(existing_counts).fillna(0).astype(int)
+    agg["Nb_Vols_Utilises"] = agg["_Dest_Key"].map(used_counts).fillna(0).astype(int)
+
+    ordered_cols = [
+        "Destination",
+        "Nb_Vols_Existant",
+        "Nb_Vols_Utilises",
+        "Nb_BE",
+        "Nb_Colis",
+        "Nb_Equiv",
+        "_MANUEL",
+    ]
+    return agg[ordered_cols].sort_values("Destination", kind="mergesort").reset_index(drop=True)
 
 
 def _recompute_be_non_planifies(df_plan: pd.DataFrame, df_be_src: pd.DataFrame) -> pd.DataFrame:
@@ -155,11 +557,10 @@ def _recompute_bilan_benevoles(
     dispo_counts = {}
     try:
         df_tmp = df_dispo_src.copy()
-        dates_col = df_tmp.get("Date_dt", df_tmp.get("Date", ""))
-        # Parse robuste avec dayfirst
-        dt_parsed = coerce_datetime(dates_col, errors="coerce", dayfirst=True)
-        if dt_parsed.isna().all():
-            dt_parsed = parse_date_series(dates_col)
+        if "Date_dt" in df_tmp.columns:
+            dt_parsed = coerce_datetime(df_tmp["Date_dt"], errors="coerce")
+        else:
+            dt_parsed = parse_date_series(df_tmp.get("Date", pd.Series(dtype=object)))
         df_tmp["_Date_dt"] = dt_parsed
 
         # Déterminer la fenêtre si absente
@@ -175,13 +576,31 @@ def _recompute_bilan_benevoles(
 
         df_tmp = df_tmp[mask_week]
         # Garder uniquement les lignes avec plage horaire valide
-        df_tmp["Benevole"] = df_tmp.get("Benevole", "").astype(str).str.strip()
+        df_tmp["Benevole"] = (
+            df_tmp.get("Benevole", pd.Series(dtype=object))
+            .astype(str)
+            .str.strip()
+            .replace("", pd.NA)
+        )
         arr_col = "Heure_Arrivee_time" if "Heure_Arrivee_time" in df_tmp.columns else "Heure_Arrivee"
         dep_col = "Heure_Depart_time" if "Heure_Depart_time" in df_tmp.columns else "Heure_Depart"
-        arr_parsed = coerce_datetime(df_tmp.get(arr_col, ""), errors="coerce")
-        dep_parsed = coerce_datetime(df_tmp.get(dep_col, ""), errors="coerce")
-        df_tmp = df_tmp[arr_parsed.notna() & dep_parsed.notna()]
-        dispo_counts = df_tmp.groupby("Benevole")["_Date_dt"].dt.date.nunique().to_dict()
+        arr_parsed = parse_time_series(
+            df_tmp.get(arr_col, pd.Series(dtype=object)),
+            allow_hour_only=True,
+            allow_general_fallback=True,
+            strip_spaces=True,
+            lowercase=True,
+        )
+        dep_parsed = parse_time_series(
+            df_tmp.get(dep_col, pd.Series(dtype=object)),
+            allow_hour_only=True,
+            allow_general_fallback=True,
+            strip_spaces=True,
+            lowercase=True,
+        )
+        df_tmp = df_tmp[df_tmp["Benevole"].notna() & arr_parsed.notna() & dep_parsed.notna()]
+        df_tmp["_Date_only"] = df_tmp["_Date_dt"].dt.date
+        dispo_counts = df_tmp.groupby("Benevole")["_Date_only"].nunique().to_dict()
     except (AttributeError, KeyError, TypeError, ValueError):
         dispo_counts = {}
 
@@ -191,12 +610,47 @@ def _recompute_bilan_benevoles(
     if df_plan is not None and not df_plan.empty:
         df_plan_local = df_plan.copy()
         df_plan_local["_Date_dt"] = parse_date_series(df_plan_local.get("Date_Vol", ""))
+        df_plan_local["Benevole"] = (
+            df_plan_local.get("Benevole", pd.Series(dtype=object))
+            .astype(str)
+            .str.strip()
+            .replace("", pd.NA)
+        )
+        df_plan_local["_Vol_Numero"] = (
+            df_plan_local.get("Numero_Vol", pd.Series(dtype=object))
+            .astype(str)
+            .str.strip()
+        )
+        df_plan_local["_Vol_Heure"] = (
+            parse_time_series(
+                df_plan_local.get("Heure_Vol", pd.Series(dtype=object)),
+                allow_hour_only=True,
+                allow_general_fallback=True,
+                strip_spaces=True,
+                lowercase=True,
+            )
+            .dt.strftime("%H:%M")
+            .fillna(df_plan_local.get("Heure_Vol", pd.Series(dtype=object)).astype(str).str.strip())
+        )
+        df_plan_local["_BE_Numero"] = (
+            df_plan_local.get("BE_Numero", pd.Series(dtype=object))
+            .astype(str)
+            .str.strip()
+        )
 
     benevole_set = set(dispo_counts.keys())
     benevole_set.update(df_plan_local.get("Benevole", []).dropna().unique() if not df_plan_local.empty else [])
     # Ajouter tous les bénévoles connus (même sans dispo)
     try:
-        benevole_set.update(df_parambenev["Benevole"].dropna().unique())
+        benevole_set.update(
+            df_parambenev["Benevole"]
+            .dropna()
+            .astype(str)
+            .str.strip()
+            .replace("", pd.NA)
+            .dropna()
+            .unique()
+        )
     except (AttributeError, KeyError, TypeError):
         pass
 
@@ -205,11 +659,18 @@ def _recompute_bilan_benevoles(
             continue
         nb_dispo = int(dispo_counts.get(bene, 0))
         if not df_plan_local.empty:
-            grp = df_plan_local[df_plan_local["Benevole"] == bene]
+            grp = df_plan_local[df_plan_local["Benevole"] == str(bene).strip()]
             nb_jours = int(grp["_Date_dt"].dt.date.nunique())
-            nb_vols = int(len(grp))
-            nb_be = int(grp["BE_Numero"].nunique())
-            manual_flag = bool(grp.get("_MANUEL", False).any())
+            nb_vols = int(
+                grp[["_Date_dt", "_Vol_Heure", "_Vol_Numero"]]
+                .drop_duplicates()
+                .shape[0]
+            )
+            nb_be = int(grp["_BE_Numero"].replace("", pd.NA).dropna().nunique())
+            if "_MANUEL" in grp.columns:
+                manual_flag = bool(grp["_MANUEL"].fillna(False).astype(bool).any())
+            else:
+                manual_flag = False
         else:
             nb_jours = 0
             nb_vols = 0
@@ -218,14 +679,17 @@ def _recompute_bilan_benevoles(
         rows.append(
             {
                 "Benevole": bene,
-                "Nb_Dispos": nb_dispo,
+                "Nb_Dispo": nb_dispo,
                 "Nb_Jours_Affectes": nb_jours,
                 "Nb_Vols_Affectes": nb_vols,
                 "Nb_BE_Affectes": nb_be,
                 "_MANUEL": manual_flag,
             }
         )
-    return pd.DataFrame(rows)
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+    return out.sort_values("Benevole", kind="mergesort").reset_index(drop=True)
 
 
 def _compute_resume_numbers(
@@ -299,16 +763,31 @@ def _recompute_all_tables(
     df_plan: pd.DataFrame,
     *,
     df_be: pd.DataFrame,
+    df_vols: pd.DataFrame,
+    df_paramdest: pd.DataFrame,
     df_dispo: pd.DataFrame,
     df_parambenev: pd.DataFrame,
     start_dt,
     end_dt,
 ):
     return (
-        _recompute_bilan(df_plan),
+        _recompute_bilan(
+            df_plan,
+            df_be_src=df_be,
+            df_vols_src=df_vols,
+            df_dispo_src=df_dispo,
+            start_dt=start_dt,
+            end_dt=end_dt,
+        ),
         _recompute_vols(df_plan),
         _recompute_benev(df_plan),
-        _recompute_dest_stats(df_plan),
+        _recompute_dest_stats(
+            df_plan,
+            df_vols_src=df_vols,
+            df_paramdest=df_paramdest,
+            start_dt=start_dt,
+            end_dt=end_dt,
+        ),
         _recompute_be_non_planifies(df_plan, df_be),
         _recompute_bilan_benevoles(
             df_plan,
@@ -1008,6 +1487,8 @@ def render_tab_simulation():
     ) = _recompute_all_tables(
         plan_df,
         df_be=df_be,
+        df_vols=df_vols_all,
+        df_paramdest=df_paramdest,
         df_dispo=df_dispo,
         df_parambenev=df_parambenev,
         start_dt=start_dt,
@@ -1077,6 +1558,9 @@ def render_tab_simulation():
     st.dataframe(_style_manual_df(plan_df), height=400, width="stretch", hide_index=True)
 
     with st.expander("Bilans détaillés (simulation)", expanded=False):
+        st.markdown("**Bilan des bénévoles**")
+        st.dataframe(_style_manual_df(bilan_benevoles), width="stretch", hide_index=True)
+
         st.markdown("**Bilan des expéditions**")
         st.dataframe(_style_manual_df(bilan_df), width="stretch", hide_index=True)
 
@@ -1086,11 +1570,5 @@ def render_tab_simulation():
         st.markdown("**Bilan par destination**")
         st.dataframe(_style_manual_df(dest_stats), width="stretch", hide_index=True)
 
-        st.markdown("**Planning bénévoles**")
+        st.markdown("**Planning Bénévoles**")
         st.dataframe(_style_manual_df(benev_df), width="stretch", hide_index=True)
-
-        st.markdown("**BE non planifiés**")
-        st.dataframe(be_non_planifies, width="stretch", hide_index=True)
-
-        st.markdown("**Bilan des bénévoles**")
-        st.dataframe(_style_manual_df(bilan_benevoles), width="stretch", hide_index=True)

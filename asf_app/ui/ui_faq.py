@@ -56,6 +56,10 @@ def render_tab_faq():
     st.markdown(
         """
 - **Génération OR-Tools** (2 modes) → planning + bilan en mémoire.  
+- Modes OR-Tools :  
+  - **Priorité Colis** : maximise le colis puis minimise le nombre de bénévoles affectés.  
+  - **Priorité Bénévole** : maximise le colis puis maximise le nombre de bénévoles mobilisés.  
+  - Si les 2 modes donnent le même résultat, c’est souvent dû à des contraintes identiques (ex: aucun bénévole compatible sur les vols).  
 - **Ajuster le planning simulé** : sélection BE (statut D) et vols filtrés par destination ; ajout / suppression.  
 - **Export Excel** du planning simulé :  
   - Enrichissement complet.  
@@ -107,6 +111,9 @@ def render_tab_faq():
 - **Eligibilité BE** : seuls les BE statut **D** (MAG CENTRAL) sont planifiables.  
 - **Priorité / Equiv** : priorité par type (ParamBE), calcul équiv colis via coeff ParamBE. Types inconnus → fallback priorité/coefficient par défaut.  
 - **Vols** : uniquement départ **CDG** ; numéros normalisés “AF xxx” ; capacité par défaut 20 si non spécifiée. Routing normalisé avec “-”.  
+- **Vols multi-escales** : chaque escale est considérée comme destination candidate (ex: `CDG-SSG-DLA` expose `SSG` et `DLA`).  
+- **Unicité vol physique** : un même vol (même date/heure/numéro) ne peut pas transporter simultanément 2 destinations différentes.  
+- **Règle de conflit multi-escales** : si conflit, la première destination du routing est prioritaire.  
 - **Filtrage vols** : on retient les vols disponibles sur la période planifiée (lundi→dimanche), hors doublons.  
 - **Tri BE** : par priorité puis équiv colis, avec gestion NON-ASF si applicable.  
 - **Packing** : OR-Tools place les BE par destination selon les règles ParamDest ; rejet si pas de vol ou capacité insuffisante.  
@@ -126,6 +133,20 @@ def render_tab_faq():
 - Feuilles : Planning SXX-YYYY, Export planning (brut), Data Vols (tableau avec filtres).  
 - Version : nomme le fichier `ASFmm - PLANNING SEMAINE YYYY-XX-ZZ.xlsx` (ZZ = version, écrit en Q1).  
   Si l’incrément est désactivé, la version courante est déplacée dans le dossier `Historique`.
+        """
+    )
+
+    st.markdown("### Bilans détaillés (simulation)")
+    st.markdown(
+        """
+- Ordre d’affichage : **Bilan des bénévoles** → **Bilan des expéditions** → **Bilan des vols** → **Bilan par destination** → **Planning Bénévoles**.  
+- Bilan bénévoles :  
+  - `Nb_Dispo` = nombre de jours avec disponibilité valide sur la période.  
+  - `Nb_Jours_Affectes` = nombre de jours distincts avec au moins un vol affecté.  
+  - `Nb_Vols_Affectes` = nombre de vols distincts affectés.  
+  - `Nb_BE_Affectes` = nombre de BE affectés.  
+- Bilan expéditions : inclut les BE partants et non partants avec motif (`Aucun vol`, `Aucun bénévole`, `Capacité atteinte`, `Conflit de contraintes`, etc.).  
+- Bilan destination : inclut `Nb_Vols_Existant` (après règles ParamDest) et `Nb_Vols_Utilises`.  
         """
     )
 

@@ -27,9 +27,17 @@ Il combine :
   - capacité vol physique et capacité bénévole dynamique
 - Placement intelligent des colis par destination et par vol (OR-Tools)
 - Affectation optimale des bénévoles (fenêtre horaire + charge)
+- Gestion multi-escales robuste :
+  - un vol multi-stop expose ses escales comme destinations candidates
+  - un vol physique (même date/heure/numéro) ne peut servir qu’une destination
+  - en cas de conflit, la première destination du routing est prioritaire
 - Génération Excel (depuis le planning simulé OR-Tools) :
   - planning complet
   - bilan expéditions
+- Bilans enrichis en simulation :
+  - bénévoles (`Nb_Dispo`, `Nb_Jours_Affectes`, `Nb_Vols_Affectes`, `Nb_BE_Affectes`)
+  - expéditions (partants + non partants avec motif métier)
+  - destination (`Nb_Vols_Existant`, `Nb_Vols_Utilises`)
 - Interface Streamlit complète (OR-Tools uniquement)
 - Onglet Communication : génération des messages depuis le planning de session ou un planning Excel OneDrive (feuille "Export planning")
 
@@ -76,6 +84,10 @@ Les chemins des fichiers Excel (Tableau de Bord, Planning, Param) sont configur�
 
 Le chargement des sources est **fail-fast** : si un fichier source est introuvable, l’UI affiche l’erreur et stoppe la session.
 La génération du planning se fait via l’onglet **Planning V2 (OR‑Tools)**.
+
+Dans l’onglet simulation OR-Tools, les 2 modes ont des objectifs distincts :
+- `Priorité Colis` : maximise les colis puis minimise le nombre de bénévoles affectés.
+- `Priorité Bénévole` : maximise les colis puis maximise le nombre de bénévoles mobilisés.
 
 Variables d’environnement utiles (chemins) :
 - `ASF_ONEDRIVE_ROOT` : surcharge la racine OneDrive utilisée par l’app.
