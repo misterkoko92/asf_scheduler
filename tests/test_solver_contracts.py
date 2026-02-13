@@ -450,11 +450,28 @@ def _assert_solver_contract(res: dict) -> None:
     nb_colis_expedies = int(stats.get("nb_colis_expedies", 0) or 0)
     taux_be = float(stats.get("taux_be", 0) or 0)
     taux_colis = float(stats.get("taux_colis", 0) or 0)
+    nb_vols_total = int(stats.get("nb_vols_total", 0) or 0)
+    nb_vols_sans_be = int(stats.get("nb_vols_sans_be_compatible", 0) or 0)
+    nb_vols_sans_benev = int(stats.get("nb_vols_sans_benevole_compatible", 0) or 0)
+    nb_vols_sans_full = int(stats.get("nb_vols_sans_compatibilite_complete", 0) or 0)
+    nb_vols_non_utilises_compat = int(stats.get("nb_vols_non_utilises_avec_compatibilite", 0) or 0)
 
     assert nb_be_total >= nb_be_envoyes >= 0
     assert nb_colis_total >= nb_colis_expedies >= 0
     assert 0 <= taux_be <= 100
     assert 0 <= taux_colis <= 100
+    assert nb_vols_total >= 0
+    assert nb_vols_total >= nb_vols_sans_be >= 0
+    assert nb_vols_total >= nb_vols_sans_benev >= 0
+    assert nb_vols_total >= nb_vols_sans_full >= 0
+    assert nb_vols_total >= nb_vols_non_utilises_compat >= 0
+
+    diag_df = res.get("vols_diagnostics", pd.DataFrame())
+    assert isinstance(diag_df, pd.DataFrame)
+    if not diag_df.empty:
+        assert "BE_Compat_Count" in diag_df.columns
+        assert "Benev_Compat_Count" in diag_df.columns
+        assert "Used" in diag_df.columns
 
 
 @pytest.mark.skipif(cp_model_v2 is None or cp_model_v3 is None, reason="OR-Tools non disponible")

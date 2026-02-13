@@ -550,6 +550,72 @@ def add_physical_flight_routing_priority_constraints(
                 model.Add(var == 0)
 
 
+def build_vols_compatibility_df(
+    df_vols: pd.DataFrame,
+    x: Dict[Tuple[int, int], cp_model.IntVar],
+    y: Dict[Tuple[int, int], cp_model.IntVar],
+    *,
+    u: Dict[int, cp_model.IntVar] | None = None,
+    solver: cp_model.CpSolver | None = None,
+) -> pd.DataFrame:
+    be_count_by_vol: Dict[int, int] = defaultdict(int)
+    benev_count_by_vol: Dict[int, int] = defaultdict(int)
+    for (_, v_idx) in x.keys():
+        be_count_by_vol[int(v_idx)] += 1
+    for (_, v_idx) in y.keys():
+        benev_count_by_vol[int(v_idx)] += 1
+
+    rows: List[Dict[str, Any]] = []
+    for v_idx, row in df_vols.iterrows():
+        date_val = row.get("Date_Vol") or row.get("datetime")
+        hour_val = row.get("Heure_Vol")
+        used_flag: int | None = None
+        if u is not None and solver is not None and v_idx in u:
+            used_flag = int(solver.Value(u[v_idx]))
+        rows.append(
+            {
+                "Vol_Index": int(v_idx),
+                "Date_Vol": date_val,
+                "Heure_Vol": hour_val,
+                "Numero_Vol": row.get("Numero_Vol", ""),
+                "Destination": row.get("Destination", row.get("dest_iata", "")),
+                "Dest_IATA": row.get("dest_iata", row.get("IATA", "")),
+                "Routing": row.get("Routing", ""),
+                "Route_Pos": int(row.get("route_pos", 1) or 1),
+                "Physical_Flight_Key": row.get("physical_flight_key", ""),
+                "BE_Compat_Count": int(be_count_by_vol.get(int(v_idx), 0)),
+                "Benev_Compat_Count": int(benev_count_by_vol.get(int(v_idx), 0)),
+                "Used": used_flag,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def summarize_vols_compatibility(df_diag: pd.DataFrame) -> Dict[str, int]:
+    if df_diag is None or df_diag.empty:
+        return {
+            "nb_vols_total": 0,
+            "nb_vols_sans_be_compatible": 0,
+            "nb_vols_sans_benevole_compatible": 0,
+            "nb_vols_sans_compatibilite_complete": 0,
+            "nb_vols_non_utilises_avec_compatibilite": 0,
+        }
+
+    be_compat = pd.to_numeric(df_diag.get("BE_Compat_Count"), errors="coerce").fillna(0).astype(int)
+    benev_compat = pd.to_numeric(df_diag.get("Benev_Compat_Count"), errors="coerce").fillna(0).astype(int)
+    used = pd.to_numeric(df_diag.get("Used"), errors="coerce")
+
+    has_full_compat = (be_compat > 0) & (benev_compat > 0)
+    summary = {
+        "nb_vols_total": int(len(df_diag)),
+        "nb_vols_sans_be_compatible": int((be_compat == 0).sum()),
+        "nb_vols_sans_benevole_compatible": int((benev_compat == 0).sum()),
+        "nb_vols_sans_compatibilite_complete": int((~has_full_compat).sum()),
+        "nb_vols_non_utilises_avec_compatibilite": int(((used == 0) & has_full_compat).sum()) if not used.isna().all() else 0,
+    }
+    return summary
+
+
 def optimize_equilibrage(
     model: cp_model.CpModel,
     solver: cp_model.CpSolver,

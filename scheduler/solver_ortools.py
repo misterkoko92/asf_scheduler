@@ -48,6 +48,9 @@ from scheduler.solver_ortools_common import (
     build_dest_info as _core_build_dest_info,
 )
 from scheduler.solver_ortools_common import (
+    build_vols_compatibility_df as _core_build_vols_compatibility_df,
+)
+from scheduler.solver_ortools_common import (
     build_planning_bilan as _core_build_planning_bilan,
 )
 from scheduler.solver_ortools_common import (
@@ -73,6 +76,9 @@ from scheduler.solver_ortools_common import (
 )
 from scheduler.solver_ortools_common import (
     parse_vols as _core_parse_vols,
+)
+from scheduler.solver_ortools_common import (
+    summarize_vols_compatibility as _core_summarize_vols_compatibility,
 )
 from scheduler.solver_ortools_common import (
     validate_inputs as _core_validate_inputs,
@@ -235,6 +241,23 @@ def solve_planning_ortools_simulation(
     y, benev_vols_compat, vols_with_benev, benev_ids = _create_benev_variables(
         model, df_benev, df_vols
     )
+
+    vols_diag_pre = _build_vols_compatibility_df(df_vols, x, y)
+    vols_diag_summary_pre = _summarize_vols_compatibility(vols_diag_pre)
+    if vols_diag_summary_pre["nb_vols_sans_benevole_compatible"] > 0:
+        sample = vols_diag_pre[vols_diag_pre["Benev_Compat_Count"] == 0].head(5)
+        _log(
+            "[ORTOOLS] Vols sans bénévole compatible: "
+            f"{vols_diag_summary_pre['nb_vols_sans_benevole_compatible']}/{vols_diag_summary_pre['nb_vols_total']} "
+            f"(exemples: {sample[['Numero_Vol', 'Date_Vol', 'Heure_Vol', 'Dest_IATA']].to_dict(orient='records')})"
+        )
+    if vols_diag_summary_pre["nb_vols_sans_be_compatible"] > 0:
+        sample = vols_diag_pre[vols_diag_pre["BE_Compat_Count"] == 0].head(5)
+        _log(
+            "[ORTOOLS] Vols sans BE compatible: "
+            f"{vols_diag_summary_pre['nb_vols_sans_be_compatible']}/{vols_diag_summary_pre['nb_vols_total']} "
+            f"(exemples: {sample[['Numero_Vol', 'Date_Vol', 'Heure_Vol', 'Dest_IATA']].to_dict(orient='records')})"
+        )
 
     # Disponibilités totales (en minutes) par bénévole pour pondérer les choix
     benev_avail_minutes: Dict[int, int] = defaultdict(int)
@@ -505,6 +528,21 @@ def _group_shipments(df_be: pd.DataFrame) -> pd.DataFrame:
     return _core_group_shipments(df_be)
 
 
+def _build_vols_compatibility_df(
+    df_vols: pd.DataFrame,
+    x: Dict[Tuple[int, int], cp_model.IntVar],
+    y: Dict[Tuple[int, int], cp_model.IntVar],
+    *,
+    u: Dict[int, cp_model.IntVar] | None = None,
+    solver: cp_model.CpSolver | None = None,
+) -> pd.DataFrame:
+    return _core_build_vols_compatibility_df(df_vols, x, y, u=u, solver=solver)
+
+
+def _summarize_vols_compatibility(df_diag: pd.DataFrame) -> Dict[str, int]:
+    return _core_summarize_vols_compatibility(df_diag)
+
+
 def _parse_vols(df_vols_raw: pd.DataFrame, dest_info: Dict[str, Dict[str, Any]]) -> pd.DataFrame:
     return _core_parse_vols(df_vols_raw, dest_info)
 
@@ -744,6 +782,8 @@ def _extract_results(
                 }
             )
     df_dest_stats = pd.DataFrame(dest_stats_rows)
+    df_vols_diag = _build_vols_compatibility_df(df_vols, x, y, u=u, solver=solver)
+    vols_diag_stats = _summarize_vols_compatibility(df_vols_diag)
 
     nb_colis_total = int(pd.to_numeric(df_be_original.get("BE_Nb_Colis", 0), errors="coerce").fillna(0).sum())
     nb_colis_expedies = int(df_affectations["BE_Nb_Colis"].sum()) if not df_affectations.empty else 0
@@ -759,6 +799,7 @@ def _extract_results(
         else 0,
         "nb_colis_total": nb_colis_total,
         "nb_colis_expedies": nb_colis_expedies,
+        **vols_diag_stats,
     }
     stats["taux_colis"] = (
         round(nb_colis_expedies / nb_colis_total * 100, 1)
@@ -777,6 +818,7 @@ def _extract_results(
         "status": stats["status"],
         "be_non_planifies": df_non_planifies,
         "dest_stats": df_dest_stats,
+        "vols_diagnostics": df_vols_diag,
     }
 
 

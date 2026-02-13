@@ -337,3 +337,7 @@ Solidifier le projet (qualité, sécurité, maintenabilité, évolutivité) sans
 | 2026-02-13 | Renforcement tests métier multi-escales: cas NKC/CKY en conflit (priorité NKC), cas sans conflit (CKY seul), cas escale absente de ParamDest (SSG) mais destination finale DLA expédiée | OK |
 | 2026-02-13 | Robustesse priorisation multi-escales: inférence de `Route_Pos` depuis `Routing` quand la colonne dédiée est absente (compat data sources externes) + test dédié | OK |
 | 2026-02-13 | Validation ciblée post-renforcement: `.venv pytest -q tests/test_loaders.py tests/test_solver_contracts.py tests/test_solver_v3_strict_capacity.py` (`16 passed`) | OK |
+| 2026-02-13 | Diagnostic solveur renforcé: ajout `vols_diagnostics` + métriques `nb_vols_sans_*_compatible` pour identifier les vols non utilisables (BE vs bénévoles) sans changer les règles métier | OK |
+| 2026-02-13 | Validation ciblée diagnostic solveur: `.venv pytest -q tests/test_solver_contracts.py tests/test_solver_v3_strict_capacity.py tests/test_loaders.py` (`16 passed`) | OK |
+| 2026-02-13 | Paramétrage runtime non-fonctionnel: `DUREE_MISSION_HEURES` et `MIN_HOURS_BETWEEN_FLIGHTS` lisibles via env (`ASF_DUREE_MISSION_HEURES`, `ASF_MIN_HOURS_BETWEEN_FLIGHTS`) avec valeurs par défaut inchangées | OK |
+| 2026-02-13 | Documentation env mise à jour (`.env.example`) + tests dédiés config runtime (`tests/test_config_runtime_values.py`) | OK |

@@ -5,7 +5,21 @@ Paramètres généraux du moteur de planification.
 Aucun chemin d’accès ici : uniquement des règles métier.
 """
 
+import os
 from datetime import time
+
+
+def _read_float_env(name: str, default: float, *, min_value: float = 0.0) -> float:
+    raw = os.getenv(name, "")
+    if not str(raw).strip():
+        return default
+    try:
+        value = float(str(raw).strip().replace(",", "."))
+    except (TypeError, ValueError):
+        return default
+    if value < min_value:
+        return default
+    return value
 
 # ============================================================================
 #  RÈGLES BE
@@ -24,7 +38,7 @@ MAX_EQUIV_PER_VOLUNTEER = 22
 # ============================================================================
 
 # Durée de mission bénévole (heures avant l'heure de départ du vol)
-DUREE_MISSION_HEURES = 3
+DUREE_MISSION_HEURES = _read_float_env("ASF_DUREE_MISSION_HEURES", 3.0)
 
 # Limite ABSOLUE facultative de bénévoles par vol
 # Laisser à None pour désactiver la limite.
@@ -42,7 +56,7 @@ DEFAULT_FLIGHT_TIME = time(0, 0)
 MAX_CAPACITE_PAR_VOL = 20
 
 # Écart minimal entre deux vols assignés au même bénévole (en heures)
-MIN_HOURS_BETWEEN_FLIGHTS = 3
+MIN_HOURS_BETWEEN_FLIGHTS = _read_float_env("ASF_MIN_HOURS_BETWEEN_FLIGHTS", 3.0)
 
 # Estimation fine de capacité bénévole (ON/OFF)
 USE_REAL_CAPACITY_ESTIMATE = False
