@@ -9,11 +9,14 @@ Règles métier des BE :
 
 from __future__ import annotations
 
-from typing import Dict, Any
+import logging
+from typing import Any, Dict
 
 import pandas as pd
 
 from scheduler.models import Shipment
+
+logger = logging.getLogger("ASF-SCHEDULER")
 
 
 # =============================================================================
@@ -128,24 +131,33 @@ def compute_be_priority(be: Shipment, param_be: Dict[str, Dict]) -> int:
     special = (be.special or "").strip().upper()
     if special == "OBLIGATOIRE":
         prio = 1
-        print(f"[PRIORITE] BE {be.be_numero} → SPECIAL=OBLIGATOIRE → Priorité={prio}")
+        logger.info(
+            "[PRIORITE] BE %s -> SPECIAL=OBLIGATOIRE -> Priorite=%s",
+            be.be_numero,
+            prio,
+        )
         return prio
 
     # 2) Non ASF
     if not is_expediteur_asf(be):
         prio = 2
-        print(f"[PRIORITE] BE {be.be_numero} → NON-ASF → Priorité={prio}")
+        logger.info("[PRIORITE] BE %s -> NON-ASF -> Priorite=%s", be.be_numero, prio)
         return prio
 
     # 3) Priorité par type
     t = (be.type_colis or "").strip().upper()
     if t in param_be:
         prio = int(param_be[t]["Priorite_Type"])
-        print(f"[PRIORITE] BE {be.be_numero} → Type={t} → Priorité={prio}")
+        logger.info("[PRIORITE] BE %s -> Type=%s -> Priorite=%s", be.be_numero, t, prio)
         return prio
 
     prio = int(param_be["AUTRE"]["Priorite_Type"])
-    print(f"[PRIORITE] BE {be.be_numero} → Type={t or 'AUTRE'} (fallback) → Priorité={prio}")
+    logger.info(
+        "[PRIORITE] BE %s -> Type=%s (fallback) -> Priorite=%s",
+        be.be_numero,
+        t or "AUTRE",
+        prio,
+    )
     return prio
 
 
@@ -173,9 +185,13 @@ def compute_equiv_colis(be: Shipment, param_be: Dict[str, Dict]) -> int:
     if equiv_total <= 0:
         equiv_total = 1
 
-    print(
-        f"[EQUIV] BE {be.be_numero} | Type={t} | Colis={nb_colis} | "
-        f"Coeff={coeff} → Equiv_total={equiv_total}"
+    logger.info(
+        "[EQUIV] BE %s | Type=%s | Colis=%s | Coeff=%s -> Equiv_total=%s",
+        be.be_numero,
+        t,
+        nb_colis,
+        coeff,
+        equiv_total,
     )
 
     return equiv_total

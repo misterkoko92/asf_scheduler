@@ -1,16 +1,16 @@
 # asf_app/services/files_service.py
 # -*- coding: utf-8 -*-
 
-import os
 import datetime
+import os
 from pathlib import Path
 from typing import Dict
 
 import pandas as pd
+
 import scheduler.config_paths as cp
 from utils.datetime_utils import format_date_value
 from utils.excel_safety import sanitize_excel_value
-
 
 # ============================================================
 # Horodatage fichier
@@ -21,7 +21,7 @@ def pretty_mtime(path_str: str) -> str:
         ts = os.path.getmtime(path_str)
         dt = datetime.datetime.fromtimestamp(ts)
         return format_date_value(dt, fmt="%d/%m/%Y à %H:%M", default="N/A")
-    except Exception:
+    except (FileNotFoundError, OSError, PermissionError, TypeError, ValueError):
         return "N/A"
 
 
@@ -78,7 +78,7 @@ def save_excel_sheet(path: str | Path, sheet_name: str, df: pd.DataFrame) -> Non
         if write_sheet_table(path, sheet_name, table):
             cp.sync_local_file_to_onedrive(path)
             return
-    except Exception:
+    except (ImportError, FileNotFoundError, OSError, PermissionError, RuntimeError, TypeError, ValueError):
         pass
 
     # Fallback openpyxl : réécriture in-place (sans supprimer la feuille)

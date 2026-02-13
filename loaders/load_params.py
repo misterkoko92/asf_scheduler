@@ -5,23 +5,29 @@ Helpers centralisés pour charger les feuilles Param* avec cache Streamlit.
 from __future__ import annotations
 
 from pathlib import Path
+
 import pandas as pd
 
 from loaders.universal_loader import load_and_normalize
+from scheduler.column_map import (
+    column_map_param_be,
+    column_map_param_benev,
+    column_map_param_dest,
+    column_map_param_expediteur,
+)
 from scheduler.config_paths import (
-    TABLEAU_DE_BORD,
     PLANNING_BENEVOLES,
     SHEET_PARAM_BE,
+    SHEET_PARAM_BENEV,
     SHEET_PARAM_DEST,
     SHEET_PARAM_EXP,
-    SHEET_PARAM_BENEV,
+    TABLEAU_DE_BORD,
 )
-from scheduler.column_map import column_map_param_be, column_map_param_dest, column_map_param_expediteur, column_map_param_benev
 from utils.cache_utils import file_mtime
 
 try:
     import streamlit as st
-except Exception:
+except (ImportError, ModuleNotFoundError):
     st = None
 
 
@@ -160,5 +166,5 @@ def clear_param_caches() -> None:
         if cached is not None and hasattr(cached, "clear"):
             try:
                 cached.clear()
-            except Exception:
+            except (AttributeError, RuntimeError, TypeError):
                 pass

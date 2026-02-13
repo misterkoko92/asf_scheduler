@@ -1,10 +1,11 @@
 # asf_app/ui/ui_stats/stats_pdf.py
 # -*- coding: utf-8 -*-
 
-from reportlab.platypus import SimpleDocTemplate, Spacer, Paragraph, Image
+from pathlib import Path
+
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
-from pathlib import Path
+from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer
 
 
 def export_stats_pdf(images: list[str], path: Path):

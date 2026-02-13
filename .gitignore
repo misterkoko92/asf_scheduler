@@ -4,6 +4,8 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+.coverage
+coverage.xml
 .env
 .env.*
 !.env.example
@@ -15,6 +17,7 @@ dist/
 
 # Logs
 *.log
+/asf_scheduler.log
 
 # Données lourdes
 data/*.xlsx
@@ -22,6 +25,12 @@ data/*.csv
 planning_resultats/
 *.pdf
 .tmp_asf/
+
+# Artefacts runtime (générés localement)
+/Planning.xlsx
+/Bilan.xlsx
+/engine_run_stats.json
+/test_api/export_vols.xlsx
 
 # Electron
 electron_app/node_modules/

@@ -4,31 +4,28 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
-import pandas as pd
-from utils.datetime_utils import coerce_datetime
 import numpy as np
-import streamlit as st
+import pandas as pd
 import plotly.express as px
-import io
-
+import streamlit as st
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.units import cm
 from reportlab.platypus import (
-    SimpleDocTemplate,
     Paragraph,
+    SimpleDocTemplate,
     Spacer,
     Table,
     TableStyle,
 )
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib import colors
-from reportlab.lib.units import cm
 
 from asf_app.config.runtime import get_onedrive_root, get_output_planning_dir
 from asf_app.services.planning_exports_service import load_planning_xlsx as _load_planning_xlsx
-
+from utils.datetime_utils import coerce_datetime
 
 # ==========================================================================
 #  EXTRACTION SEMAINE + VERSION POUR LES FICHIERS ASFmm
@@ -53,7 +50,7 @@ def extract_week_version(name: str):
             ver = int(m.group(3))
             if 1 <= wk <= 53:
                 return wk, ver
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             pass
 
     # 2) Ancien format avec version explicite vXX
@@ -64,7 +61,7 @@ def extract_week_version(name: str):
             ver = int(m.group(2))
             if 1 <= wk <= 53:
                 return wk, ver
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             pass
 
     # 3) Ancien format sans version : version par défaut = 1
@@ -74,7 +71,7 @@ def extract_week_version(name: str):
             wk = int(m.group(1))
             if 1 <= wk <= 53:
                 return wk, 1
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             pass
 
     # 4) Fallback : premier couple de chiffres
@@ -208,14 +205,17 @@ def _load_all_plannings(base_override: Path | None = None) -> pd.DataFrame:
     Ajoute colonnes: week, year, date_dt, mois, jour_semaine.
     """
     # Re-détection OneDrive à la volée pour supporter overrides (ENV/Session)
+    get_planning_dirs = None
     try:
-        from scheduler.config_paths import detect_onedrive_asf, get_planning_dirs
+        from scheduler.config_paths import detect_onedrive_asf
+        from scheduler.config_paths import get_planning_dirs as _get_planning_dirs
         base_root = detect_onedrive_asf()
-    except Exception:
+        get_planning_dirs = _get_planning_dirs
+    except (ImportError, OSError, RuntimeError, TypeError, ValueError):
         base_root = get_onedrive_root()
     try:
-        roots = get_planning_dirs()
-    except Exception:
+        roots = get_planning_dirs() if callable(get_planning_dirs) else []
+    except (OSError, RuntimeError, TypeError, ValueError):
         roots = []
     if base_override:
         roots.insert(0, base_override)
@@ -237,7 +237,7 @@ def _load_all_plannings(base_override: Path | None = None) -> pd.DataFrame:
                 if f not in seen:
                     seen.append(f)
                     all_files.append(f)
-        except Exception:
+        except OSError:
             continue
 
     all_files = sorted(
@@ -258,7 +258,7 @@ def _load_all_plannings(base_override: Path | None = None) -> pd.DataFrame:
         try:
             if isinstance(year_guess, float):
                 year_guess = datetime.fromtimestamp(year_guess).year
-        except Exception:
+        except (OSError, OverflowError, TypeError, ValueError):
             year_guess = None
 
         df = load_planning_xlsx(f, default_year=year_guess)
@@ -462,7 +462,7 @@ def plot_hour_day_heatmap(df: pd.DataFrame, general_period: str):
         try:
             t = coerce_datetime(str(val), errors="coerce").time()
             return t.hour if t else np.nan
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             return np.nan
 
     df_local = df_local.copy()
@@ -889,8 +889,8 @@ def generate_year_pdf_report(df: pd.DataFrame, output_dir: Path) -> Path:
         f"• Expéditeurs uniques : {kpi['nb_expediteurs']}",
         f"• Bénévoles uniques : {kpi['nb_benevoles']}",
     ]
-    for l in lines:
-        story.append(Paragraph(l, style_normal))
+    for line in lines:
+        story.append(Paragraph(line, style_normal))
     story.append(Spacer(1, 0.5 * cm))
 
     # Stats hebdomadaires
@@ -985,7 +985,7 @@ def render_tab_stats():
     try:
         from scheduler.config_paths import detect_onedrive_asf
         base_root = detect_onedrive_asf()
-    except Exception:
+    except (ImportError, OSError, RuntimeError, TypeError, ValueError):
         base_root = get_onedrive_root()
 
     default_dir = base_root / "Planning MAB" / "ASFmm PLANNING 2025"

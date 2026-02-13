@@ -1,31 +1,34 @@
 # asf_app/ui/ui_week_data.py
 # -*- coding: utf-8 -*-
 
-import streamlit as st
-import pandas as pd
 from pathlib import Path
 
-from asf_app.state import get_state, get_excel_source_paths
+import pandas as pd
+import streamlit as st
 
+from asf_app.state import get_excel_source_paths, get_state
+from asf_app.ui.ui_week_data_helpers import (
+    _build_benev_ranges_by_date,
+    _build_benev_week_table,
+    _build_day_labels,
+    _build_flights_week_table,
+    _compute_week_dates,
+)
 from loaders.load_shipments import load_shipments_df
-from utils.ui_helpers import build_iata_city_maps, format_be_label, format_vol_label
 from utils.datetime_utils import (
+    coerce_datetime,
+    format_date_series,
+    format_date_value,
+    format_time_series,
+    normalize_hour_value,
     parse_date_series,
     parse_date_value,
     parse_time_series,
-    normalize_hour_value,
-    coerce_datetime,
-    format_date_series,
-    format_time_series,
-    format_date_value,
 )
-from asf_app.ui.ui_week_data_helpers import (
-    _compute_week_dates,
-    _build_day_labels,
-    _build_benev_week_table,
-    _build_benev_ranges_by_date,
-    _build_flights_week_table,
-)
+from utils.logging_utils import get_logger
+from utils.ui_helpers import build_iata_city_maps, format_be_label, format_vol_label
+
+logger = get_logger("ui_week_data", console=False)
 
 
 # ======================================================================
@@ -49,7 +52,7 @@ def detect_week(state):
 def robust_to_datetime(series):
     try:
         return parse_date_series(series)
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         return parse_date_series(series.astype(str))
 
 
@@ -97,7 +100,7 @@ def load_be_moteur():
             param_be_raw=state.df_param_be.copy(),
             tdb_path=tdb_path,
         )
-    except Exception as e:
+    except (FileNotFoundError, OSError, KeyError, RuntimeError, TypeError, ValueError) as e:
         return None, f"Erreur load_shipments_df : {e}"
 
     if df_raw is None or df_raw.empty:
@@ -284,7 +287,7 @@ def render_tab_week_data():
             from loaders.load_vols import load_vols_df
             paths = get_excel_source_paths(state)
             state.df_vols = load_vols_df(vols_path=paths.vols, param_dest_df=state.df_param_dest)
-        except Exception:
+        except (ImportError, FileNotFoundError, OSError, KeyError, RuntimeError, TypeError, ValueError):
             state.df_vols = None
 
     def _parse_time_val(val):
@@ -313,7 +316,7 @@ def render_tab_week_data():
                 i = str(rr.get("IATA", "")).strip().upper()
                 if len(i) == 3:
                     iata_set.add(i)
-        except Exception:
+        except (AttributeError, KeyError, TypeError, ValueError):
             pass
         try:
             if state.df_be is not None and not state.df_be.empty:
@@ -322,14 +325,10 @@ def render_tab_week_data():
                     i = str(rr.get("Dest_IATA", rr.get("IATA", ""))).strip().upper()
                     if len(i) == 3:
                         iata_set.add(i)
-        except Exception:
+        except (AttributeError, KeyError, TypeError, ValueError):
             pass
         allow_all_dest = len(iata_set) == 0
-        # Debug sets
-        try:
-            print("[Vols dispo] IATA BE D:", sorted(iata_set))
-        except Exception:
-            pass
+        logger.debug("[Vols dispo] IATA BE D: %s", sorted(iata_set))
 
         rows = []
         for _, r in vols_df.iterrows():
@@ -372,13 +371,10 @@ def render_tab_week_data():
             df_flights = df_flights.sort_values(["Destination", "Date", "Heure", "Numero_Vol"], kind="mergesort").reset_index(drop=True)
             if "HEURE_MIN" in df_flights.columns:
                 df_flights["HEURE_MIN"] = pd.to_numeric(df_flights["HEURE_MIN"], errors="coerce")
-        try:
-            print("[Vols dispo] Lignes retenues:", len(df_flights))
-            if not df_flights.empty:
-                print("[Vols dispo] Dates:", sorted(df_flights["Date"].unique().tolist()))
-                print("[Vols dispo] Dest:", sorted(df_flights["Destination"].unique().tolist()))
-        except Exception:
-            pass
+        logger.debug("[Vols dispo] Lignes retenues: %s", len(df_flights))
+        if not df_flights.empty:
+            logger.debug("[Vols dispo] Dates: %s", sorted(df_flights["Date"].unique().tolist()))
+            logger.debug("[Vols dispo] Dest: %s", sorted(df_flights["Destination"].unique().tolist()))
 
     else:
         df_flights = pd.DataFrame()

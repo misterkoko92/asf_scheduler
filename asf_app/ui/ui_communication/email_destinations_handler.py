@@ -9,15 +9,17 @@
 # - outlook.create_outlook_draft()
 # --------------------------------------------------
 
-from pathlib import Path
-
 import pandas as pd
-from asf_app.ui.ui_communication.outlook import create_outlook_draft
+
 from asf_app.ui.ui_communication.helpers_email_tables import build_comm_table_html
+from asf_app.ui.ui_communication.outlook import create_outlook_draft
 from asf_app.ui.ui_communication.pdf_attachments import (
     find_be_pdf_attachments,
     index_pdfs_by_be,
 )
+from utils.logging_utils import get_logger
+
+logger = get_logger("email_destinations_handler", console=False)
 
 
 
@@ -95,7 +97,7 @@ def generate_destination_email_for_destination(
     year: int,
     custom_subject: str | None = None,
     custom_body: str | None = None,
-    pdf_index: dict[str, list[Path]] | None = None,
+    pdf_index: dict[str, list[str]] | None = None,
 ):
     """
     Génère un mail en brouillon pour une destination donnée,
@@ -109,13 +111,13 @@ def generate_destination_email_for_destination(
     df_subset = df_comm[df_comm["Destination"].str.upper() == dest_up].copy()
 
     if df_subset.empty:
-        print(f"[Destinations] Aucun colis pour {destination}")
+        logger.info("Aucun colis destination: %s", destination)
         return False
 
     # Emails ParamDest
     to_list, cc_list = _get_emails_for_destination(df_paramdest, dest_up)
     if not to_list:
-        print(f"[Destinations] Aucun email 'To' trouvé pour {destination}")
+        logger.warning("Aucun email 'To' destination: %s", destination)
         return False
 
     # Sujet

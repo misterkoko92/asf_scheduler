@@ -1,0 +1,26 @@
+minimum_pre_commit_version: "3.6.0"
+default_stages: [pre-commit]
+
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: python3 tools/run_quality.py ruff
+        language: system
+        pass_filenames: false
+        stages: [pre-commit, manual]
+
+      - id: mypy
+        name: mypy
+        entry: python3 tools/run_quality.py mypy
+        language: system
+        pass_filenames: false
+        stages: [pre-commit, manual]
+
+      - id: secret-scan
+        name: secret scan
+        entry: python3 tools/scan_secrets.py
+        language: system
+        pass_filenames: false
+        stages: [pre-commit, manual]

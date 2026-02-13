@@ -1,10 +1,26 @@
 # scheduler/loaders/universal_loader.py
 # -*- coding: utf-8 -*-
 
-import pandas as pd
+import logging
 import re
+import unicodedata
+
+import pandas as pd
 
 from utils.ui_notifications import warn_ui
+
+logger = logging.getLogger("ASF-SCHEDULER")
+
+READ_EXCEL_ERRORS = (
+    FileNotFoundError,
+    OSError,
+    PermissionError,
+    ValueError,
+    TypeError,
+    ImportError,
+    pd.errors.ParserError,
+)
+
 
 def _warn_unmapped_columns(df: pd.DataFrame, mapping: dict, context: str = ""):
     """Log en console les colonnes non mappées pour diagnostic."""
@@ -13,8 +29,7 @@ def _warn_unmapped_columns(df: pd.DataFrame, mapping: dict, context: str = ""):
     unmapped = sorted(source_cols - mapped_sources)
     if unmapped:
         prefix = f"[UNMAPPED {context}] " if context else "[UNMAPPED] "
-        print(prefix + ", ".join(map(str, unmapped)))
-import unicodedata
+        logger.info("%s%s", prefix, ", ".join(map(str, unmapped)))
 
 
 def _resolve_sheet_name(path, sheet_name: str) -> str:
@@ -22,7 +37,7 @@ def _resolve_sheet_name(path, sheet_name: str) -> str:
         return sheet_name
     try:
         xls = pd.ExcelFile(path)
-    except Exception:
+    except READ_EXCEL_ERRORS:
         return sheet_name
     names = xls.sheet_names
     target = sheet_name.strip().lower()
@@ -96,8 +111,6 @@ def fuzzy_match_columns(df: pd.DataFrame, mapping: dict):
     - match inversé
     - colonnes inconnues ignorées sans erreur
     """
-    original_cols = list(df.columns)
-
     # colonnes Excel → colonnes normalisées
     norm_cols = {normalize_header(c): c for c in df.columns}
 
@@ -126,7 +139,7 @@ def fuzzy_match_columns(df: pd.DataFrame, mapping: dict):
             new_cols[best_match] = final_name
         else:
             # Ici on ignore simplement — robustesse maximale
-            print(f"[INFO] Colonne '{raw_key}' absente dans Excel — ignorée.")
+            logger.info("Colonne '%s' absente dans Excel - ignoree.", raw_key)
             continue
 
     # Renommage partiel
@@ -147,21 +160,34 @@ def load_and_normalize(path, sheet_name, mapping: dict, header=0):
     """
     try:
         df = pd.read_excel(path, sheet_name=sheet_name, header=header)
-    except Exception as e:
+    except READ_EXCEL_ERRORS as e:
         resolved_sheet = _resolve_sheet_name(path, sheet_name)
         if isinstance(sheet_name, str) and resolved_sheet != sheet_name:
             try:
                 df = pd.read_excel(path, sheet_name=resolved_sheet, header=header)
-                print(
-                    f"[INFO] Feuille '{sheet_name}' introuvable — utilisation de '{resolved_sheet}'."
+                logger.info(
+                    "Feuille '%s' introuvable - utilisation de '%s'.",
+                    sheet_name,
+                    resolved_sheet,
                 )
-            except Exception as e2:
+            except READ_EXCEL_ERRORS as e2:
                 warn_ui(f"Impossible de lire le fichier Excel : {path} (onglet: {sheet_name}).")
-                print(f"[ERROR] load_and_normalize : impossible de lire {path}\n{e}\n{e2}")
+                logger.error(
+                    "load_and_normalize: impossible de lire %s (sheet=%s): %s ; fallback error: %s",
+                    path,
+                    sheet_name,
+                    e,
+                    e2,
+                )
                 return pd.DataFrame()
         else:
             warn_ui(f"Impossible de lire le fichier Excel : {path} (onglet: {sheet_name}).")
-            print(f"[ERROR] load_and_normalize : impossible de lire {path}\n{e}")
+            logger.error(
+                "load_and_normalize: impossible de lire %s (sheet=%s): %s",
+                path,
+                sheet_name,
+                e,
+            )
             return pd.DataFrame()
 
     # Retire les colonnes vides type "Unnamed: xx"
@@ -183,7 +209,7 @@ def load_and_normalize(path, sheet_name, mapping: dict, header=0):
         if isinstance(target, str) and target.startswith("_IGNORE"):
             continue
         if target not in df.columns:
-            print(f"[WARN] Colonne manquante ajoutée : {target}")
+            logger.warning("Colonne manquante ajoutee: %s", target)
             df[target] = ""
 
     # Remplir NaN pour éviter toute erreur en aval

@@ -11,9 +11,9 @@ import pandas as pd
 
 from utils.datetime_utils import (
     coerce_datetime,
+    format_date_long_fr,
     format_date_series,
     format_date_value,
-    format_date_long_fr,
     format_time_value,
     parse_date_series,
     parse_time_series,
@@ -42,7 +42,7 @@ def _fmt_vol(val: object) -> str:
 
 
 def _wrap_body(lines: list[str]) -> str:
-    body = "<br>".join([str(l) for l in lines if l is not None])
+    body = "<br>".join([str(line) for line in lines if line is not None])
     return f"<div style='font-family: Aptos, Segoe UI, sans-serif; font-size: 12pt;'>{body}</div>"
 
 
@@ -61,6 +61,76 @@ def _build_action_sentence(
     if action == "Ajouter au planning":
         return f"Le BE {be_num}, destination {dest_iata}, sera ajouté le {new_date} sur le vol {vol_disp} avec {bene_short}."
     return f"{prefix} sera reprogrammé le {new_date} sur le vol {vol_disp} avec {bene_short}."
+
+
+def _build_action_selection_data(
+    *,
+    be_source: object,
+    prefill_action: object | None,
+) -> tuple[list[str], int]:
+    if str(be_source or "").strip().lower() == "planning":
+        action_options = ["Annulation", "Changement de date ou bénévole"]
+    else:
+        action_options = ["Ajouter au planning"]
+    prefill_action_str = str(prefill_action or "").strip()
+    action_idx = action_options.index(prefill_action_str) if prefill_action_str in action_options else 0
+    return action_options, action_idx
+
+
+def _coerce_int(value: object, default: int) -> int:
+    if value is None:
+        return int(default)
+    try:
+        if pd.isna(value):
+            return int(default)
+    except (TypeError, ValueError):
+        pass
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError, OverflowError):
+        try:
+            return int(float(str(value).strip()))
+        except (TypeError, ValueError, OverflowError):
+            return int(default)
+
+
+def _build_assignment_summary(
+    *,
+    selected_be: object,
+    dest_iata: str,
+    date_initial: object,
+    date_new: object,
+    vol_new: object,
+    current_vol: object,
+    bene_prenom_court: object,
+    bene_nom: object,
+    bene_choice: object,
+    action_choice: str,
+) -> dict[str, str]:
+    date_initial_long = _fmt_date_long(date_initial)
+    date_new_long = _fmt_date_long(date_new)
+    bene_short = (
+        f"{str(bene_prenom_court).strip()} {str(bene_nom).strip().upper()}".strip()
+        if (bene_prenom_court or bene_nom)
+        else str(bene_choice or "")
+    )
+    vol_disp = _fmt_vol(vol_new) if vol_new else (_fmt_vol(current_vol) if current_vol else "")
+    action_sentence = _build_action_sentence(
+        be_num=str(selected_be),
+        dest_iata=dest_iata,
+        date_initial=date_initial_long,
+        action=action_choice,
+        new_date=date_new_long or date_initial_long,
+        vol_disp=vol_disp or "(vol ?)",
+        bene_short=bene_short or "(bénévole ?)",
+    )
+    return {
+        "date_initial_long": date_initial_long,
+        "date_new_long": date_new_long,
+        "vol_disp": vol_disp,
+        "bene_short": bene_short,
+        "action_sentence": action_sentence,
+    }
 
 
 def _build_default_vol_tuple(
@@ -164,8 +234,61 @@ def _fill_bene_name_from_parambenev(
         prenom_court = row_b.get("Prenom_Court", pd.Series([""])).iloc[0]
         nom = row_b.get("Nom", pd.Series([""])).iloc[0]
         return str(prenom_court or ""), str(nom or "")
-    except Exception:
+    except (AttributeError, IndexError, KeyError, TypeError, ValueError):
         return bene_prenom_court, bene_nom
+
+
+def _resolve_assignment_from_plan_row(
+    *,
+    plan_row: pd.Series | None,
+    date_initial: object,
+    current_vol: object = "",
+    current_heure: object = "",
+    current_bene: object = "",
+    bene_prenom_court: object = "",
+    bene_nom: object = "",
+) -> dict[str, object]:
+    date_resolved = date_initial
+    current_vol_resolved = current_vol
+    current_heure_resolved = current_heure
+    current_bene_resolved = current_bene
+    bene_prenom_resolved = bene_prenom_court
+    bene_nom_resolved = bene_nom
+
+    if plan_row is not None:
+        date_resolved = plan_row.get("Date_Vol", date_resolved)
+        current_vol_resolved = plan_row.get("Numero_Vol", "")
+        current_heure_resolved = plan_row.get("Heure_Vol", plan_row.get("Heure", ""))
+        current_bene_resolved = plan_row.get("Benevole", "")
+        bene_prenom_resolved = plan_row.get(
+            "Benevole_Prenom_Court",
+            plan_row.get("Prenom_Court", ""),
+        )
+        bene_nom_resolved = plan_row.get("Benevole_Nom", plan_row.get("Nom", ""))
+
+    return {
+        "date_initial": date_resolved,
+        "current_vol": current_vol_resolved,
+        "current_heure": current_heure_resolved,
+        "current_bene": current_bene_resolved,
+        "bene_prenom_court": bene_prenom_resolved,
+        "bene_nom": bene_nom_resolved,
+    }
+
+
+def _resolve_current_bene_identity(
+    df_parambenev: pd.DataFrame | None,
+    *,
+    current_bene: object,
+    bene_prenom_court: object,
+    bene_nom: object,
+) -> tuple[str, str]:
+    return _fill_bene_name_from_parambenev(
+        df_parambenev,
+        bene_choice=str(current_bene or ""),
+        bene_prenom_court=str(bene_prenom_court or ""),
+        bene_nom=str(bene_nom or ""),
+    )
 
 
 def _split_emails(value: object) -> list[str]:
@@ -259,6 +382,112 @@ def _build_queue_labels(queue: list[dict[str, Any]]) -> list[str]:
         f"{i + 1}. {q.get('dest_iata')} - BE {q.get('be_num')} - {q.get('action')} - {q.get('date_new_long')}"
         for i, q in enumerate(queue)
     ]
+
+
+def _apply_queue_add_to_session(
+    session_state: dict[str, Any],
+    *,
+    queue: list[dict[str, Any]],
+    preview_path: Path | str | None,
+    week: int,
+    year: int,
+) -> None:
+    session_state["ship_update_queue"] = queue or []
+    if preview_path:
+        session_state["ship_update_queue_planning_path"] = str(preview_path)
+    else:
+        session_state.pop("ship_update_queue_planning_path", None)
+    session_state["ship_update_queue_week"] = int(week)
+    session_state["ship_update_queue_year"] = int(year)
+
+
+def _execute_queue_add_request(
+    session_state: dict[str, Any],
+    *,
+    queue: list[dict[str, Any]],
+    queue_item: dict[str, Any],
+    preview_path: Path | str | None,
+    week: int,
+    year: int,
+    add_queue_item_fn: Callable[..., tuple[list[dict[str, Any]] | None, str | None]] = _add_queue_item,
+    apply_queue_add_to_session_fn: Callable[..., None] = _apply_queue_add_to_session,
+) -> dict[str, Any]:
+    queue_path = session_state.get("ship_update_queue_planning_path")
+    new_queue, add_error = add_queue_item_fn(
+        queue,
+        queue_item,
+        preview_path=preview_path,
+        existing_queue_path=queue_path,
+    )
+    if add_error:
+        return {
+            "error": str(add_error),
+            "message": None,
+            "queue": queue,
+        }
+    apply_queue_add_to_session_fn(
+        session_state,
+        queue=new_queue or [],
+        preview_path=preview_path,
+        week=week,
+        year=year,
+    )
+    return {
+        "error": None,
+        "message": "Modification ajoutée à la liste.",
+        "queue": new_queue or [],
+    }
+
+
+def _queue_transition_after_action(
+    queue: list[dict[str, Any]],
+    *,
+    index: int,
+    action: str,
+) -> dict[str, Any]:
+    updated = list(queue)
+    prefill: dict[str, Any] | None = None
+    message: str | None = None
+
+    if action == "edit":
+        if 0 <= index < len(updated):
+            prefill = updated.pop(index)
+    elif action == "delete":
+        if 0 <= index < len(updated):
+            updated.pop(index)
+            message = "Modification supprimée."
+    elif action == "clear":
+        updated = []
+        message = "Liste vidée."
+
+    return {
+        "queue": updated,
+        "prefill": prefill,
+        "message": message,
+        "is_empty": len(updated) == 0,
+    }
+
+
+def _apply_queue_action_to_session(
+    session_state: dict[str, Any],
+    *,
+    queue: list[dict[str, Any]],
+    index: int,
+    action: str,
+    clear_payloads_on_clear: bool = False,
+) -> dict[str, Any]:
+    transition = _queue_transition_after_action(queue, index=index, action=action)
+
+    if action == "clear":
+        _clear_queue_state(session_state, clear_payloads=clear_payloads_on_clear)
+        return transition
+
+    session_state["ship_update_queue"] = transition["queue"]
+    if action == "edit" and transition["prefill"] is not None:
+        session_state["ship_update_prefill"] = transition["prefill"]
+    if transition["is_empty"]:
+        _clear_queue_state(session_state, clear_payloads=False)
+    return transition
 
 
 def _pop_prefill_values(session_state: dict[str, Any]) -> dict[str, Any]:
@@ -402,8 +631,8 @@ def _run_queue_apply_batch(
     export_pdf_fn: Callable[[Path], Path | str],
 ) -> dict[str, Any]:
     updates = _queue_to_batch_updates(deduped)
-    week = int(queue_week) if queue_week is not None else int(selected_week)
-    year = int(queue_year) if queue_year is not None else int(selected_year)
+    week = _coerce_int(queue_week, int(selected_week))
+    year = _coerce_int(queue_year, int(selected_year))
 
     try:
         updated_raw = apply_updates_fn(
@@ -420,7 +649,7 @@ def _run_queue_apply_batch(
             tdb_source_path=tdb_source_path,
         )
         updated_path = Path(updated_raw) if updated_raw else Path(queue_path)
-    except Exception as exc:
+    except (AttributeError, KeyError, OSError, RuntimeError, TypeError, ValueError) as exc:
         return {
             "error": f"Erreur lors de la mise à jour du planning : {exc}",
             "updated_path": None,
@@ -436,7 +665,7 @@ def _run_queue_apply_batch(
     try:
         generated = export_pdf_fn(updated_path)
         pdf_path = Path(generated) if generated else None
-    except Exception as exc_pdf:
+    except (OSError, RuntimeError, TypeError, ValueError) as exc_pdf:
         pdf_path = None
         pdf_error = str(exc_pdf)
 
@@ -456,6 +685,162 @@ def _run_queue_apply_batch(
         "week": week,
         "year": year,
     }
+
+
+def _execute_queue_apply_request(
+    *,
+    queue: list[dict[str, Any]],
+    queue_path: Path | str | None,
+    preview_path: Path | str | None,
+    queue_week: object,
+    queue_year: object,
+    selected_week: int,
+    selected_year: int,
+    df_vols: pd.DataFrame | None,
+    df_parambenev: pd.DataFrame | None,
+    df_dispos: pd.DataFrame | None,
+    df_paramdest: pd.DataFrame | None,
+    increment_q1: bool,
+    write_mag_central: bool,
+    tdb_source_path: Path | str | None,
+    apply_updates_fn: Callable[..., Path | str | None],
+    export_pdf_fn: Callable[[Path], Path | str],
+    run_queue_apply_batch_fn: Callable[..., dict[str, Any]] = _run_queue_apply_batch,
+) -> dict[str, Any]:
+    resolved_path, deduped, ignored, prepare_error = _prepare_queue_apply(
+        queue,
+        queue_path=queue_path,
+        preview_path=preview_path,
+    )
+    if prepare_error or not resolved_path:
+        return {
+            "error": prepare_error or "Impossible de trouver le fichier planning à mettre à jour.",
+            "warning": None,
+            "deduped": deduped,
+            "updated_path": None,
+            "pdf_path": None,
+            "pdf_error": None,
+            "payloads": [],
+        }
+
+    warning = _build_duplicate_be_warning(ignored)
+    apply_result = run_queue_apply_batch_fn(
+        queue_path=resolved_path,
+        deduped=deduped,
+        queue_week=queue_week,
+        queue_year=queue_year,
+        selected_week=selected_week,
+        selected_year=selected_year,
+        df_vols=df_vols,
+        df_parambenev=df_parambenev,
+        df_dispos=df_dispos,
+        df_paramdest=df_paramdest,
+        increment_q1=increment_q1,
+        write_mag_central=write_mag_central,
+        tdb_source_path=tdb_source_path,
+        apply_updates_fn=apply_updates_fn,
+        export_pdf_fn=export_pdf_fn,
+    )
+    error = apply_result.get("error")
+    if error:
+        return {
+            "error": str(error),
+            "warning": warning,
+            "deduped": deduped,
+            "updated_path": None,
+            "pdf_path": None,
+            "pdf_error": apply_result.get("pdf_error"),
+            "payloads": [],
+        }
+
+    return {
+        "error": None,
+        "warning": warning,
+        "deduped": deduped,
+        "updated_path": apply_result.get("updated_path"),
+        "pdf_path": apply_result.get("pdf_path"),
+        "pdf_error": apply_result.get("pdf_error"),
+        "payloads": apply_result.get("payloads", []),
+    }
+
+
+def _collect_apply_result_feedback(
+    apply_result: dict[str, Any],
+    *,
+    write_mag_central: bool,
+) -> dict[str, Any]:
+    updated_path = apply_result.get("updated_path")
+    pdf_path = apply_result.get("pdf_path")
+    deduped = apply_result.get("deduped", [])
+    pdf_error = apply_result.get("pdf_error")
+
+    success_messages: list[str] = []
+    info_messages: list[str] = []
+    warning_messages: list[str] = []
+    open_paths: list[Path] = []
+
+    if updated_path is not None:
+        updated = Path(updated_path)
+        success_messages.append(f"Planning Excel mis à jour : {updated.name}")
+        open_paths.append(updated)
+    if _should_show_mag_central_cleanup_info(
+        write_mag_central=write_mag_central,
+        deduped=deduped,
+    ):
+        info_messages.append(
+            "MAG CENTRAL source nettoyé : colonnes L et W–Z vidées (date départ vol / bénévole / vol / heure)."
+        )
+    if pdf_path is not None:
+        pdf = Path(pdf_path)
+        success_messages.append(f"PDF généré : {pdf.name}")
+        open_paths.append(pdf)
+    elif pdf_error:
+        warning_messages.append(f"PDF non généré automatiquement : {pdf_error}")
+
+    return {
+        "success_messages": success_messages,
+        "info_messages": info_messages,
+        "warning_messages": warning_messages,
+        "open_paths": open_paths,
+    }
+
+
+def _open_file_in_os(
+    path_obj: Path | str | None,
+    *,
+    platform_system_fn: Callable[[], str] | None = None,
+    popen_fn: Callable[[list[str]], Any] | None = None,
+    startfile_fn: Callable[[str], Any] | None = None,
+) -> bool:
+    if not path_obj:
+        return False
+    path_str = str(path_obj)
+    if not path_str.strip():
+        return False
+
+    try:
+        import os
+        import platform
+        import subprocess
+
+        platform_system = platform_system_fn or platform.system
+        system = str(platform_system()).strip()
+        run_popen = popen_fn or subprocess.Popen
+
+        if system == "Darwin":
+            run_popen(["open", path_str])
+            return True
+        if system == "Windows":
+            run_startfile = startfile_fn or getattr(os, "startfile", None)
+            if run_startfile is None:
+                return False
+            run_startfile(path_str)
+            return True
+
+        run_popen(["xdg-open", path_str])
+        return True
+    except (ImportError, OSError, RuntimeError, TypeError, ValueError):
+        return False
 
 
 def _build_notification_payloads(
@@ -504,11 +889,11 @@ def _notification_period_from_payloads(
     first = payloads[0] if isinstance(payloads[0], dict) else {}
     try:
         week = int(first.get("week", week))
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         week = int(default_week)
     try:
         year = int(first.get("year", year))
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         year = int(default_year)
     return week, year
 
@@ -547,7 +932,7 @@ def _resolve_planning_version_major(
     try:
         major, _ = parse_version_from_name(Path(planning_path))
         return int(major)
-    except Exception:
+    except (OSError, TypeError, ValueError):
         return 1
 
 
@@ -570,7 +955,7 @@ def _resolve_notification_pdf_path(
     if not pdf_path and planning and export_pdf_fn is not None:
         try:
             pdf_path = str(export_pdf_fn(Path(planning)))
-        except Exception:
+        except (OSError, RuntimeError, TypeError, ValueError):
             pdf_path = ""
     return pdf_path
 
@@ -679,6 +1064,116 @@ def _build_expediteur_notification_drafts(
     return drafts
 
 
+def _prepare_notification_context(
+    payloads: list[dict[str, Any]],
+    *,
+    default_week: int,
+    default_year: int,
+    df_parambenev: pd.DataFrame | None,
+    df_paramdest: pd.DataFrame | None,
+    df_paramexpediteur: pd.DataFrame | None,
+    parse_version_from_name: Callable[[Path], tuple[int, int]],
+    export_pdf_fn: Callable[[Path], Path | str] | None,
+    get_emails_for_destination: Callable[[pd.DataFrame | None, str], tuple[object, object]],
+    get_emails_for_expediteur: Callable[[pd.DataFrame | None, str], tuple[object, object]],
+) -> dict[str, Any]:
+    week, year = _notification_period_from_payloads(
+        payloads,
+        default_week=default_week,
+        default_year=default_year,
+    )
+    bene_emails = _collect_benevole_emails(payloads, df_parambenev)
+    asf_draft = _build_asf_notification_draft(
+        payloads,
+        bene_emails,
+        default_week=default_week,
+        default_year=default_year,
+        parse_version_from_name=parse_version_from_name,
+        export_pdf_fn=export_pdf_fn,
+    )
+    week = int(asf_draft.get("week", week))
+    year = int(asf_draft.get("year", year))
+    dest_drafts = _build_destination_notification_drafts(
+        payloads,
+        df_paramdest,
+        week=week,
+        year=year,
+        get_emails_for_destination=get_emails_for_destination,
+    )
+    exp_drafts = _build_expediteur_notification_drafts(
+        payloads,
+        df_paramexpediteur,
+        week=week,
+        year=year,
+        get_emails_for_expediteur=get_emails_for_expediteur,
+    )
+    return {
+        "week": week,
+        "year": year,
+        "asf_draft": asf_draft,
+        "dest_drafts": dest_drafts,
+        "exp_drafts": exp_drafts,
+    }
+
+
+def _send_outlook_draft(
+    draft: dict[str, Any],
+    *,
+    create_outlook_draft_fn: Callable[..., Any],
+) -> None:
+    create_outlook_draft_fn(
+        to_list=draft.get("to_list"),
+        cc_list=draft.get("cc_list"),
+        subject=draft.get("subject"),
+        body_html=draft.get("body_html"),
+        attachments=draft.get("attachments"),
+        use_signature=True,
+    )
+
+
+def _send_named_outlook_drafts(
+    drafts: list[dict[str, Any]],
+    *,
+    create_outlook_draft_fn: Callable[..., Any],
+) -> list[str]:
+    sent: list[str] = []
+    for draft in drafts:
+        _send_outlook_draft(draft, create_outlook_draft_fn=create_outlook_draft_fn)
+        name = str(draft.get("name", "")).strip()
+        if name:
+            sent.append(name)
+    return sent
+
+
+def _build_sent_drafts_feedback(
+    sent: list[str],
+    *,
+    success_prefix: str,
+    empty_message: str,
+) -> tuple[str, str]:
+    if sent:
+        return "success", f"{success_prefix} {', '.join(sent)}"
+    return "warning", empty_message
+
+
+def _send_named_outlook_drafts_with_feedback(
+    drafts: list[dict[str, Any]],
+    *,
+    create_outlook_draft_fn: Callable[..., Any],
+    success_prefix: str,
+    empty_message: str,
+) -> tuple[str, str]:
+    sent = _send_named_outlook_drafts(
+        drafts,
+        create_outlook_draft_fn=create_outlook_draft_fn,
+    )
+    return _build_sent_drafts_feedback(
+        sent,
+        success_prefix=success_prefix,
+        empty_message=empty_message,
+    )
+
+
 def _group_payloads_by_destination(payloads: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     groups: dict[str, list[dict[str, Any]]] = {}
     for item in payloads:
@@ -711,8 +1206,9 @@ def _normalize_be_key_for_select(val: object, *, year: object | None = None) -> 
     year_val = ""
     try:
         if year is not None and not pd.isna(year) and str(year).strip() not in ("", "NaT"):
-            year_val = str(int(year))[-2:]
-    except Exception:
+            year_int = _coerce_int(year, 0)
+            year_val = str(year_int)[-2:] if year_int > 0 else ""
+    except (TypeError, ValueError, OverflowError):
         year_val = ""
     if len(digits) >= 6:
         if digits.startswith("00") and year_val:
@@ -738,7 +1234,7 @@ def _dest_to_iata(dest_raw: str, df_paramdest: pd.DataFrame) -> str:
             .to_dict()
         )
         return mapping.get(dest, dest)
-    except Exception:
+    except (AttributeError, KeyError, TypeError, ValueError):
         return dest
 
 
@@ -761,6 +1257,37 @@ def _build_planif_be_options(
         label = format_be_label(dest, be_num, nb_colis, type_colis, status, date_str)
         options.append((dest, be_num, label, r))
     return sorted(options, key=lambda x: (x[0], x[1]))
+
+
+def _build_planifiable_be_selector_data(
+    df_be_planif: pd.DataFrame | None,
+    df_be_plan: pd.DataFrame | None,
+    *,
+    prefill_be: object | None,
+) -> dict[str, Any]:
+    if df_be_planif is None or df_be_planif.empty:
+        return {
+            "options": [],
+            "labels": [],
+            "values": [],
+            "selected_idx": 0,
+        }
+    planned_set = set()
+    if df_be_plan is not None and not df_be_plan.empty and "BE_Numero_Str" in df_be_plan.columns:
+        planned_set = set(df_be_plan["BE_Numero_Str"].astype(str))
+    be_options = _build_planif_be_options(df_be_planif, planned_set)
+    be_labels = [b[2] for b in be_options]
+    be_values = [b[1] for b in be_options]
+    selected_idx = 0
+    prefill_be_str = str(prefill_be) if prefill_be not in (None, "") else ""
+    if prefill_be_str and prefill_be_str in be_values:
+        selected_idx = be_values.index(prefill_be_str)
+    return {
+        "options": be_options,
+        "labels": be_labels,
+        "values": be_values,
+        "selected_idx": selected_idx,
+    }
 
 
 def _prepare_be_lookup(
@@ -836,6 +1363,37 @@ def _prepare_be_lookup(
         kind="mergesort",
     )
     return df_be_all.set_index("BE_Key"), None
+
+
+def _build_lookup_be_selector_data(
+    be_lookup: pd.DataFrame,
+    *,
+    prefill_be: object | None,
+) -> dict[str, Any]:
+    options = be_lookup.index.tolist()
+    selected_idx = 0
+    prefill_be_str = str(prefill_be) if prefill_be not in (None, "") else ""
+    if prefill_be_str and prefill_be_str in options:
+        selected_idx = options.index(prefill_be_str)
+    return {
+        "options": options,
+        "selected_idx": selected_idx,
+    }
+
+
+def _resolve_lookup_be_row(
+    be_lookup: pd.DataFrame,
+    *,
+    selected_be: object,
+) -> tuple[pd.Series | None, str]:
+    selected_be_str = str(selected_be or "")
+    if not selected_be_str or selected_be_str not in be_lookup.index:
+        return None, ""
+    be_row = be_lookup.loc[selected_be_str]
+    if isinstance(be_row, pd.DataFrame):
+        be_row = be_row.iloc[0]
+    be_source = str(be_row.get("Source", "")).lower()
+    return be_row, be_source
 
 
 def _format_be_option_label(num_str: str, be_lookup: pd.DataFrame) -> str:
@@ -922,7 +1480,7 @@ def _weeks_from_status_df(df_status: pd.DataFrame | None) -> set[tuple[int, int]
     for week_val, year_val in df_status[["Week", "Year"]].dropna().itertuples(index=False, name=None):
         try:
             weeks_set.add((int(week_val), int(year_val)))
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             continue
     return weeks_set
 
@@ -983,8 +1541,31 @@ def _load_export_planning_sheet(preview_path: Path | str | None) -> pd.DataFrame
         return None
     try:
         return pd.read_excel(path, sheet_name="Export planning")
-    except Exception:
+    except (FileNotFoundError, OSError, ValueError):
         return None
+
+
+def _load_be_sources_for_week(
+    *,
+    preview_path: Path | str | None,
+    df_preview: pd.DataFrame | None,
+    selected_week: int,
+    selected_year: int,
+    tdb_path: Path | str | None,
+    load_be_status_d_for_week_fn: Callable[..., pd.DataFrame],
+) -> dict[str, pd.DataFrame]:
+    df_export_planning = _load_export_planning_sheet(preview_path)
+    df_source_for_be = _select_source_for_be(df_export_planning, df_preview)
+    df_be_plan = _collect_be_from_planning(df_source_for_be, selected_week, selected_year)
+    df_be_d = load_be_status_d_for_week_fn(
+        selected_week,
+        selected_year,
+        tdb_path=tdb_path,
+    )
+    return {
+        "df_be_plan": df_be_plan,
+        "df_be_d": df_be_d,
+    }
 
 
 def _select_source_for_be(
@@ -1007,7 +1588,7 @@ def _bene_status(
     try:
         d = coerce_datetime(date_str).date()
         h = coerce_datetime(heure_str).time()
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         return "indisponible"
 
     rows = df_dispo[df_dispo["Benevole"] == name]

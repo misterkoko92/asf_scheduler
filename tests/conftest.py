@@ -2,18 +2,17 @@
 from __future__ import annotations
 
 import shutil
-from pathlib import Path
 
 import pandas as pd
 import pytest
 
 import scheduler.config_paths as cp
+from loaders import load_benevoles as lb
 from loaders import load_shipments as ls
 from loaders import load_vols as lv
-from loaders import load_benevoles as lb
+from loaders.load_benevoles import clear_benevoles_cache
 from loaders.load_params import clear_param_caches
 from loaders.load_shipments import clear_shipments_cache
-from loaders.load_benevoles import clear_benevoles_cache
 from loaders.load_vols import clear_vols_cache
 from scheduler import be_manager
 

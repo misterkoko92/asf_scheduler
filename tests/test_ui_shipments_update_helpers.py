@@ -4,55 +4,75 @@ from __future__ import annotations
 import pandas as pd
 
 from asf_app.ui.ui_shipments_update_helpers import (
-    _build_action_sentence,
-    _prepare_dispo,
-    _coerce_display_types,
-    _weeks_from_status_df,
-    _build_week_selector_data,
-    _build_planning_version_choices,
-    _format_preview_dataframe,
-    _load_export_planning_sheet,
-    _select_source_for_be,
+    _add_queue_item,
+    _apply_queue_action_to_session,
+    _apply_queue_add_to_session,
     _bene_status,
-    _collect_be_from_planning,
-    _find_row_in_df,
-    _build_default_vol_tuple,
-    _build_vol_selection_data,
-    _resolve_selected_vol,
+    _build_action_selection_data,
+    _build_action_sentence,
+    _build_asf_notification_draft,
+    _build_assignment_summary,
+    _build_bene_meta,
     _build_bene_options,
+    _build_body_lines_multi,
     _build_default_bene_label,
+    _build_default_vol_tuple,
+    _build_destination_notification_drafts,
+    _build_duplicate_be_warning,
+    _build_expediteur_notification_drafts,
+    _build_lookup_be_selector_data,
+    _build_notification_payloads,
+    _build_planif_be_options,
+    _build_planifiable_be_selector_data,
+    _build_planning_version_choices,
+    _build_queue_dataframe,
+    _build_queue_item,
+    _build_queue_labels,
+    _build_sent_drafts_feedback,
+    _build_vol_selection_data,
+    _build_week_selector_data,
+    _clear_queue_state,
+    _coerce_display_types,
+    _collect_apply_result_feedback,
+    _collect_be_from_planning,
+    _collect_benevole_emails,
+    _dedupe_queue_by_be,
+    _dest_to_iata,
+    _execute_queue_add_request,
+    _execute_queue_apply_request,
     _extract_bene_choice,
     _fill_bene_name_from_parambenev,
-    _merge_emails,
-    _normalize_be_key_for_select,
-    _dedupe_queue_by_be,
-    _queue_to_batch_updates,
-    _prepare_queue_apply,
-    _build_duplicate_be_warning,
-    _run_queue_apply_batch,
-    _should_show_mag_central_cleanup_info,
-    _build_notification_payloads,
-    _build_body_lines_multi,
-    _notification_period_from_payloads,
-    _collect_benevole_emails,
-    _resolve_planning_version_major,
-    _resolve_notification_pdf_path,
-    _build_asf_notification_draft,
-    _build_destination_notification_drafts,
-    _build_expediteur_notification_drafts,
-    _add_queue_item,
-    _clear_queue_state,
-    _build_queue_dataframe,
-    _build_queue_labels,
-    _pop_prefill_values,
-    _build_queue_item,
+    _find_row_in_df,
+    _format_be_option_label,
+    _format_preview_dataframe,
     _group_payloads_by_destination,
     _group_payloads_by_expediteur,
-    _dest_to_iata,
-    _build_planif_be_options,
+    _load_be_sources_for_week,
+    _load_export_planning_sheet,
+    _merge_emails,
+    _normalize_be_key_for_select,
+    _notification_period_from_payloads,
+    _open_file_in_os,
+    _pop_prefill_values,
     _prepare_be_lookup,
-    _format_be_option_label,
-    _build_bene_meta,
+    _prepare_dispo,
+    _prepare_notification_context,
+    _prepare_queue_apply,
+    _queue_to_batch_updates,
+    _queue_transition_after_action,
+    _resolve_assignment_from_plan_row,
+    _resolve_current_bene_identity,
+    _resolve_lookup_be_row,
+    _resolve_notification_pdf_path,
+    _resolve_planning_version_major,
+    _resolve_selected_vol,
+    _run_queue_apply_batch,
+    _select_source_for_be,
+    _send_named_outlook_drafts,
+    _send_named_outlook_drafts_with_feedback,
+    _send_outlook_draft,
+    _should_show_mag_central_cleanup_info,
+    _weeks_from_status_df,
 )
 
 
@@ -89,6 +109,22 @@ def test_build_action_sentence_variants():
         bene_short="P DUPONT",
     )
     assert "sera reprogrammé le 24 janvier 2026 sur le vol AF 652" in repl
+
+
+def test_build_action_selection_data_by_source_and_prefill():
+    options_plan, idx_plan = _build_action_selection_data(
+        be_source="planning",
+        prefill_action="Changement de date ou bénévole",
+    )
+    assert options_plan == ["Annulation", "Changement de date ou bénévole"]
+    assert idx_plan == 1
+
+    options_mag, idx_mag = _build_action_selection_data(
+        be_source="mag_central",
+        prefill_action="Annulation",
+    )
+    assert options_mag == ["Ajouter au planning"]
+    assert idx_mag == 0
 
 
 def test_merge_emails_splits_and_dedupes_case_insensitive():
@@ -169,6 +205,79 @@ def test_prepare_queue_apply_validates_path_and_dedupes(tmp_path):
     assert deduped2 == []
     assert ignored2 == []
     assert "Impossible de trouver le fichier planning" in str(err2)
+
+
+def test_queue_transition_after_action_edit_delete_clear_and_invalid():
+    queue = [{"be_num": "250001"}, {"be_num": "250002"}]
+
+    edited = _queue_transition_after_action(queue, index=1, action="edit")
+    assert [q["be_num"] for q in edited["queue"]] == ["250001"]
+    assert edited["prefill"]["be_num"] == "250002"
+    assert edited["message"] is None
+    assert edited["is_empty"] is False
+
+    deleted = _queue_transition_after_action(queue, index=0, action="delete")
+    assert [q["be_num"] for q in deleted["queue"]] == ["250002"]
+    assert deleted["prefill"] is None
+    assert deleted["message"] == "Modification supprimée."
+    assert deleted["is_empty"] is False
+
+    cleared = _queue_transition_after_action(queue, index=0, action="clear")
+    assert cleared["queue"] == []
+    assert cleared["prefill"] is None
+    assert cleared["message"] == "Liste vidée."
+    assert cleared["is_empty"] is True
+
+    invalid = _queue_transition_after_action(queue, index=9, action="delete")
+    assert invalid["queue"] == queue
+    assert invalid["message"] is None
+
+
+def test_apply_queue_action_to_session_edit_delete_and_clear():
+    session_state = {
+        "ship_update_queue": [{"be_num": "250001"}, {"be_num": "250002"}],
+        "ship_update_queue_planning_path": "/tmp/planning.xlsx",
+        "ship_update_queue_week": 4,
+        "ship_update_queue_year": 2026,
+        "ship_update_payloads": [{"id": 1}],
+    }
+
+    transition_edit = _apply_queue_action_to_session(
+        session_state,
+        queue=session_state["ship_update_queue"],
+        index=1,
+        action="edit",
+    )
+    assert [q["be_num"] for q in session_state["ship_update_queue"]] == ["250001"]
+    assert session_state["ship_update_prefill"]["be_num"] == "250002"
+    assert transition_edit["prefill"]["be_num"] == "250002"
+
+    transition_delete = _apply_queue_action_to_session(
+        session_state,
+        queue=session_state["ship_update_queue"],
+        index=0,
+        action="delete",
+    )
+    assert session_state["ship_update_queue"] == []
+    assert transition_delete["is_empty"] is True
+    assert "ship_update_queue_planning_path" not in session_state
+    assert "ship_update_payloads" in session_state
+
+    session_state["ship_update_queue"] = [{"be_num": "250010"}]
+    session_state["ship_update_queue_planning_path"] = "/tmp/planning.xlsx"
+    session_state["ship_update_queue_week"] = 5
+    session_state["ship_update_queue_year"] = 2026
+    transition_clear = _apply_queue_action_to_session(
+        session_state,
+        queue=session_state["ship_update_queue"],
+        index=0,
+        action="clear",
+        clear_payloads_on_clear=True,
+    )
+    assert transition_clear["message"] == "Liste vidée."
+    assert session_state["ship_update_queue"] == []
+    assert "ship_update_queue_planning_path" not in session_state
+    assert "ship_update_payloads" not in session_state
 
 
 def test_build_duplicate_be_warning_message():
@@ -328,6 +437,146 @@ def test_run_queue_apply_batch_apply_error_and_pdf_error(tmp_path):
     assert out_pdf["payloads"][0]["planning_pdf_path"] == ""
 
 
+def test_execute_queue_apply_request_handles_missing_path_and_run_outcomes(tmp_path):
+    # Missing planning path -> prepare error
+    out_missing = _execute_queue_apply_request(
+        queue=[{"be_num": "250001"}],
+        queue_path=None,
+        preview_path=None,
+        queue_week=4,
+        queue_year=2026,
+        selected_week=4,
+        selected_year=2026,
+        df_vols=None,
+        df_parambenev=None,
+        df_dispos=None,
+        df_paramdest=None,
+        increment_q1=True,
+        write_mag_central=True,
+        tdb_source_path=None,
+        apply_updates_fn=lambda *_args, **_kwargs: None,
+        export_pdf_fn=lambda p: p,
+    )
+    assert "Impossible de trouver le fichier planning" in str(out_missing["error"])
+    assert out_missing["payloads"] == []
+
+    planning = tmp_path / "planning.xlsx"
+    planning.touch()
+    queue = [
+        {"be_num": "250001", "action": "A"},
+        {"be_num": "BE 250001", "action": "B"},
+    ]
+
+    captured: dict[str, object] = {}
+
+    def fake_run_success(**kwargs):
+        captured.update(kwargs)
+        return {
+            "error": None,
+            "updated_path": planning,
+            "pdf_path": None,
+            "pdf_error": "pdf-failed",
+            "payloads": [{"be_num": "250001"}],
+            "week": 4,
+            "year": 2026,
+        }
+
+    out_success = _execute_queue_apply_request(
+        queue=queue,
+        queue_path=planning,
+        preview_path=None,
+        queue_week=4,
+        queue_year=2026,
+        selected_week=4,
+        selected_year=2026,
+        df_vols=pd.DataFrame(),
+        df_parambenev=pd.DataFrame(),
+        df_dispos=pd.DataFrame(),
+        df_paramdest=pd.DataFrame(),
+        increment_q1=True,
+        write_mag_central=True,
+        tdb_source_path=None,
+        apply_updates_fn=lambda *_args, **_kwargs: planning,
+        export_pdf_fn=lambda p: p,
+        run_queue_apply_batch_fn=fake_run_success,
+    )
+    assert out_success["error"] is None
+    assert "Plusieurs modifications sur le même BE" in str(out_success["warning"])
+    assert len(out_success["deduped"]) == 1
+    assert out_success["updated_path"] == planning
+    assert out_success["pdf_error"] == "pdf-failed"
+    assert out_success["payloads"] == [{"be_num": "250001"}]
+    assert captured["queue_path"] == planning
+    assert len(captured["deduped"]) == 1
+
+    def fake_run_error(**_kwargs):
+        return {
+            "error": "boom",
+            "updated_path": None,
+            "pdf_path": None,
+            "pdf_error": None,
+            "payloads": [],
+        }
+
+    out_error = _execute_queue_apply_request(
+        queue=queue,
+        queue_path=planning,
+        preview_path=None,
+        queue_week=4,
+        queue_year=2026,
+        selected_week=4,
+        selected_year=2026,
+        df_vols=pd.DataFrame(),
+        df_parambenev=pd.DataFrame(),
+        df_dispos=pd.DataFrame(),
+        df_paramdest=pd.DataFrame(),
+        increment_q1=True,
+        write_mag_central=True,
+        tdb_source_path=None,
+        apply_updates_fn=lambda *_args, **_kwargs: planning,
+        export_pdf_fn=lambda p: p,
+        run_queue_apply_batch_fn=fake_run_error,
+    )
+    assert out_error["error"] == "boom"
+    assert out_error["updated_path"] is None
+    assert out_error["payloads"] == []
+
+
+def test_collect_apply_result_feedback_messages_and_open_paths(tmp_path):
+    updated = tmp_path / "updated.xlsx"
+    updated.touch()
+    pdf = tmp_path / "updated.pdf"
+    pdf.touch()
+
+    feedback = _collect_apply_result_feedback(
+        {
+            "updated_path": updated,
+            "pdf_path": pdf,
+            "pdf_error": None,
+            "deduped": [{"action": "Annulation"}],
+        },
+        write_mag_central=True,
+    )
+    assert any("Planning Excel mis à jour" in msg for msg in feedback["success_messages"])
+    assert any("PDF généré" in msg for msg in feedback["success_messages"])
+    assert any("MAG CENTRAL source nettoyé" in msg for msg in feedback["info_messages"])
+    assert feedback["warning_messages"] == []
+    assert feedback["open_paths"] == [updated, pdf]
+
+    feedback_pdf_error = _collect_apply_result_feedback(
+        {
+            "updated_path": updated,
+            "pdf_path": None,
+            "pdf_error": "no pdf",
+            "deduped": [{"action": "Ajouter au planning"}],
+        },
+        write_mag_central=True,
+    )
+    assert feedback_pdf_error["info_messages"] == []
+    assert feedback_pdf_error["open_paths"] == [updated]
+    assert feedback_pdf_error["warning_messages"] == ["PDF non généré automatiquement : no pdf"]
+
+
 def test_build_notification_payloads_adds_paths_and_period():
     out = _build_notification_payloads(
         [{"be_num": "250001"}],
@@ -453,6 +702,68 @@ def test_build_queue_dataframe_and_labels():
     assert labels == ["1. RUN - BE 250001 - Annulation - 23 janvier 2026"]
 
 
+def test_apply_queue_add_to_session_sets_metadata():
+    state: dict[str, object] = {}
+    queue = [{"be_num": "250001"}]
+    _apply_queue_add_to_session(
+        state,
+        queue=queue,
+        preview_path="/tmp/planning.xlsx",
+        week=4,
+        year=2026,
+    )
+    assert state["ship_update_queue"] == queue
+    assert state["ship_update_queue_planning_path"] == "/tmp/planning.xlsx"
+    assert state["ship_update_queue_week"] == 4
+    assert state["ship_update_queue_year"] == 2026
+
+    _apply_queue_add_to_session(
+        state,
+        queue=[],
+        preview_path=None,
+        week=5,
+        year=2027,
+    )
+    assert state["ship_update_queue"] == []
+    assert "ship_update_queue_planning_path" not in state
+    assert state["ship_update_queue_week"] == 5
+    assert state["ship_update_queue_year"] == 2027
+
+
+def test_execute_queue_add_request_success_and_error(tmp_path):
+    state: dict[str, object] = {}
+    queue = [{"be_num": "250001"}]
+    queue_item = {"be_num": "250002"}
+    preview_path = tmp_path / "planning.xlsx"
+    preview_path.touch()
+
+    ok = _execute_queue_add_request(
+        state,
+        queue=queue,
+        queue_item=queue_item,
+        preview_path=preview_path,
+        week=4,
+        year=2026,
+    )
+    assert ok["error"] is None
+    assert ok["message"] == "Modification ajoutée à la liste."
+    assert len(ok["queue"]) == 2
+    assert state["ship_update_queue_planning_path"] == str(preview_path)
+    assert state["ship_update_queue_week"] == 4
+    assert state["ship_update_queue_year"] == 2026
+
+    ko = _execute_queue_add_request(
+        state,
+        queue=queue,
+        queue_item=queue_item,
+        preview_path=tmp_path / "missing.xlsx",
+        week=4,
+        year=2026,
+    )
+    assert "Impossible de trouver le fichier planning" in str(ko["error"])
+    assert ko["message"] is None
+
+
 def test_group_payloads_by_destination_and_expediteur():
     payloads = [
         {"dest_iata": "run", "action_sentence": "A", "expediteur": "HIA"},
@@ -508,6 +819,60 @@ def test_build_planif_be_options_builds_labels_and_sorts():
     assert out[0][1] == "250001"
     assert "(déjà au planning)" in out[0][2]
     assert "(non planifié)" in out[1][2]
+
+
+def test_build_planifiable_selector_and_lookup_selector_data():
+    df_be_planif = pd.DataFrame(
+        [
+            {"Destination": "DLA", "BE_Numero": "250001", "BE_Nb_Colis": 2, "BE_Type": "FRET", "Date_Vol": "2026-01-23"},
+            {"Destination": "RUN", "BE_Numero": "250002", "BE_Nb_Colis": 1, "BE_Type": "MM", "Date_Vol": "2026-01-24"},
+        ]
+    )
+    df_be_plan = pd.DataFrame([{"BE_Numero_Str": "250001"}])
+
+    selector = _build_planifiable_be_selector_data(
+        df_be_planif,
+        df_be_plan,
+        prefill_be="250002",
+    )
+    assert len(selector["options"]) == 2
+    assert selector["values"] == ["250001", "250002"]
+    assert selector["selected_idx"] == 1
+    assert "(déjà au planning)" in selector["labels"][0]
+
+    be_lookup = pd.DataFrame(
+        [
+            {"BE_Key": "250001", "Source": "planning"},
+            {"BE_Key": "250002", "Source": "mag_central"},
+        ]
+    ).set_index("BE_Key")
+    lookup_selector = _build_lookup_be_selector_data(be_lookup, prefill_be="250002")
+    assert lookup_selector["options"] == ["250001", "250002"]
+    assert lookup_selector["selected_idx"] == 1
+
+
+def test_resolve_lookup_be_row_handles_series_dataframe_and_missing():
+    be_lookup = pd.DataFrame(
+        [
+            {"BE_Key": "250001", "Source": "planning", "Val": 1},
+            {"BE_Key": "250001", "Source": "mag_central", "Val": 2},
+            {"BE_Key": "250002", "Source": "mag_central", "Val": 3},
+        ]
+    ).set_index("BE_Key")
+
+    row, source = _resolve_lookup_be_row(be_lookup, selected_be="250001")
+    assert row is not None
+    assert row["Val"] == 1
+    assert source == "planning"
+
+    row2, source2 = _resolve_lookup_be_row(be_lookup, selected_be="250002")
+    assert row2 is not None
+    assert row2["Val"] == 3
+    assert source2 == "mag_central"
+
+    row_missing, source_missing = _resolve_lookup_be_row(be_lookup, selected_be="999999")
+    assert row_missing is None
+    assert source_missing == ""
 
 
 def test_prepare_be_lookup_returns_reason_for_empty_and_missing_be():
@@ -639,7 +1004,9 @@ def test_build_vol_selection_data_and_resolve_selected_vol():
 
 def test_build_bene_options_and_default_label():
     df_parambenev = pd.DataFrame([{"Benevole": "ALICE"}, {"Benevole": "BOB"}])
-    status_for = lambda name: "disponible" if name == "ALICE" else "indisponible"
+
+    def status_for(name):
+        return "disponible" if name == "ALICE" else "indisponible"
 
     out_planif = _build_bene_options(df_parambenev, be_scope="A planifier", status_for=status_for)
     assert out_planif == ["ALICE", "BOB"]
@@ -709,6 +1076,76 @@ def test_prepare_dispo_parses_date_and_time_columns():
     assert str(out.loc[0, "Dep"]) == "12:30:00"
 
 
+def test_resolve_assignment_from_plan_row_and_bene_identity():
+    plan_row = pd.Series(
+        {
+            "Date_Vol": "2026-01-24",
+            "Numero_Vol": "AF652",
+            "Heure_Vol": "11:00",
+            "Benevole": "ALICE",
+            "Benevole_Prenom_Court": "A",
+            "Benevole_Nom": "Dupont",
+        }
+    )
+    ctx = _resolve_assignment_from_plan_row(
+        plan_row=plan_row,
+        date_initial="2026-01-23",
+    )
+    assert ctx["date_initial"] == "2026-01-24"
+    assert ctx["current_vol"] == "AF652"
+    assert ctx["current_heure"] == "11:00"
+    assert ctx["current_bene"] == "ALICE"
+    assert ctx["bene_prenom_court"] == "A"
+    assert ctx["bene_nom"] == "Dupont"
+
+    df_parambenev = pd.DataFrame(
+        [{"Benevole": "ALICE", "Prenom_Court": "AL", "Nom": "Alice"}]
+    )
+    prenom, nom = _resolve_current_bene_identity(
+        df_parambenev,
+        current_bene="ALICE",
+        bene_prenom_court="",
+        bene_nom="",
+    )
+    assert prenom == "AL"
+    assert nom == "Alice"
+
+
+def test_build_assignment_summary_formats_sentence_with_fallbacks():
+    out = _build_assignment_summary(
+        selected_be="250001",
+        dest_iata="RUN",
+        date_initial="2026-01-23",
+        date_new="2026-01-24",
+        vol_new="AF652",
+        current_vol="",
+        bene_prenom_court="P",
+        bene_nom="Dupont",
+        bene_choice="",
+        action_choice="Changement de date ou bénévole",
+    )
+    assert out["date_initial_long"] != ""
+    assert out["date_new_long"] != ""
+    assert out["vol_disp"] == "AF 652"
+    assert out["bene_short"] == "P DUPONT"
+    assert "sera reprogrammé" in out["action_sentence"]
+
+    out_fallback = _build_assignment_summary(
+        selected_be="250001",
+        dest_iata="RUN",
+        date_initial="2026-01-23",
+        date_new="2026-01-23",
+        vol_new="",
+        current_vol="",
+        bene_prenom_court="",
+        bene_nom="",
+        bene_choice="",
+        action_choice="Annulation",
+    )
+    assert "(vol ?)" not in out_fallback["action_sentence"]
+    assert "sera annulé" in out_fallback["action_sentence"]
+
+
 def test_coerce_display_types_forces_phone_like_columns_to_str():
     df = pd.DataFrame(
         [{"Telephone": 600000000, "Phone Main": 123456789, "Other": 42}]
@@ -773,6 +1210,63 @@ def test_format_preview_dataframe_formats_date_time_and_phone_columns():
     assert out.loc[0, "Other"] == 42
 
 
+def test_open_file_in_os_dispatch_and_errors():
+    popen_calls: list[list[str]] = []
+    start_calls: list[str] = []
+
+    def fake_popen(cmd: list[str]):
+        popen_calls.append(cmd)
+        return None
+
+    def fake_start(path: str):
+        start_calls.append(path)
+
+    assert (
+        _open_file_in_os(
+            "/tmp/file.xlsx",
+            platform_system_fn=lambda: "Darwin",
+            popen_fn=fake_popen,
+        )
+        is True
+    )
+    assert popen_calls[-1] == ["open", "/tmp/file.xlsx"]
+
+    assert (
+        _open_file_in_os(
+            "C:/tmp/file.xlsx",
+            platform_system_fn=lambda: "Windows",
+            startfile_fn=fake_start,
+            popen_fn=fake_popen,
+        )
+        is True
+    )
+    assert start_calls == ["C:/tmp/file.xlsx"]
+
+    assert (
+        _open_file_in_os(
+            "/tmp/file.pdf",
+            platform_system_fn=lambda: "Linux",
+            popen_fn=fake_popen,
+        )
+        is True
+    )
+    assert popen_calls[-1] == ["xdg-open", "/tmp/file.pdf"]
+
+    def failing_popen(_cmd: list[str]):
+        raise RuntimeError("boom")
+
+    assert (
+        _open_file_in_os(
+            "/tmp/file.xlsx",
+            platform_system_fn=lambda: "Darwin",
+            popen_fn=failing_popen,
+        )
+        is False
+    )
+    assert _open_file_in_os("", platform_system_fn=lambda: "Linux") is False
+    assert _open_file_in_os(None, platform_system_fn=lambda: "Linux") is False
+
+
 def test_load_export_planning_sheet_and_select_source_for_be(tmp_path):
     path = tmp_path / "planning.xlsx"
     with pd.ExcelWriter(path) as writer:
@@ -792,6 +1286,44 @@ def test_load_export_planning_sheet_and_select_source_for_be(tmp_path):
     assert selected_fallback is preview
 
     assert _load_export_planning_sheet(tmp_path / "missing.xlsx") is None
+
+
+def test_load_be_sources_for_week_uses_export_planning_and_status_loader(tmp_path):
+    path = tmp_path / "planning.xlsx"
+    with pd.ExcelWriter(path) as writer:
+        pd.DataFrame(
+            [
+                {
+                    "BE_Numero": "260001",
+                    "Destination": "RUN",
+                    "Date_Vol": "23/01/26",
+                    "Vol": "AF652",
+                    "Heure_Vol": "18:20",
+                }
+            ]
+        ).to_excel(writer, sheet_name="Export planning", index=False)
+
+    captured: dict[str, object] = {}
+
+    def _fake_status_loader(week, year, *, tdb_path):
+        captured["week"] = week
+        captured["year"] = year
+        captured["tdb_path"] = tdb_path
+        return pd.DataFrame([{"BE_Numero_Str": "260002"}])
+
+    out = _load_be_sources_for_week(
+        preview_path=path,
+        df_preview=pd.DataFrame(),
+        selected_week=4,
+        selected_year=2026,
+        tdb_path="/tmp/tdb.xlsx",
+        load_be_status_d_for_week_fn=_fake_status_loader,
+    )
+    assert captured == {"week": 4, "year": 2026, "tdb_path": "/tmp/tdb.xlsx"}
+    assert len(out["df_be_plan"]) == 1
+    assert out["df_be_plan"].iloc[0]["BE_Numero_Str"] == "260001"
+    assert len(out["df_be_d"]) == 1
+    assert out["df_be_d"].iloc[0]["BE_Numero_Str"] == "260002"
 
 
 def test_bene_status_handles_already_assigned_available_unknown_and_outside():
@@ -984,8 +1516,11 @@ def test_notification_period_from_payloads_defaults_and_overrides():
 
 
 def test_resolve_planning_version_major_uses_parser_and_fallback():
-    parse_ok = lambda _path: (7, 0)
-    parse_ko = lambda _path: (_ for _ in ()).throw(ValueError("boom"))
+    def parse_ok(_path):
+        return (7, 0)
+
+    def parse_ko(_path):
+        raise ValueError("boom")
 
     assert (
         _resolve_planning_version_major(
@@ -1116,3 +1651,109 @@ def test_build_expediteur_notification_drafts_formats_and_filters():
     assert drafts[0]["cc_list"] == ["messmed@aviation-sans-frontieres-fr.org"]
     assert drafts[0]["subject"] == "HIA - MAJ Planning S04"
     assert "A1" in drafts[0]["body_html"]
+
+
+def test_prepare_notification_context_and_send_helpers(tmp_path):
+    planning = tmp_path / "planning.xlsx"
+    planning.touch()
+    payloads = [
+        {
+            "dest_iata": "RUN",
+            "expediteur": "HIA",
+            "action_sentence": "A1",
+            "week": 4,
+            "year": 2026,
+            "planning_path": str(planning),
+            "planning_pdf_path": "",
+            "bene_choice": "ALICE",
+            "current_bene": "",
+            "action": "Ajouter au planning",
+        }
+    ]
+    df_parambenev = pd.DataFrame([{"Benevole": "ALICE", "Email": "alice@test.com"}])
+
+    def _get_dest(_df, dest):
+        return ("dest@test.com", "destcc@test.com") if dest == "RUN" else ("", "")
+
+    def _get_exp(_df, exp):
+        return ("exp@test.com", "") if exp == "HIA" else ("", "")
+
+    context = _prepare_notification_context(
+        payloads,
+        default_week=1,
+        default_year=2000,
+        df_parambenev=df_parambenev,
+        df_paramdest=pd.DataFrame(),
+        df_paramexpediteur=pd.DataFrame(),
+        parse_version_from_name=lambda _p: (2, 0),
+        export_pdf_fn=None,
+        get_emails_for_destination=_get_dest,
+        get_emails_for_expediteur=_get_exp,
+    )
+    assert context["week"] == 4
+    assert context["year"] == 2026
+    assert context["asf_draft"]["subject"] == "MAJ Planning S04-02"
+    assert len(context["dest_drafts"]) == 1
+    assert len(context["exp_drafts"]) == 1
+
+    calls: list[dict] = []
+
+    def _fake_outlook(**kwargs):
+        calls.append(kwargs)
+
+    _send_outlook_draft(
+        context["asf_draft"],
+        create_outlook_draft_fn=_fake_outlook,
+    )
+    sent_dest = _send_named_outlook_drafts(
+        context["dest_drafts"],
+        create_outlook_draft_fn=_fake_outlook,
+    )
+    assert len(calls) == 2
+    assert calls[0]["use_signature"] is True
+    assert sent_dest == ["RUN"]
+
+    level_ok, msg_ok = _build_sent_drafts_feedback(
+        sent_dest,
+        success_prefix="Brouillons Escale ouverts :",
+        empty_message="Aucun email ParamDest trouvé.",
+    )
+    assert level_ok == "success"
+    assert "RUN" in msg_ok
+
+    level_empty, msg_empty = _build_sent_drafts_feedback(
+        [],
+        success_prefix="Brouillons Expéditeur ouverts :",
+        empty_message="Aucun email expéditeur trouvé (ou expéditeur ASF).",
+    )
+    assert level_empty == "warning"
+    assert "Aucun email expéditeur" in msg_empty
+
+
+def test_send_named_outlook_drafts_with_feedback_variants():
+    calls: list[dict] = []
+
+    def _fake_outlook(**kwargs):
+        calls.append(kwargs)
+
+    level_ok, message_ok = _send_named_outlook_drafts_with_feedback(
+        [
+            {"name": "RUN", "to_list": ["dest@test.com"], "cc_list": [], "subject": "s", "body_html": "b", "attachments": None},
+            {"name": "DLA", "to_list": ["dest2@test.com"], "cc_list": [], "subject": "s2", "body_html": "b2", "attachments": None},
+        ],
+        create_outlook_draft_fn=_fake_outlook,
+        success_prefix="Brouillons Escale ouverts :",
+        empty_message="Aucun email ParamDest trouvé.",
+    )
+    assert level_ok == "success"
+    assert "RUN" in message_ok and "DLA" in message_ok
+    assert len(calls) == 2
+
+    level_empty, message_empty = _send_named_outlook_drafts_with_feedback(
+        [],
+        create_outlook_draft_fn=_fake_outlook,
+        success_prefix="Brouillons Expéditeur ouverts :",
+        empty_message="Aucun email expéditeur trouvé (ou expéditeur ASF).",
+    )
+    assert level_empty == "warning"
+    assert "Aucun email expéditeur" in message_empty

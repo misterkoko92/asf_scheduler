@@ -14,7 +14,41 @@ defaults:
   run:
     shell: bash
 jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install quality tooling
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: Run pre-commit quality checks
+        run: |
+          PRE_COMMIT_HOME=.tmp_asf/.pre-commit-cache .venv/bin/pre-commit run --all-files --show-diff-on-failure
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run repository secret scan
+        run: |
+          python3 tools/scan_secrets.py
+
   build:
+    needs: [quality, security]
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:

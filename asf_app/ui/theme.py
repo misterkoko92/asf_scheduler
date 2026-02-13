@@ -9,7 +9,6 @@ ou de rester sur l’apparence actuelle.
 
 import streamlit as st
 
-
 CSS_BASE = """
 <style>
 div.stButton > button[kind="primary"],

@@ -1,13 +1,19 @@
 # loaders/load_benevoles.py
 # -*- coding: utf-8 -*-
 
-import pandas as pd
+import logging
 from pathlib import Path
-from scheduler.config_paths import PLANNING_BENEVOLES, SHEET_BENEV_DISPO
+
+import pandas as pd
+
 from loaders.universal_loader import load_and_normalize
 from scheduler.column_map import column_map_benev_dispo
-from utils.datetime_utils import parse_date_series, normalize_hour_str, parse_time_series
+from scheduler.config_paths import PLANNING_BENEVOLES, SHEET_BENEV_DISPO
 from utils.cache_utils import file_mtime
+from utils.datetime_utils import normalize_hour_str, parse_date_series, parse_time_series
+
+logger = logging.getLogger("ASF-SCHEDULER")
+
 
 def load_benevoles(*, planning_path: Path | None = None) -> pd.DataFrame:
     """
@@ -25,14 +31,14 @@ def load_benevoles(*, planning_path: Path | None = None) -> pd.DataFrame:
         header=0
     )
 
-    print("\n=== DEBUG LOAD_BENEVOLES (PATCH) ===")
-    print(f"Lignes brutes : {len(df)}")
-    print(f"Colonnes normalisées : {list(df.columns)}")
+    logger.debug("DEBUG LOAD_BENEVOLES start")
+    logger.debug("Lignes brutes: %s", len(df))
+    logger.debug("Colonnes normalisees: %s", list(df.columns))
     try:
-        print(df.head(5))
-    except Exception:
-        pass
-    print("====================================\n")
+        logger.debug("Apercu benevoles:\n%s", df.head(5).to_string(index=False))
+    except (AttributeError, TypeError, ValueError):
+        logger.debug("Apercu benevoles indisponible")
+    logger.debug("DEBUG LOAD_BENEVOLES end")
 
     # 1) Identifie les colonnes d'heures :
     hour_cols = [c for c in df.columns if "Heure" in c or "ARRIV" in c.upper() or "DEPART" in c.upper()]
@@ -86,7 +92,7 @@ try:
         path = planning_path or PLANNING_BENEVOLES
         return _get_benevoles_cached(str(path), file_mtime(path))
 
-except Exception:
+except (ImportError, ModuleNotFoundError):
     def get_benevoles_cached(planning_path: Path | None = None) -> pd.DataFrame:
         return load_benevoles(planning_path=planning_path)
 
@@ -96,5 +102,5 @@ def clear_benevoles_cache() -> None:
     if cached is not None and hasattr(cached, "clear"):
         try:
             cached.clear()
-        except Exception:
+        except (AttributeError, RuntimeError, TypeError):
             pass

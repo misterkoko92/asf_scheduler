@@ -5,79 +5,80 @@ Permet d'annuler ou de reprogrammer un BE déjà planifié (statut P) et
 de préparer les brouillons Outlook associés.
 """
 
-from typing import Optional, Tuple, List
 from pathlib import Path
+from typing import List, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
 
+from asf_app.config.runtime import get_tableau_de_bord_src
+from asf_app.services.planning_exports_service import (
+    available_weeks_from_exports,
+    find_planning_files_for_week,
+    load_planning_preview_with_path,
+    parse_version_from_name,
+)
+from asf_app.services.shipments_update_service import (
+    apply_planning_updates_batch,
+    load_be_status,
+    load_be_status_d_for_week,
+)
+from asf_app.state import get_excel_source_paths, get_state
 from asf_app.ui.loader import load_parameters
-from asf_app.ui.ui_planning.state_planning import get_planning_state
 from asf_app.ui.ui_communication.email_destinations_handler import _get_emails_for_destination
 from asf_app.ui.ui_communication.email_expediteurs_handler import _get_emails_for_expediteur
 from asf_app.ui.ui_communication.outlook import create_outlook_draft
-from loaders.load_benevoles import get_benevoles_cached
-from loaders.load_vols import get_vols_df_cached
-from asf_app.state import get_state, get_excel_source_paths
-from asf_app.config.runtime import get_tableau_de_bord_src
-from utils.ui_helpers import build_iata_city_maps
-from utils.export_pdf import export_first_sheet_to_pdf
-from scheduler.planning_schema import normalize_planning_df
+from asf_app.ui.ui_planning.state_planning import get_planning_state
 from asf_app.ui.ui_shipments_update_helpers import (
-    _norm_be,
+    _apply_queue_action_to_session,
+    _bene_status,
+    _build_action_selection_data,
+    _build_assignment_summary,
+    _build_bene_meta,
+    _build_bene_options,
+    _build_default_bene_label,
+    _build_default_vol_tuple,
+    _build_lookup_be_selector_data,
+    _build_planifiable_be_selector_data,
+    _build_planning_version_choices,
+    _build_queue_dataframe,
+    _build_queue_item,
+    _build_queue_labels,
+    _build_vol_selection_data,
+    _build_week_selector_data,
+    _clear_queue_state,
+    _collect_apply_result_feedback,
+    _dest_to_iata,
+    _execute_queue_add_request,
+    _execute_queue_apply_request,
+    _extract_bene_choice,
+    _fill_bene_name_from_parambenev,
+    _find_row_in_df,
     _fmt_date_long,
     _fmt_time,
     _fmt_vol,
-    _build_action_sentence,
-    _build_default_vol_tuple,
-    _build_vol_selection_data,
-    _resolve_selected_vol,
-    _build_bene_options,
-    _build_default_bene_label,
-    _extract_bene_choice,
-    _fill_bene_name_from_parambenev,
-    _prepare_dispo,
-    _bene_status,
-    _collect_be_from_planning,
-    _find_row_in_df,
-    _weeks_from_status_df,
-    _build_week_selector_data,
-    _build_planning_version_choices,
-    _format_preview_dataframe,
-    _load_export_planning_sheet,
-    _select_source_for_be,
-    _prepare_queue_apply,
-    _build_duplicate_be_warning,
-    _run_queue_apply_batch,
-    _should_show_mag_central_cleanup_info,
-    _collect_benevole_emails,
-    _notification_period_from_payloads,
-    _build_asf_notification_draft,
-    _build_destination_notification_drafts,
-    _build_expediteur_notification_drafts,
-    _add_queue_item,
-    _clear_queue_state,
-    _build_queue_dataframe,
-    _build_queue_labels,
-    _pop_prefill_values,
-    _build_queue_item,
-    _dest_to_iata,
-    _build_planif_be_options,
-    _prepare_be_lookup,
     _format_be_option_label,
-    _build_bene_meta,
+    _format_preview_dataframe,
+    _load_be_sources_for_week,
+    _norm_be,
+    _open_file_in_os,
+    _pop_prefill_values,
+    _prepare_be_lookup,
+    _prepare_dispo,
+    _prepare_notification_context,
+    _resolve_assignment_from_plan_row,
+    _resolve_current_bene_identity,
+    _resolve_lookup_be_row,
+    _resolve_selected_vol,
+    _send_named_outlook_drafts_with_feedback,
+    _send_outlook_draft,
+    _weeks_from_status_df,
 )
-from asf_app.services.shipments_update_service import (
-    load_be_status,
-    load_be_status_d_for_week,
-    apply_planning_updates_batch,
-)
-from asf_app.services.planning_exports_service import (
-    available_weeks_from_exports,
-    parse_version_from_name,
-    find_planning_files_for_week,
-    load_planning_preview_with_path,
-)
+from loaders.load_benevoles import get_benevoles_cached
+from loaders.load_vols import get_vols_df_cached
+from scheduler.planning_schema import normalize_planning_df
+from utils.export_pdf import export_first_sheet_to_pdf
+from utils.ui_helpers import build_iata_city_maps
 
 
 # ---------------------------------------------------------------------------
@@ -140,7 +141,7 @@ def _build_vol_options(dest_iata: str, df_vols: pd.DataFrame, df_planning: pd.Da
         df_vols = pd.DataFrame()
     try:
         vol_source = df_vols.copy()
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         vol_source = pd.DataFrame()
 
     if vol_source.empty:
@@ -264,10 +265,16 @@ def render_tab_shipments_update():
             st.warning("Aucun aperçu disponible pour cette semaine.")
 
     # BE issus du planning sélectionné (priorité à "Export planning") + BE statut D (MAG CENTRAL)
-    df_export_planning = _load_export_planning_sheet(preview_path)
-    df_source_for_be = _select_source_for_be(df_export_planning, df_preview)
-    df_be_plan = _collect_be_from_planning(df_source_for_be, selected_week, selected_year)
-    df_be_d = _load_be_status_d_for_week(selected_week, selected_year, tdb_path=paths.tableau_de_bord)
+    be_sources = _load_be_sources_for_week(
+        preview_path=preview_path,
+        df_preview=df_preview,
+        selected_week=selected_week,
+        selected_year=selected_year,
+        tdb_path=paths.tableau_de_bord,
+        load_be_status_d_for_week_fn=_load_be_status_d_for_week,
+    )
+    df_be_plan = be_sources["df_be_plan"]
+    df_be_d = be_sources["df_be_d"]
 
     prefill_values = _pop_prefill_values(st.session_state)
     prefill_action = prefill_values.get("action")
@@ -300,25 +307,22 @@ def render_tab_shipments_update():
         if df_be_planif is None or df_be_planif.empty:
             st.info("Aucun BE statut D trouvé.")
             return
-        planned_set = set()
-        if df_be_plan is not None and not df_be_plan.empty and "BE_Numero_Str" in df_be_plan.columns:
-            planned_set = set(df_be_plan["BE_Numero_Str"].astype(str))
-
-        be_options = _build_planif_be_options(df_be_planif, planned_set)
-        if not be_options:
+        selector_data = _build_planifiable_be_selector_data(
+            df_be_planif,
+            df_be_plan,
+            prefill_be=(prefill_be_num or prefill_be_key),
+        )
+        be_options = selector_data["options"]
+        be_labels = selector_data["labels"]
+        be_values = selector_data["values"]
+        if not be_labels:
             st.info("Aucun BE statut D trouvé.")
             return
-        be_labels = [b[2] for b in be_options]
-        be_values = [b[1] for b in be_options]
-        selected_idx = 0
-        prefill_be = prefill_be_num or prefill_be_key
-        if prefill_be and prefill_be in be_values:
-            selected_idx = be_values.index(prefill_be)
         with mode_col_be:
             selected_be_label = st.selectbox(
                 "Sélectionner un BE",
                 options=be_labels,
-                index=selected_idx,
+                index=selector_data["selected_idx"],
             )
         idx_sel = be_labels.index(selected_be_label)
         selected_be = be_values[idx_sel]
@@ -334,23 +338,23 @@ def render_tab_shipments_update():
             return
 
         with mode_col_be:
-            be_options_list = be_lookup.index.tolist()
-            prefill_be = prefill_be_key or prefill_be_num
-            selected_idx = be_options_list.index(prefill_be) if prefill_be in be_options_list else 0
+            selector_data = _build_lookup_be_selector_data(
+                be_lookup,
+                prefill_be=(prefill_be_key or prefill_be_num),
+            )
             selected_be = st.selectbox(
                 "Sélectionner un BE",
-                be_options_list,
+                selector_data["options"],
                 format_func=lambda num_str: _format_be_option_label(num_str, be_lookup),
-                index=selected_idx,
+                index=selector_data["selected_idx"],
             )
 
         if not selected_be:
             return
 
-        be_row = be_lookup.loc[selected_be]
-        if isinstance(be_row, pd.DataFrame):
-            be_row = be_row.iloc[0]
-        be_source = str(be_row.get("Source", "")).lower()
+        be_row, be_source = _resolve_lookup_be_row(be_lookup, selected_be=selected_be)
+        if be_row is None:
+            return
 
     if not selected_be or be_row is None:
         return
@@ -358,7 +362,6 @@ def render_tab_shipments_update():
     dest_raw = be_row.get("Destination", be_row.get("Dest_IATA_Label", ""))
     dest_iata = _dest_to_iata(dest_raw, df_paramdest)
     date_initial = be_row.get("Date_Vol", be_row.get("BE_Date_Vol", ""))
-    date_initial_long = _fmt_date_long(date_initial)
     expediteur_name = str(be_row.get("BE_Expediteur", "") or "").strip()
 
     plan_row = _match_planning_row(df_planning, selected_be)
@@ -368,29 +371,33 @@ def render_tab_shipments_update():
     bene_prenom_court = ""
     bene_nom = ""
 
-    if plan_row is not None:
-        date_initial = plan_row.get("Date_Vol", date_initial)
-        date_initial_long = _fmt_date_long(date_initial)
-        current_vol = plan_row.get("Numero_Vol", "")
-        current_heure = plan_row.get("Heure_Vol", plan_row.get("Heure", ""))
-        current_bene = plan_row.get("Benevole", "")
-        bene_prenom_court = plan_row.get("Benevole_Prenom_Court", plan_row.get("Prenom_Court", ""))
-        bene_nom = plan_row.get("Benevole_Nom", plan_row.get("Nom", ""))
+    assignment_ctx = _resolve_assignment_from_plan_row(
+        plan_row=plan_row,
+        date_initial=date_initial,
+        current_vol=current_vol,
+        current_heure=current_heure,
+        current_bene=current_bene,
+        bene_prenom_court=bene_prenom_court,
+        bene_nom=bene_nom,
+    )
+    date_initial = assignment_ctx["date_initial"]
+    current_vol = assignment_ctx["current_vol"]
+    current_heure = assignment_ctx["current_heure"]
+    current_bene = assignment_ctx["current_bene"]
+    bene_prenom_court = assignment_ctx["bene_prenom_court"]
+    bene_nom = assignment_ctx["bene_nom"]
 
-    if not bene_prenom_court or not bene_nom:
-        try:
-            row_b = df_parambenev[df_parambenev["Benevole"] == current_bene]
-            if not row_b.empty:
-                bene_prenom_court = row_b.get("Prenom_Court", pd.Series([""])).iloc[0]
-                bene_nom = row_b.get("Nom", pd.Series([""])).iloc[0]
-        except Exception:
-            pass
+    bene_prenom_court, bene_nom = _resolve_current_bene_identity(
+        df_parambenev,
+        current_bene=current_bene,
+        bene_prenom_court=bene_prenom_court,
+        bene_nom=bene_nom,
+    )
 
-    if be_source == "planning":
-        action_options = ["Annulation", "Changement de date ou bénévole"]
-    else:
-        action_options = ["Ajouter au planning"]
-    action_idx = action_options.index(prefill_action) if prefill_action in action_options else 0
+    action_options, action_idx = _build_action_selection_data(
+        be_source=be_source,
+        prefill_action=prefill_action,
+    )
     action_choice = st.radio("Action", action_options, horizontal=True, index=action_idx)
 
     vol_options = []
@@ -452,35 +459,26 @@ def render_tab_shipments_update():
     bene_meta = _build_bene_meta(df_parambenev, bene_choice)
     bene_changed = (bene_choice or "") != (current_bene or "")
 
-    bene_short = f"{str(bene_prenom_court).strip()} {str(bene_nom).strip().upper()}".strip() if (bene_prenom_court or bene_nom) else bene_choice
-    vol_disp = _fmt_vol(vol_new) if vol_new else (_fmt_vol(current_vol) if current_vol else "")
-    date_new_long = _fmt_date_long(date_new)
-    action_sentence = _build_action_sentence(
-        be_num=str(selected_be),
+    summary = _build_assignment_summary(
+        selected_be=selected_be,
         dest_iata=dest_iata,
-        date_initial=date_initial_long,
-        action=action_choice,
-        new_date=date_new_long or date_initial_long,
-        vol_disp=vol_disp or "(vol ?)",
-        bene_short=bene_short or "(bénévole ?)",
+        date_initial=date_initial,
+        date_new=date_new,
+        vol_new=vol_new,
+        current_vol=current_vol,
+        bene_prenom_court=bene_prenom_court,
+        bene_nom=bene_nom,
+        bene_choice=bene_choice,
+        action_choice=action_choice,
     )
+    date_initial_long = summary["date_initial_long"]
+    date_new_long = summary["date_new_long"]
+    vol_disp = summary["vol_disp"]
+    bene_short = summary["bene_short"]
+    action_sentence = summary["action_sentence"]
 
     st.markdown(f"**Action prévue :** {action_sentence}")
     btn_disabled = action_requires_assignment and (not date_new_long or not vol_new or not bene_choice)
-
-    def _open_file(path_obj: Path | None):
-        if not path_obj:
-            return
-        try:
-            import platform, subprocess, os
-            if platform.system() == "Darwin":
-                subprocess.Popen(["open", str(path_obj)])
-            elif platform.system() == "Windows":
-                os.startfile(str(path_obj))  # type: ignore[attr-defined]
-            else:
-                subprocess.Popen(["xdg-open", str(path_obj)])
-        except Exception:
-            pass
 
     plan_row_full = _find_row_in_df(df_preview, selected_be) if df_preview is not None else None
     queue_item = _build_queue_item(
@@ -521,25 +519,29 @@ def render_tab_shipments_update():
         )
     with col_clear:
         if st.button("Vider la liste"):
-            _clear_queue_state(st.session_state, clear_payloads=True)
-            st.success("Liste vidée.")
+            transition = _apply_queue_action_to_session(
+                st.session_state,
+                queue=queue,
+                index=0,
+                action="clear",
+                clear_payloads_on_clear=True,
+            )
+            if transition["message"]:
+                st.success(transition["message"])
 
     if add_clicked:
-        queue_path = st.session_state.get("ship_update_queue_planning_path")
-        new_queue, add_error = _add_queue_item(
-            queue,
-            queue_item,
+        add_result = _execute_queue_add_request(
+            st.session_state,
+            queue=queue,
+            queue_item=queue_item,
             preview_path=preview_path,
-            existing_queue_path=queue_path,
+            week=selected_week,
+            year=selected_year,
         )
-        if add_error:
-            st.error(add_error)
+        if add_result["error"]:
+            st.error(str(add_result["error"]))
             return
-        st.session_state["ship_update_queue"] = new_queue or []
-        st.session_state["ship_update_queue_planning_path"] = str(preview_path)
-        st.session_state["ship_update_queue_week"] = selected_week
-        st.session_state["ship_update_queue_year"] = selected_year
-        st.success("Modification ajoutée à la liste.")
+        st.success(str(add_result["message"]))
 
     queue = st.session_state.get("ship_update_queue", [])
     if queue:
@@ -557,24 +559,35 @@ def render_tab_shipments_update():
         col_edit, col_del, col_clear2 = st.columns([1, 1, 1])
         with col_edit:
             if st.button("Éditer"):
-                item = queue.pop(sel_idx)
-                st.session_state["ship_update_queue"] = queue
-                if not queue:
-                    _clear_queue_state(st.session_state, clear_payloads=False)
-                st.session_state["ship_update_prefill"] = item
+                _apply_queue_action_to_session(
+                    st.session_state,
+                    queue=queue,
+                    index=sel_idx,
+                    action="edit",
+                )
                 st.rerun()
         with col_del:
             if st.button("Supprimer"):
-                queue.pop(sel_idx)
-                st.session_state["ship_update_queue"] = queue
-                if not queue:
-                    _clear_queue_state(st.session_state, clear_payloads=False)
-                st.success("Modification supprimée.")
+                transition = _apply_queue_action_to_session(
+                    st.session_state,
+                    queue=queue,
+                    index=sel_idx,
+                    action="delete",
+                )
+                if transition["message"]:
+                    st.success(transition["message"])
                 st.rerun()
         with col_clear2:
             if st.button("Vider la liste", key="ship_update_clear_queue_2"):
-                _clear_queue_state(st.session_state, clear_payloads=True)
-                st.success("Liste vidée.")
+                transition = _apply_queue_action_to_session(
+                    st.session_state,
+                    queue=queue,
+                    index=sel_idx,
+                    action="clear",
+                    clear_payloads_on_clear=True,
+                )
+                if transition["message"]:
+                    st.success(transition["message"])
                 st.rerun()
 
         col_apply, col_q1, col_mag = st.columns([1, 1, 2])
@@ -597,22 +610,10 @@ def render_tab_shipments_update():
             )
 
         if apply_clicked:
-            queue_path, deduped, ignored, prepare_error = _prepare_queue_apply(
-                queue,
+            apply_result = _execute_queue_apply_request(
+                queue=queue,
                 queue_path=st.session_state.get("ship_update_queue_planning_path"),
                 preview_path=preview_path,
-            )
-            if prepare_error or not queue_path:
-                st.error(prepare_error or "Impossible de trouver le fichier planning à mettre à jour.")
-                return
-
-            dup_warning = _build_duplicate_be_warning(ignored)
-            if dup_warning:
-                st.warning(dup_warning)
-
-            apply_result = _run_queue_apply_batch(
-                queue_path=queue_path,
-                deduped=deduped,
                 queue_week=st.session_state.get("ship_update_queue_week", selected_week),
                 queue_year=st.session_state.get("ship_update_queue_year", selected_year),
                 selected_week=selected_week,
@@ -628,24 +629,24 @@ def render_tab_shipments_update():
                 export_pdf_fn=export_first_sheet_to_pdf,
             )
 
+            if apply_result["warning"]:
+                st.warning(str(apply_result["warning"]))
             if apply_result["error"]:
                 st.error(str(apply_result["error"]))
                 return
 
-            updated_path = apply_result["updated_path"]
-            pdf_path = apply_result["pdf_path"]
-            st.success(f"Planning Excel mis à jour : {updated_path.name}")
-            if _should_show_mag_central_cleanup_info(
+            feedback = _collect_apply_result_feedback(
+                apply_result,
                 write_mag_central=write_mag_central,
-                deduped=deduped,
-            ):
-                st.info("MAG CENTRAL source nettoyé : colonnes L et W–Z vidées (date départ vol / bénévole / vol / heure).")
-            if pdf_path:
-                st.success(f"PDF généré : {pdf_path.name}")
-                _open_file(updated_path)
-                _open_file(pdf_path)
-            elif apply_result["pdf_error"]:
-                st.warning(f"PDF non généré automatiquement : {apply_result['pdf_error']}")
+            )
+            for message in feedback["success_messages"]:
+                st.success(str(message))
+            for message in feedback["info_messages"]:
+                st.info(str(message))
+            for message in feedback["warning_messages"]:
+                st.warning(str(message))
+            for path_obj in feedback["open_paths"]:
+                _open_file_in_os(path_obj)
 
             payloads = apply_result["payloads"]
             st.session_state["ship_update_payloads"] = payloads
@@ -659,85 +660,54 @@ def render_tab_shipments_update():
     st.divider()
     st.subheader("Notifications")
 
-    week, year = _notification_period_from_payloads(
+    notifications = _prepare_notification_context(
         payloads,
         default_week=selected_week,
         default_year=selected_year,
-    )
-    bene_emails = _collect_benevole_emails(payloads, df_parambenev)
-    asf_draft = _build_asf_notification_draft(
-        payloads,
-        bene_emails,
-        default_week=selected_week,
-        default_year=selected_year,
+        df_parambenev=df_parambenev,
+        df_paramdest=df_paramdest,
+        df_paramexpediteur=df_paramexpediteur,
         parse_version_from_name=_parse_version_from_name,
         export_pdf_fn=export_first_sheet_to_pdf,
+        get_emails_for_destination=_get_emails_for_destination,
+        get_emails_for_expediteur=_get_emails_for_expediteur,
     )
-    week = int(asf_draft["week"])
-    year = int(asf_draft["year"])
+    asf_draft = notifications["asf_draft"]
+    dest_drafts = notifications["dest_drafts"]
+    exp_drafts = notifications["exp_drafts"]
 
     col_asf, col_dest, col_exp = st.columns(3)
 
     with col_asf:
         if st.button("Prévenir ASF + Bénévole", key="btn_mail_asf"):
-            create_outlook_draft(
-                to_list=asf_draft["to_list"],
-                cc_list=asf_draft["cc_list"],
-                subject=asf_draft["subject"],
-                body_html=asf_draft["body_html"],
-                attachments=asf_draft["attachments"],
-                use_signature=True,
+            _send_outlook_draft(
+                asf_draft,
+                create_outlook_draft_fn=create_outlook_draft,
             )
             st.success("Brouillon ASF ouvert.")
 
     with col_dest:
-        dest_drafts = _build_destination_notification_drafts(
-            payloads,
-            df_paramdest,
-            week=week,
-            year=year,
-            get_emails_for_destination=_get_emails_for_destination,
-        )
-
         if st.button("Prévenir Escale", key="btn_mail_dest"):
-            sent = []
-            for draft in dest_drafts:
-                create_outlook_draft(
-                    to_list=draft["to_list"],
-                    cc_list=draft["cc_list"],
-                    subject=draft["subject"],
-                    body_html=draft["body_html"],
-                    attachments=draft["attachments"],
-                    use_signature=True,
-                )
-                sent.append(str(draft["name"]))
-            if sent:
-                st.success(f"Brouillons Escale ouverts : {', '.join(sent)}")
+            level, message = _send_named_outlook_drafts_with_feedback(
+                dest_drafts,
+                create_outlook_draft_fn=create_outlook_draft,
+                success_prefix="Brouillons Escale ouverts :",
+                empty_message="Aucun email ParamDest trouvé.",
+            )
+            if level == "success":
+                st.success(message)
             else:
-                st.warning("Aucun email ParamDest trouvé.")
+                st.warning(message)
 
     with col_exp:
-        exp_drafts = _build_expediteur_notification_drafts(
-            payloads,
-            df_paramexpediteur,
-            week=week,
-            year=year,
-            get_emails_for_expediteur=_get_emails_for_expediteur,
-        )
-
         if st.button("Prévenir Expéditeur", key="btn_mail_exp"):
-            sent_exp = []
-            for draft in exp_drafts:
-                create_outlook_draft(
-                    to_list=draft["to_list"],
-                    cc_list=draft["cc_list"],
-                    subject=draft["subject"],
-                    body_html=draft["body_html"],
-                    attachments=draft["attachments"],
-                    use_signature=True,
-                )
-                sent_exp.append(str(draft["name"]))
-            if sent_exp:
-                st.success(f"Brouillons Expéditeur ouverts : {', '.join(sent_exp)}")
+            level, message = _send_named_outlook_drafts_with_feedback(
+                exp_drafts,
+                create_outlook_draft_fn=create_outlook_draft,
+                success_prefix="Brouillons Expéditeur ouverts :",
+                empty_message="Aucun email expéditeur trouvé (ou expéditeur ASF).",
+            )
+            if level == "success":
+                st.success(message)
             else:
-                st.warning("Aucun email expéditeur trouvé (ou expéditeur ASF).")
+                st.warning(message)

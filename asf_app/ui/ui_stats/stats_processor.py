@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 
 import pandas as pd
+
 from utils.datetime_utils import coerce_datetime, format_date_series
-import numpy as np
 
 
 # ===============================================================
@@ -51,7 +51,7 @@ def compute_transfer_delay(df):
         dt_vol = coerce_datetime(df["date"] + " " + df["heure"], errors="coerce")
         dt_trans = coerce_datetime(df.get("date_transfert", None), errors="coerce")
         return (dt_vol - dt_trans).dt.total_seconds() / 3600  # heures
-    except Exception:
+    except (TypeError, ValueError, KeyError, AttributeError):
         return pd.Series(dtype=float)
 
 

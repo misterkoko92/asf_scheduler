@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from scheduler.solver_ortools import solve_planning_ortools
-from scheduler.planning_schema import normalize_planning_df, validate_planning_df
-from asf_app.ui.ui_communication.clean_planning_df import build_df_comm
-from loaders.load_params import load_param_dest_from_path, load_param_benev_from_path
 import scheduler.config_paths as cp
+from asf_app.ui.ui_communication.clean_planning_df import build_df_comm
+from loaders.load_params import load_param_benev_from_path, load_param_dest_from_path
+from scheduler.planning_schema import normalize_planning_df, validate_planning_df
+from scheduler.solver_ortools import solve_planning_ortools
 
 
 def test_full_chain_ortools_to_communication(sample_onedrive):

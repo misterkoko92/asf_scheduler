@@ -1,4 +1,5 @@
 from html import escape
+
 import pandas as pd
 
 from utils.identifiers import format_vol_display

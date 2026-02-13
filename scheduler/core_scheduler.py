@@ -3,19 +3,18 @@
 
 from __future__ import annotations
 
-from typing import Tuple, Dict, Any, Optional
-import logging
-from pathlib import Path
 import json
+import logging
 import os
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
 
 import pandas as pd
 
 from scheduler import config
-from scheduler.planning_schema import normalize_planning_df, validate_planning_df
-from scheduler.solver_router import solve_planning_ortools, get_solver_version
 from scheduler.data_sources import DataSource
-
+from scheduler.planning_schema import normalize_planning_df, validate_planning_df
+from scheduler.solver_router import get_solver_version, solve_planning_ortools
 
 # =====================================================================
 # LOGFILE CONFIG
@@ -76,11 +75,12 @@ class Scheduler:
     # RUN GLOBAL
     # ------------------------------------------------------------
     def run(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        print("=== PLANNING AUTOMATISE ===")
-        print(
-            f"Mode execution : {self.mode} | "
-            f"rarity_mode={self.rarity_mode} | "
-            f"simulation_id={self.simulation_id}"
+        logger.info("=== PLANNING AUTOMATISE ===")
+        logger.info(
+            "Mode execution : %s | rarity_mode=%s | simulation_id=%s",
+            self.mode,
+            self.rarity_mode,
+            self.simulation_id,
         )
         logger.info("=== DEBUT D'UNE EXECUTION ===")
         logger.info(
@@ -151,14 +151,14 @@ class Scheduler:
         )
         logger.info("=== FIN EXECUTION ===")
 
-        print(f"-> Planning : {len(planning)} lignes")
-        print(f"-> Bilan    : {len(bilan)} lignes")
+        logger.info("-> Planning : %s lignes", len(planning))
+        logger.info("-> Bilan    : %s lignes", len(bilan))
 
         # Debug json optionnel
         try:
             with open("engine_run_stats.json", "w", encoding="utf-8") as fp:
                 json.dump(run_stats, fp, indent=2, ensure_ascii=False)
-        except Exception:
+        except (OSError, TypeError, ValueError):
             pass
 
         return planning, bilan

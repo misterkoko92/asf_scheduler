@@ -6,8 +6,9 @@ import datetime as dt
 import pandas as pd
 import pytest
 
+import asf_app.services.be_placement_service as be_service
+from asf_app.services.be_placement_service import BEPlacementError, place_be
 from scheduler import config
-from asf_app.services.be_placement_service import place_be, BEPlacementError
 
 
 def _planning(rows):
@@ -147,3 +148,11 @@ def test_place_be_auto_respects_capacity(monkeypatch):
 
     with pytest.raises(BEPlacementError):
         place_be(planning, "250040", 1, "DLA", None, None, "")
+
+
+def test_norm_str_returns_empty_on_runtime_error():
+    class _BadStr:
+        def __str__(self):
+            raise RuntimeError("boom")
+
+    assert be_service._norm_str(_BadStr()) == ""

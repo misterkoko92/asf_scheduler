@@ -2,20 +2,20 @@
 # --------------------------------------------------
 # Helpers to attach BE PDF files to communication emails.
 
-from pathlib import Path
 import os
 import re
+from pathlib import Path
 
 import pandas as pd
 
-from utils.identifiers import normalize_be_number
 import scheduler.config_paths as cp
 from asf_app.config.runtime import (
+    get_listes_colisage_remote_dir,
     get_onedrive_root,
     get_tmp_dir,
     is_graph_onedrive,
-    get_listes_colisage_remote_dir,
 )
+from utils.identifiers import normalize_be_number
 from utils.logging_utils import get_logger
 from utils.path_utils import safe_cache_path
 

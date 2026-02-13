@@ -2,13 +2,17 @@
 # -*- coding: utf-8 -*-
 
 import datetime
-from typing import Optional, Tuple, Dict
+from typing import Optional
 
 import pandas as pd
 
 from scheduler import config
 from scheduler.planning_schema import normalize_planning_df
-from utils.datetime_utils import parse_date_value_as_date, parse_time_value_as_time, format_time_value
+from utils.datetime_utils import (
+    format_time_value,
+    parse_date_value_as_date,
+    parse_time_value_as_time,
+)
 
 
 class BEPlacementError(Exception):
@@ -36,7 +40,7 @@ def _norm_str(x):
         return ""
     try:
         return str(x).strip()
-    except:
+    except (TypeError, ValueError, RuntimeError):
         return ""
 
 

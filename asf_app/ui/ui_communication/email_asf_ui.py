@@ -5,17 +5,17 @@
 # - Sujet / Corps modifiables
 # - Utilise df_comm pour détecter la semaine / année
 
-import streamlit as st
 import pandas as pd
+import streamlit as st
+
+from asf_app.ui.email_defaults import get_email_defaults
+from asf_app.ui.ui_communication.email_asf_handler import (
+    DEFAULT_BODY_ASF,
+    build_subject_asf,
+    generate_asf_email,
+)
 from utils.datetime_utils import coerce_datetime
 
-from asf_app.ui.ui_communication.email_asf_handler import (
-    generate_asf_email,
-    build_subject_asf,
-    DEFAULT_BODY_ASF,
-)
-from asf_app.ui.ui_planning.state_planning import get_planning_state
-from asf_app.ui.email_defaults import get_email_defaults
 
 def _detect_week_year_from_df(df_comm: pd.DataFrame):
     if df_comm is None or df_comm.empty or "DATE" not in df_comm.columns:

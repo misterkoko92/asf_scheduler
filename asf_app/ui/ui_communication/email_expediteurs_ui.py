@@ -4,17 +4,17 @@
 # - Un bouton "Générer tous les mails Expéditeurs"
 # - Un bouton par expéditeur (génère tous ses mails par destination)
 
-import streamlit as st
 import pandas as pd
+import streamlit as st
 
 from asf_app.ui.ui_communication.email_expediteurs_handler import (
-    generate_expediteur_email_for_pair,
-    generate_all_expediteurs_emails,
-    build_subject_expediteur,
     DEFAULT_BODY_EXPEDITEUR,
+    build_subject_expediteur,
+    generate_all_expediteurs_emails,
+    generate_expediteur_email_for_pair,
 )
 from asf_app.ui.ui_communication.pdf_attachments import index_pdfs_by_be
-from asf_app.ui.ui_planning.state_planning import get_planning_state
+
 
 def render_email_expediteurs_ui(
     df_comm: pd.DataFrame,
@@ -51,7 +51,7 @@ def render_email_expediteurs_ui(
     )
 
     st.markdown(
-        f"**Expéditeurs détectés (hors ASF) :** "
+        "**Expéditeurs détectés (hors ASF) :** "
         + ", ".join(str(e[0]) for e in exp_list)
     )
 

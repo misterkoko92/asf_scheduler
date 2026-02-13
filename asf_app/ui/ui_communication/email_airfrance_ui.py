@@ -6,18 +6,18 @@
 # - Corps modifiable (avec texte par défaut)
 # - Utilise df_comm pour récupérer semaine/année si besoin
 
-import streamlit as st
-import pandas as pd
-from utils.datetime_utils import coerce_datetime
-from datetime import datetime
 
-from asf_app.ui.ui_communication.email_airfrance_handler import (
-    generate_airfrance_email,
-    build_subject_airfrance,
-    DEFAULT_BODY_AIRFRANCE,
-)
-from asf_app.ui.ui_planning.state_planning import get_planning_state
+import pandas as pd
+import streamlit as st
+
 from asf_app.ui.email_defaults import get_email_defaults
+from asf_app.ui.ui_communication.email_airfrance_handler import (
+    DEFAULT_BODY_AIRFRANCE,
+    build_subject_airfrance,
+    generate_airfrance_email,
+)
+from utils.datetime_utils import coerce_datetime
+
 
 def _detect_week_year_from_df(df_comm: pd.DataFrame):
     """

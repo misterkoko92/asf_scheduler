@@ -3,14 +3,14 @@
 # Tolère toutes les variantes de colonnes venant du planning.
 # Compatible enrich_planning → df_comm → WhatsApp / Emails
 
+
 import pandas as pd
-from datetime import datetime
 
 from scheduler.format_rules import (
     format_be_number,
-    format_vol_display,
     format_date_fr_long_slash,
-    format_date_fr_words
+    format_date_fr_words,
+    format_vol_display,
 )
 from scheduler.planning_views import build_comm_base
 

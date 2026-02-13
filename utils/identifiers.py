@@ -6,7 +6,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-
 _NON_DIGIT_RE = re.compile(r"\D+")
 
 
@@ -61,5 +60,5 @@ def normalize_be_int(value: Any) -> int | None:
     """
     try:
         return int(float(str(value).strip()))
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return None

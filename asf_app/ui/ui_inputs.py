@@ -1,50 +1,47 @@
 # asf_app/ui/ui_inputs.py
 # -*- coding: utf-8 -*-
 
-import os
-from datetime import datetime, date, timedelta
-import pandas as pd
-from utils.datetime_utils import coerce_datetime, format_date_value
-import streamlit as st
-from pathlib import Path
 import shutil
+from datetime import date, datetime, timedelta
+from pathlib import Path
 
-from asf_app.state import get_state, get_tmp_dir, sync_state_paths_to_engine
+import pandas as pd
+import streamlit as st
 
 import scheduler.config_paths as cp
 from asf_app.config.runtime import (
-    is_graph_onedrive,
-    get_tableau_de_bord_src,
-    get_planning_benevoles_src,
-    get_vols_src,
-    get_tableau_de_bord_remote,
     get_planning_benevoles_remote,
+    get_planning_benevoles_src,
+    get_tableau_de_bord_remote,
+    get_tableau_de_bord_src,
     get_vols_remote,
+    get_vols_src,
+    is_graph_onedrive,
 )
 from asf_app.config.session_context import (
-    get_session_context,
     ensure_session_context,
+    get_session_context,
     refresh_session_context,
 )
-from scheduler.config_paths import (
-    IS_STREAMLIT_CLOUD,
-    CLOUD_MESSAGE,
+from asf_app.services.airfrance_api import get_api_limits, get_default_time_origin_type
+from asf_app.services.input_service import (
+    InputLoadError,
+    get_benev_source_message,
+    load_benev,
+    load_tdb,
+    load_vols,
 )
+from asf_app.state import get_state, get_tmp_dir, sync_state_paths_to_engine
 
 # Loaders normalisés
 from loaders.load_shipments import load_shipments_df
 from loaders.load_vols_api import load_vols_api, store_vols_api_sheet
-from asf_app.services.airfrance_api import get_api_limits, get_default_time_origin_type
-from asf_app.services.input_service import (
-    load_tdb,
-    load_benev,
-    load_vols,
-    InputLoadError,
-    get_benev_source_message,
+from scheduler.config_paths import (
+    CLOUD_MESSAGE,
+    IS_STREAMLIT_CLOUD,
 )
+from utils.datetime_utils import coerce_datetime, format_date_value
 from utils.logging_utils import get_logger
-
-
 
 # -------------------------------------------------------------------------
 # HELPERS
@@ -78,7 +75,7 @@ def pretty_mtime(path: Path) -> str:
         ts = path.stat().st_mtime
         dt = datetime.fromtimestamp(ts)
         return format_date_value(dt, fmt="%d/%m/%Y à %H:%M", default="N/A")
-    except Exception:
+    except (OSError, ValueError, OverflowError):
         return "N/A"
 
 
@@ -102,7 +99,6 @@ def pick_planning_dates(state):
     today = date.today()
     next_monday = today + timedelta(days=(7 - today.weekday()))
     default_start = state.api_start_date or next_monday
-    default_end = state.api_end_date or (default_start + timedelta(days=6))
 
     st.subheader("🗓️ Période du planning")
     col_s1, col_s2 = st.columns(2)
@@ -140,7 +136,10 @@ def load_tdb_file(state, force=False):
     except FileNotFoundError as e:
         logger.error("TABLEAU DE BORD manquant: %s", e)
         st.error(f"❌ {e}")
-    except Exception as e:
+    except InputLoadError as e:
+        logger.error("Erreur chargement TABLEAU DE BORD: %s", e)
+        st.error(f"❌ {e}")
+    except (OSError, RuntimeError, TypeError, ValueError, KeyError) as e:
         logger.error("Erreur chargement TABLEAU DE BORD: %s", e)
         st.error(f"❌ Erreur chargement TABLEAU DE BORD : {e}")
 
@@ -156,7 +155,10 @@ def load_benev_file(state, force=False):
     except FileNotFoundError as e:
         logger.error("Planning Bénévoles manquant: %s", e)
         st.error(f"❌ {e}")
-    except Exception as e:
+    except InputLoadError as e:
+        logger.error("Erreur chargement Bénévoles: %s", e)
+        st.error(f"❌ {e}")
+    except (OSError, RuntimeError, TypeError, ValueError, KeyError) as e:
         logger.error("Erreur chargement Bénévoles: %s", e)
         st.error(f"❌ Erreur chargement Bénévoles : {e}")
 
@@ -175,7 +177,7 @@ def load_vols_file(state, force=False):
     except InputLoadError as e:
         logger.error("Erreur chargement Vols: %s", e)
         st.error(f"❌ {e}")
-    except Exception as e:
+    except (OSError, RuntimeError, TypeError, ValueError, KeyError) as e:
         logger.error("Erreur chargement Vols: %s", e)
         st.error(f"❌ Erreur chargement Vols : {e}")
 
@@ -213,7 +215,7 @@ def overwrite_tmp_file(uploaded_file, state, key_name, reload_func):
         sync_state_paths_to_engine(state)
         st.success("✔ Fichier mis à jour dans le dossier TMP")
 
-    except Exception as e:
+    except (OSError, RuntimeError, TypeError, ValueError) as e:
         st.error(f"❌ Erreur mise à jour TMP : {e}")
 
 
@@ -256,7 +258,7 @@ def refresh_from_onedrive(state, src_path, key_name, reload_func):
         sync_state_paths_to_engine(state)
         st.success(f"✔ Rechargé depuis OneDrive : {src_path.name}")
 
-    except Exception as e:
+    except (FileNotFoundError, OSError, RuntimeError, TypeError, ValueError) as e:
         st.error(f"❌ Erreur refresh OneDrive : {e}")
 
 
@@ -380,7 +382,7 @@ def render_tab_inputs():
                 )
             else:
                 st.write("📦 Aucun BE planifiable.")
-        except Exception as e:
+        except (FileNotFoundError, KeyError, OSError, TypeError, ValueError) as e:
             st.error(f"❌ Erreur BE : {e}")
 
         if (not cloud_mode or is_graph_onedrive()) and st.button("🔄 Recharger TDB depuis OneDrive"):
@@ -430,7 +432,7 @@ def render_tab_inputs():
                     dmin, dmax = dates.min(), dates.max()
                     st.write(f"🗓️ Du {dmin:%d/%m} au {dmax:%d/%m} "
                              f"(sem. {dmin.isocalendar()[1]})")
-        except Exception as e:
+        except (AttributeError, KeyError, TypeError, ValueError) as e:
             st.error(f"❌ Erreur lecture Vols : {e}")
 
         source_choice = st.radio(
@@ -475,11 +477,11 @@ def render_tab_inputs():
                 mtime = datetime.fromtimestamp(cache_path.stat().st_mtime)
                 cache_info = f"(cache du {mtime:%d/%m à %Hh%M})"
                 st.write(f"Cache disponible {cache_info}")
-                if st.button(f"Charger le dernier cache"):
+                if st.button("Charger le dernier cache"):
                     try:
                         state.df_vols = pd.read_parquet(cache_path)
                         st.success(f"Vols chargés depuis cache {cache_info}")
-                    except Exception as e:
+                    except (OSError, TypeError, ValueError) as e:
                         st.error(f"❌ Erreur lecture cache : {e}")
             else:
                 st.write("Aucun cache API disponible pour l'instant.")
@@ -497,7 +499,7 @@ def render_tab_inputs():
                             st.success(f"{len(df_api)} vols chargés via API (du {state.api_start_date:%d/%m} au {state.api_end_date:%d/%m}).")
                             try:
                                 df_api.to_parquet(cache_path, index=False)
-                            except Exception:
+                            except (OSError, RuntimeError, TypeError, ValueError):
                                 pass
                             # Sauvegarde dans Vols.xlsx (feuille API-SXX-YYYY en dernière position)
                             try:
@@ -512,13 +514,13 @@ def render_tab_inputs():
                                         vols_path=Path(state.vols_tmp),
                                         param_dest_df=state.df_param_dest,
                                     )
-                                except Exception:
+                                except (FileNotFoundError, OSError, RuntimeError, TypeError, ValueError):
                                     pass
-                            except Exception as e:
+                            except (OSError, RuntimeError, TypeError, ValueError) as e:
                                 st.warning(f"Vols API chargés mais non sauvegardés dans Excel : {e}")
                         else:
                             st.warning("Aucun vol retourné par l'API.")
-                    except Exception as e:
+                    except (KeyError, OSError, RuntimeError, TypeError, ValueError) as e:
                         st.error(f"❌ Erreur API AF : {e}")
             else:
                 st.warning("Sélectionne une période avant d'appeler l'API.")

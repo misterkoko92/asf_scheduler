@@ -3,10 +3,11 @@ from __future__ import annotations
 
 from utils.identifiers import (
     digits_only,
-    normalize_be_number,
-    normalize_vol_number,
     format_be_display,
     format_vol_display,
+    normalize_be_int,
+    normalize_be_number,
+    normalize_vol_number,
 )
 
 
@@ -34,3 +35,8 @@ def test_display_helpers():
     assert format_be_display("1234") == "BE 001234"
     assert format_vol_display("AF 0007") == "AF 7"
     assert format_vol_display("7") == "AF 7"
+
+
+def test_normalize_be_int_handles_invalid_values():
+    assert normalize_be_int("250001.0") == 250001
+    assert normalize_be_int("invalid") is None

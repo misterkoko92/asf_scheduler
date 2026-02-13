@@ -1,26 +1,26 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from datetime import date, datetime, time
+import os
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Protocol
-import os
 
 import pandas as pd
 import requests
 
+import scheduler.config_paths as cp
 from loaders.load_benevoles import load_benevoles
-from loaders.load_shipments import load_shipments_df
-from loaders.load_vols import load_vols_df
 from loaders.load_params import (
     load_param_be_from_path,
-    load_param_dest_from_path,
     load_param_benev_from_path,
+    load_param_dest_from_path,
 )
-import scheduler.config_paths as cp
+from loaders.load_shipments import load_shipments_df
+from loaders.load_vols import load_vols_df
 from scheduler.config_paths import normalize
-from utils.datetime_utils import parse_iso_date_value, format_time_hm_loose
+from utils.datetime_utils import format_time_hm_loose, parse_iso_date_value
 
 
 class DataSource(Protocol):
@@ -488,7 +488,7 @@ class AsfBenevDataSource(BaseDataSource):
                 vid_int = int(vid)
             except (TypeError, ValueError):
                 vid_int = None
-            info = param_map.get(vid_int, {})
+            info = param_map.get(vid_int, {}) if vid_int is not None else {}
             rows.append(
                 {
                     "ID": vid,
@@ -605,7 +605,8 @@ def resolve_data_source(
     excel_paths: ExcelSourcePaths | None = None,
     external_paths: ExternalRepoPaths | None = None,
 ) -> DataSource:
-    key = (name or os.getenv("ASF_DATA_SOURCE", "excel")).strip().lower()
+    key_source = name if name is not None else (os.getenv("ASF_DATA_SOURCE", "excel") or "excel")
+    key = key_source.strip().lower()
     external_paths = external_paths or ExternalRepoPaths.detect()
     if key in {"excel", "default"}:
         return ExcelDataSource(paths=excel_paths)

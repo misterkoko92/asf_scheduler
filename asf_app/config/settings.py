@@ -2,10 +2,10 @@
 # -*- coding: utf-8 -*-
 import datetime
 from pathlib import Path
+
 import yaml
 
 import scheduler.config as engine_cfg
-
 
 CONFIG_YAML = Path(__file__).parent / "config_defaults.yml"
 
@@ -19,7 +19,7 @@ def _coerce_int(val, default=None):
         if val is None or val == "":
             return default
         return int(val)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
@@ -29,7 +29,7 @@ def _coerce_optional_int(val):
         return None
     try:
         return int(val)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -39,7 +39,7 @@ def _coerce_time(val: str, default: datetime.time) -> datetime.time:
     try:
         h, m = map(int, val.split(":"))
         return datetime.time(h, m)
-    except Exception:
+    except (TypeError, ValueError):
         return default
 
 

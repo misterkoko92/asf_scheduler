@@ -1,18 +1,18 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from datetime import datetime, timedelta, date
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 
 from asf_app.ui.ui_week_data_helpers import (
-    _time_to_minutes,
-    _minutes_to_hhmm,
-    _compute_week_dates,
-    _build_day_labels,
-    _build_benev_week_table,
     _build_benev_ranges_by_date,
+    _build_benev_week_table,
+    _build_day_labels,
     _build_flights_week_table,
+    _compute_week_dates,
+    _minutes_to_hhmm,
+    _time_to_minutes,
 )
 
 
@@ -44,6 +44,19 @@ def test_compute_week_dates_week_fallback_uses_today_year():
     out = _compute_week_dates(
         api_start_date=None,
         week=5,
+        df_benev=pd.DataFrame(),
+        df_flights=pd.DataFrame(),
+        today=pd.Timestamp("2026-02-01"),
+    )
+    assert len(out) == 7
+    assert out[0].date() == date(2026, 1, 26)
+    assert out[-1].date() == date(2026, 2, 1)
+
+
+def test_compute_week_dates_invalid_week_falls_back_to_today_week():
+    out = _compute_week_dates(
+        api_start_date=None,
+        week=99,
         df_benev=pd.DataFrame(),
         df_flights=pd.DataFrame(),
         today=pd.Timestamp("2026-02-01"),

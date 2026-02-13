@@ -15,16 +15,17 @@ from typing import Any, Dict, List
 
 import requests
 
-from utils.datetime_utils import parse_iso_datetime, format_date_value, format_time_value
+from utils.datetime_utils import format_date_value, format_time_value, parse_iso_datetime
+
 try:
     from dotenv import load_dotenv
-except Exception:  # pragma: no cover - optional dependency for local .env loading
+except ImportError:  # pragma: no cover - optional dependency for local .env loading
     def load_dotenv(*args: Any, **kwargs: Any) -> bool:
         return False
 
 try:
     import streamlit as st
-except Exception:  # pragma: no cover - streamlit peut être absent hors UI
+except ImportError:  # pragma: no cover - streamlit peut être absent hors UI
     st = None
 
 
@@ -45,7 +46,7 @@ def _read_env_var_from_file(var_name: str, env_path: Path) -> str | None:
     """
     try:
         lines = env_path.read_text(encoding="utf-8").splitlines()
-    except Exception:
+    except OSError:
         return None
 
     for line in lines:
@@ -77,7 +78,7 @@ def _get_config_value(var_name: str) -> str | None:
     # Charge automatiquement .env si présent (pour usage local)
     try:
         load_dotenv()
-    except Exception:
+    except (OSError, RuntimeError, TypeError, ValueError):
         pass
 
     env_val = os.getenv(var_name)
@@ -89,7 +90,7 @@ def _get_config_value(var_name: str) -> str | None:
     for env_path in _iter_env_candidate_paths():
         try:
             norm = env_path.resolve()
-        except Exception:
+        except (OSError, RuntimeError):
             norm = env_path
         if norm in seen:
             continue
@@ -105,7 +106,7 @@ def _get_config_value(var_name: str) -> str | None:
             val = st.secrets.get(var_name)
             if val:
                 return str(val)
-        except Exception:
+        except (AttributeError, FileNotFoundError, OSError, KeyError, RuntimeError, TypeError, ValueError):
             pass
     return None
 
@@ -123,7 +124,7 @@ def _as_positive_int(raw: str | None, default: int) -> int:
     try:
         val = int(str(raw).strip())
         return val if val > 0 else default
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
@@ -133,7 +134,7 @@ def _as_positive_float(raw: str | None, default: float) -> float:
     try:
         val = float(str(raw).strip())
         return val if val > 0 else default
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
@@ -310,7 +311,7 @@ def extract_routes(data: Dict[str, Any]) -> List[FlightRoute]:
             (lg for lg in legs if lg.get("departureInformation", {}).get("departureStation") == origine),
             None,
         )
-        dep_time = None
+        dep_time = ""
         if leg_from_origin:
             dep_time = _pick_departure_time(leg_from_origin)
         # Fallback : horaire le plus tôt parmi les legs disponibles

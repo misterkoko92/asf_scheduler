@@ -1,10 +1,11 @@
 # asf_app/ui/ui_stats/stats_loader.py
 # -*- coding: utf-8 -*-
 
-import pandas as pd
-from pathlib import Path
-from typing import List
 import re
+from pathlib import Path
+
+import pandas as pd
+
 from asf_app.ui.ui_stats.ui_stats import load_planning_xlsx
 
 
@@ -41,7 +42,7 @@ def load_all_plannings(base_dir: Path) -> pd.DataFrame:
                 m_old = re.search(r"N[°o]?\s*(\d{1,2})", f.stem, re.IGNORECASE)
                 if m_old:
                     wk = int(m_old.group(1))
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             wk = None
 
         df = df.copy()

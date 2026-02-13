@@ -30,6 +30,26 @@ def test_read_env_var_from_file_supports_export_and_quotes(tmp_path: Path):
     assert af._read_env_var_from_file("MISSING", env_path) is None
 
 
+def test_read_env_var_from_file_missing_file_returns_none(tmp_path: Path):
+    missing = tmp_path / "missing.env"
+    assert af._read_env_var_from_file("AF_API_KEY", missing) is None
+
+
+def test_get_config_value_handles_streamlit_secrets_failure(monkeypatch):
+    class _Secrets:
+        def get(self, _key):
+            raise RuntimeError("boom")
+
+    class _FakeSt:
+        secrets = _Secrets()
+
+    monkeypatch.setattr(af, "st", _FakeSt())
+    monkeypatch.setattr(af, "_iter_env_candidate_paths", lambda: [])
+    monkeypatch.setattr(af.os, "getenv", lambda _name: None)
+
+    assert af._get_config_value("AF_API_KEY") is None
+
+
 def test_get_api_limits_from_config(monkeypatch):
     values = {
         "AF_MAX_CALLS_PER_DAY": "42",

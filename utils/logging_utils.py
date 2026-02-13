@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-import scheduler.config_paths as cp
+
 from asf_app.config.runtime import get_tmp_dir
 
 

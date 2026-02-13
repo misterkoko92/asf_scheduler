@@ -13,26 +13,23 @@ avec :
 
 import pandas as pd
 
-from scheduler.config_paths import (
-    TABLEAU_DE_BORD,
-    PLANNING_BENEVOLES,
-    VOLS,
-    SHEET_MAG_CENTRAL,
-    SHEET_PARAM_BE,
-    SHEET_PARAM_DEST,
-    SHEET_PARAM_EXP,
-    SHEET_PARAM_BENEV,
-)
-
-from loaders.universal_loader import load_and_normalize
 from loaders.load_vols import load_vols_df
-
+from loaders.universal_loader import load_and_normalize
 from scheduler.column_map import (
     column_map_mag_central,
     column_map_param_be,
+    column_map_param_benev,
     column_map_param_dest,
     column_map_param_expediteur,
-    column_map_param_benev,
+)
+from scheduler.config_paths import (
+    PLANNING_BENEVOLES,
+    SHEET_MAG_CENTRAL,
+    SHEET_PARAM_BE,
+    SHEET_PARAM_BENEV,
+    SHEET_PARAM_DEST,
+    SHEET_PARAM_EXP,
+    TABLEAU_DE_BORD,
 )
 from scheduler.format_rules import format_be_numero
 from utils.datetime_utils import format_date_long_fr, format_date_value
@@ -70,7 +67,7 @@ def enrich_planning(df_planning: pd.DataFrame) -> pd.DataFrame:
         TABLEAU_DE_BORD, SHEET_PARAM_EXP, column_map_param_expediteur, header=0
     )
 
-    df_parambe = load_and_normalize(
+    _ = load_and_normalize(
         TABLEAU_DE_BORD, SHEET_PARAM_BE, column_map_param_be, header=0
     )
 

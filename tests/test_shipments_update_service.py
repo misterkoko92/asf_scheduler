@@ -6,10 +6,10 @@ from pathlib import Path
 import pandas as pd
 
 from asf_app.services.shipments_update_service import (
-    load_be_status,
-    load_be_status_d_for_week,
     apply_planning_update,
     apply_planning_updates_batch,
+    load_be_status,
+    load_be_status_d_for_week,
 )
 
 
@@ -64,10 +64,12 @@ def test_load_be_status_d_for_week(tmp_path):
 
 
 def test_apply_planning_update(tmp_path):
-    from openpyxl import Workbook, load_workbook
     import datetime as dt
-    from utils.datetime_utils import coerce_datetime
+
+    from openpyxl import Workbook, load_workbook
+
     import scheduler.config_paths as cp
+    from utils.datetime_utils import coerce_datetime
 
     path = tmp_path / "planning.xlsx"
     wb = Workbook()
@@ -147,10 +149,12 @@ def test_apply_planning_update(tmp_path):
 
 
 def test_apply_planning_updates_batch(tmp_path):
-    from openpyxl import Workbook, load_workbook
     import datetime as dt
-    from utils.datetime_utils import coerce_datetime
+
+    from openpyxl import Workbook, load_workbook
+
     import scheduler.config_paths as cp
+    from utils.datetime_utils import coerce_datetime
 
     path = tmp_path / "planning.xlsx"
     wb = Workbook()

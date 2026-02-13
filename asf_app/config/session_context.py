@@ -1,20 +1,30 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
-import shutil
 
 import streamlit as st
 
-from scheduler.data_sources import ExcelSourcePaths
 import scheduler.config_paths as cp
+from scheduler.data_sources import ExcelSourcePaths
 
 from .app_config import AppConfig, build_app_config
 
-
 SESSION_CTX_KEY = "session_context"
+
+SESSION_CONTEXT_ERRORS = (
+    FileNotFoundError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    AttributeError,
+    ImportError,
+)
 
 
 @dataclass
@@ -40,7 +50,7 @@ def _download_source(remote_path: str, dst: Path, *, strict: bool) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
     try:
         cp.download_onedrive_file(remote_path, dst, interactive=False)
-    except Exception:
+    except SESSION_CONTEXT_ERRORS:
         if strict:
             raise FileNotFoundError(f"Source OneDrive introuvable: {remote_path}")
     if strict and not dst.exists():
@@ -81,7 +91,7 @@ def _sync_state_from_context(ctx: SessionContext) -> None:
         state.tdb_tmp = ctx.source_paths.tableau_de_bord
         state.benev_tmp = ctx.source_paths.planning_benevoles
         state.vols_tmp = ctx.source_paths.vols
-    except Exception:
+    except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
         return
 
 

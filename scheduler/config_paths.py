@@ -1,13 +1,17 @@
 # scheduler/config_paths.py
 # -*- coding: utf-8 -*-
 
-from pathlib import Path
+from __future__ import annotations
+
+import glob
 import logging
 import os
 import shutil
 import unicodedata
-import glob
-from datetime import datetime
+from dataclasses import dataclass
+from pathlib import Path
+
+logger = logging.getLogger("ASF-SCHEDULER")
 
 IS_STREAMLIT_CLOUD = bool(
     os.getenv("STREAMLIT_RUNTIME")
@@ -35,6 +39,17 @@ GRAPH_SCOPES = [
     ).split(",")
     if s.strip()
 ]
+
+CONFIG_PATH_IO_ERRORS = (
+    FileNotFoundError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    AttributeError,
+    ImportError,
+)
 # =============================================================================
 # NORMALISATION & BASES
 # =============================================================================
@@ -73,21 +88,21 @@ def detect_onedrive_asf() -> Path:
             "OneDrive-Bibliothequespartagees-*",
         ]
         for pat in patterns:
-            candidates = list(glob.glob(str(cloud / pat)))
-            for c in candidates:
-                name = unicodedata.normalize("NFC", Path(c).name)
+            matches = list(glob.glob(str(cloud / pat)))
+            for match_path in matches:
+                name = unicodedata.normalize("NFC", Path(match_path).name)
                 if "OneDrive" in name:
-                    return normalize(c)
+                    return normalize(match_path)
 
     # 2) Windows / macOS OneDrive classique
-    candidates = [
+    local_candidates = [
         home / "OneDrive - Aviation Sans Frontières",
         home / "OneDrive - AviationSansFrontières",
         home / "OneDrive",
     ]
-    for c in candidates:
-        if c.exists():
-            return normalize(c)
+    for candidate_path in local_candidates:
+        if candidate_path.exists():
+            return normalize(candidate_path)
 
     # 3) Fallback : HOME (permet de continuer même sans OneDrive)
     return normalize(home)
@@ -143,14 +158,26 @@ TMP_DIR = normalize(os.getenv("ASF_TMP_DIR", BASE_DIR / ".tmp_asf"))
 GRAPH_TOKEN_CACHE = normalize(os.getenv("ASF_GRAPH_TOKEN_CACHE", TMP_DIR / ".msal_cache.json"))
 
 
-def _download_to_tmp(remote_path: str, dst_name: str, *, strict: bool = False) -> Path:
+def _download_to_tmp(
+    remote_path: str,
+    dst_name: str,
+    *,
+    strict: bool = False,
+    runtime: RuntimePaths | None = None,
+) -> Path:
     """Télécharge un fichier Graph vers TMP (placeholder vide si manquant)."""
-    dst = TMP_DIR / dst_name
+    runtime_paths = runtime or get_runtime_paths()
+    dst = runtime_paths.tmp_dir / dst_name
     dst.parent.mkdir(parents=True, exist_ok=True)
     ok = False
     try:
-        ok = download_onedrive_file(remote_path, dst, interactive=False)
-    except Exception:
+        ok = download_onedrive_file(
+            remote_path,
+            dst,
+            interactive=False,
+            runtime=runtime_paths,
+        )
+    except CONFIG_PATH_IO_ERRORS:
         ok = False
     if not ok:
         msg = f"OneDrive Graph: fichier introuvable ou téléchargement échoué ({remote_path})"
@@ -159,14 +186,21 @@ def _download_to_tmp(remote_path: str, dst_name: str, *, strict: bool = False) -
             raise FileNotFoundError(msg)
         try:
             dst.touch()
-        except Exception:
+        except (FileNotFoundError, OSError, PermissionError):
             pass
     return normalize(dst)
 
 
-def _copy_to_tmp(src: Path, dst_name: str, *, strict: bool = False) -> Path:
+def _copy_to_tmp(
+    src: Path,
+    dst_name: str,
+    *,
+    strict: bool = False,
+    runtime: RuntimePaths | None = None,
+) -> Path:
     """Copie src → TMP/dst_name (placeholder vide si manquant)."""
-    dst = TMP_DIR / dst_name
+    runtime_paths = runtime or get_runtime_paths()
+    dst = runtime_paths.tmp_dir / dst_name
     dst.parent.mkdir(parents=True, exist_ok=True)
     try:
         if src.exists():
@@ -177,12 +211,15 @@ def _copy_to_tmp(src: Path, dst_name: str, *, strict: bool = False) -> Path:
             if strict:
                 raise FileNotFoundError(msg)
             dst.touch()
-    except Exception:
+    except CONFIG_PATH_IO_ERRORS:
         msg = f"Erreur copie source: {src}"
         logger.error(msg)
         if strict:
             raise
-        dst.touch()
+        try:
+            dst.touch()
+        except (FileNotFoundError, OSError, PermissionError):
+            pass
     return normalize(dst)
 
 
@@ -250,18 +287,83 @@ OUTPUT_BILAN = OUTPUT_PLANNING_DIR / "Bilan.xlsx"
 
 
 # =============================================================================
+# RUNTIME SNAPSHOT (IMMUTABLE)
+# =============================================================================
+
+@dataclass(frozen=True)
+class RuntimePaths:
+    asf_onedrive: Path
+    tableau_de_bord_src: Path
+    planning_benevoles_src: Path
+    planning_benevoles_src_legacy: Path
+    vols_src: Path
+    tmp_dir: Path
+    tableau_de_bord: Path
+    planning_benevoles: Path
+    vols: Path
+    output_planning_dir: Path
+    output_planning: Path
+    output_bilan: Path
+    planning_template: Path
+    planning_maquette_onedrive: Path
+    tableau_de_bord_remote: str
+    planning_benevoles_remote: str
+    vols_remote: str
+    output_planning_remote_dir_template: str
+    listes_colisage_remote_dir: str = ""
+    use_graph_onedrive: bool = False
+    is_streamlit_cloud: bool = False
+    graph_client_id: str = ""
+    graph_tenant_id: str = ""
+    graph_scopes: tuple[str, ...] = ()
+    graph_token_cache: Path = Path(".")
+
+
+def get_runtime_paths() -> RuntimePaths:
+    """Retourne un snapshot immuable des chemins runtime actuels."""
+    return RuntimePaths(
+        asf_onedrive=Path(ASF_ONEDRIVE),
+        tableau_de_bord_src=Path(TABLEAU_DE_BORD_SRC),
+        planning_benevoles_src=Path(PLANNING_BENEVOLES_SRC),
+        planning_benevoles_src_legacy=Path(PLANNING_BENEVOLES_SRC_LEGACY),
+        vols_src=Path(VOLS_SRC),
+        tmp_dir=Path(TMP_DIR),
+        tableau_de_bord=Path(TABLEAU_DE_BORD),
+        planning_benevoles=Path(PLANNING_BENEVOLES),
+        vols=Path(VOLS),
+        output_planning_dir=Path(OUTPUT_PLANNING_DIR),
+        output_planning=Path(OUTPUT_PLANNING),
+        output_bilan=Path(OUTPUT_BILAN),
+        planning_template=Path(PLANNING_TEMPLATE),
+        planning_maquette_onedrive=Path(PLANNING_MAQUETTE_ONEDRIVE),
+        tableau_de_bord_remote=str(TABLEAU_DE_BORD_REMOTE),
+        planning_benevoles_remote=str(PLANNING_BENEVOLES_REMOTE),
+        vols_remote=str(VOLS_REMOTE),
+        output_planning_remote_dir_template=str(OUTPUT_PLANNING_REMOTE_DIR_TEMPLATE),
+        listes_colisage_remote_dir=str(LISTES_COLISAGE_REMOTE_DIR),
+        use_graph_onedrive=bool(USE_GRAPH_ONEDRIVE),
+        is_streamlit_cloud=bool(IS_STREAMLIT_CLOUD),
+        graph_client_id=str(GRAPH_CLIENT_ID),
+        graph_tenant_id=str(GRAPH_TENANT_ID),
+        graph_scopes=tuple(GRAPH_SCOPES),
+        graph_token_cache=Path(GRAPH_TOKEN_CACHE),
+    )
+
+
+# =============================================================================
 # HELPERS PLANNING
 # =============================================================================
 
-def get_planning_dirs(year: int | None = None):
+def get_planning_dirs(year: int | None = None, *, runtime: RuntimePaths | None = None):
     """
     Retourne une liste de dossiers où chercher les plannings :
       - Planning MAB
       - Planning MAB/ASFmm PLANNING <année> (si existe)
       - OUTPUT_PLANNING_DIR
     """
+    runtime_paths = runtime or get_runtime_paths()
     dirs = []
-    base_root = detect_onedrive_asf()
+    base_root = runtime_paths.asf_onedrive
     planning_mab = normalize(base_root / "Planning MAB")
     if planning_mab.exists():
         dirs.append(planning_mab)
@@ -276,7 +378,7 @@ def get_planning_dirs(year: int | None = None):
             if cand.exists():
                 dirs.insert(0, normalize(cand))
     # Fallback sortie
-    dirs.append(OUTPUT_PLANNING_DIR)
+    dirs.append(runtime_paths.output_planning_dir)
     # Dédupliquer en conservant l'ordre
     seen = set()
     unique = []
@@ -287,21 +389,64 @@ def get_planning_dirs(year: int | None = None):
     return unique
 
 
-def get_planning_maquette_path() -> Path:
+def get_planning_maquette_path(*, runtime: RuntimePaths | None = None) -> Path:
     """
     Retourne le chemin de la maquette prioritaire OneDrive si présente,
     sinon la maquette locale.
     """
-    if PLANNING_MAQUETTE_ONEDRIVE.exists():
-        return PLANNING_MAQUETTE_ONEDRIVE
-    return PLANNING_TEMPLATE
+    runtime_paths = runtime or get_runtime_paths()
+    if runtime_paths.planning_maquette_onedrive.exists():
+        return runtime_paths.planning_maquette_onedrive
+    return runtime_paths.planning_template
 
 
 # =============================================================================
 # UTILITAIRES
 # =============================================================================
 
-def prepare_paths(copy_sources: bool = True, *, strict_sources: bool = False) -> None:
+def _apply_runtime_paths_snapshot(runtime: RuntimePaths) -> None:
+    """Projette un snapshot runtime dans les globals legacy (compatibilité)."""
+    global TABLEAU_DE_BORD, PLANNING_BENEVOLES, VOLS, TMP_DIR, ASF_ONEDRIVE
+    global OUTPUT_PLANNING_DIR, OUTPUT_PLANNING, OUTPUT_BILAN, GRAPH_TOKEN_CACHE
+    global TABLEAU_DE_BORD_SRC, PLANNING_BENEVOLES_SRC, PLANNING_BENEVOLES_SRC_LEGACY, VOLS_SRC
+    global TABLEAU_DE_BORD_REMOTE, PLANNING_BENEVOLES_REMOTE, VOLS_REMOTE
+    global OUTPUT_PLANNING_REMOTE_DIR_TEMPLATE, LISTES_COLISAGE_REMOTE_DIR
+    global USE_GRAPH_ONEDRIVE, IS_STREAMLIT_CLOUD
+    global GRAPH_CLIENT_ID, GRAPH_TENANT_ID, GRAPH_SCOPES
+
+    ASF_ONEDRIVE = normalize(runtime.asf_onedrive)
+    TABLEAU_DE_BORD_SRC = normalize(runtime.tableau_de_bord_src)
+    PLANNING_BENEVOLES_SRC = normalize(runtime.planning_benevoles_src)
+    PLANNING_BENEVOLES_SRC_LEGACY = normalize(runtime.planning_benevoles_src_legacy)
+    VOLS_SRC = normalize(runtime.vols_src)
+    TMP_DIR = normalize(runtime.tmp_dir)
+    TABLEAU_DE_BORD = normalize(runtime.tableau_de_bord)
+    PLANNING_BENEVOLES = normalize(runtime.planning_benevoles)
+    VOLS = normalize(runtime.vols)
+    OUTPUT_PLANNING_DIR = normalize(runtime.output_planning_dir)
+    OUTPUT_PLANNING = normalize(runtime.output_planning)
+    OUTPUT_BILAN = normalize(runtime.output_bilan)
+    GRAPH_TOKEN_CACHE = normalize(runtime.graph_token_cache)
+    TABLEAU_DE_BORD_REMOTE = str(runtime.tableau_de_bord_remote)
+    PLANNING_BENEVOLES_REMOTE = str(runtime.planning_benevoles_remote)
+    VOLS_REMOTE = str(runtime.vols_remote)
+    OUTPUT_PLANNING_REMOTE_DIR_TEMPLATE = str(runtime.output_planning_remote_dir_template)
+    LISTES_COLISAGE_REMOTE_DIR = str(runtime.listes_colisage_remote_dir)
+    USE_GRAPH_ONEDRIVE = bool(runtime.use_graph_onedrive)
+    IS_STREAMLIT_CLOUD = bool(runtime.is_streamlit_cloud)
+    GRAPH_CLIENT_ID = str(runtime.graph_client_id).strip()
+    GRAPH_TENANT_ID = str(runtime.graph_tenant_id).strip()
+    GRAPH_SCOPES = [s for s in runtime.graph_scopes if str(s).strip()]
+    if "_GRAPH_CLIENTS" in globals():
+        _GRAPH_CLIENTS.clear()
+
+
+def prepare_paths(
+    copy_sources: bool = True,
+    *,
+    strict_sources: bool = False,
+    runtime: RuntimePaths | None = None,
+) -> RuntimePaths:
     """
     Crée le TMP local et copie les 3 sources OneDrive dedans.
     Met à jour les chemins globaux TABLEAU_DE_BORD / PLANNING_BENEVOLES / VOLS.
@@ -310,24 +455,27 @@ def prepare_paths(copy_sources: bool = True, *, strict_sources: bool = False) ->
     global OUTPUT_PLANNING_DIR, OUTPUT_PLANNING, OUTPUT_BILAN, GRAPH_TOKEN_CACHE
     global TABLEAU_DE_BORD_SRC, PLANNING_BENEVOLES_SRC, PLANNING_BENEVOLES_SRC_LEGACY, VOLS_SRC
 
-    # Prend en compte un override ENV dynamique (utile en tests)
-    env_tmp = os.getenv("ASF_TMP_DIR")
-    if env_tmp:
-        TMP_DIR = normalize(env_tmp)
-        GRAPH_TOKEN_CACHE = normalize(os.getenv("ASF_GRAPH_TOKEN_CACHE", TMP_DIR / ".msal_cache.json"))
-    env_root = os.getenv("ASF_ONEDRIVE_ROOT")
-    if env_root:
-        ASF_ONEDRIVE = normalize(env_root)
-        TABLEAU_DE_BORD_SRC = normalize(ASF_ONEDRIVE / "Hélida" / "TABLEAU DE BORD.xlsx")
-        PLANNING_BENEVOLES_SRC = normalize(
-            ASF_ONEDRIVE / "Planning Bénévoles" / "Planning BENEVOLE.xlsx"
-        )
-        PLANNING_BENEVOLES_SRC_LEGACY = normalize(
-            ASF_ONEDRIVE / "Planning Bénévoles" / "Planning BENEVOLE 2025.xlsx"
-        )
-        VOLS_SRC = normalize(
-            ASF_ONEDRIVE / "Planning MAB" / "Fichiers Source" / "aVols" / "Vols.xlsx"
-        )
+    if runtime is not None:
+        _apply_runtime_paths_snapshot(runtime)
+    else:
+        # Prend en compte un override ENV dynamique (utile en tests)
+        env_tmp = os.getenv("ASF_TMP_DIR")
+        if env_tmp:
+            TMP_DIR = normalize(env_tmp)
+            GRAPH_TOKEN_CACHE = normalize(os.getenv("ASF_GRAPH_TOKEN_CACHE", TMP_DIR / ".msal_cache.json"))
+        env_root = os.getenv("ASF_ONEDRIVE_ROOT")
+        if env_root:
+            ASF_ONEDRIVE = normalize(env_root)
+            TABLEAU_DE_BORD_SRC = normalize(ASF_ONEDRIVE / "Hélida" / "TABLEAU DE BORD.xlsx")
+            PLANNING_BENEVOLES_SRC = normalize(
+                ASF_ONEDRIVE / "Planning Bénévoles" / "Planning BENEVOLE.xlsx"
+            )
+            PLANNING_BENEVOLES_SRC_LEGACY = normalize(
+                ASF_ONEDRIVE / "Planning Bénévoles" / "Planning BENEVOLE 2025.xlsx"
+            )
+            VOLS_SRC = normalize(
+                ASF_ONEDRIVE / "Planning MAB" / "Fichiers Source" / "aVols" / "Vols.xlsx"
+            )
 
     TABLEAU_DE_BORD = normalize(TMP_DIR / "TABLEAU_DE_BORD.xlsx")
     PLANNING_BENEVOLES = normalize(TMP_DIR / "PLANNING_BENEVOLES.xlsx")
@@ -340,128 +488,202 @@ def prepare_paths(copy_sources: bool = True, *, strict_sources: bool = False) ->
         OUTPUT_BILAN = OUTPUT_PLANNING_DIR / "Bilan.xlsx"
     OUTPUT_PLANNING_DIR.mkdir(parents=True, exist_ok=True)
 
-    effective_copy = copy_sources and (USE_GRAPH_ONEDRIVE or not IS_STREAMLIT_CLOUD)
+    runtime_paths = get_runtime_paths()
+    effective_copy = copy_sources and (
+        runtime_paths.use_graph_onedrive or not runtime_paths.is_streamlit_cloud
+    )
 
     if effective_copy:
-        if USE_GRAPH_ONEDRIVE:
-            TABLEAU_DE_BORD = _download_to_tmp(TABLEAU_DE_BORD_REMOTE, "TABLEAU_DE_BORD.xlsx", strict=strict_sources)
-            PLANNING_BENEVOLES = _download_to_tmp(PLANNING_BENEVOLES_REMOTE, "PLANNING_BENEVOLES.xlsx", strict=strict_sources)
-            VOLS = _download_to_tmp(VOLS_REMOTE, "VOLS.xlsx", strict=strict_sources)
+        if runtime_paths.use_graph_onedrive:
+            TABLEAU_DE_BORD = _download_to_tmp(
+                runtime_paths.tableau_de_bord_remote,
+                "TABLEAU_DE_BORD.xlsx",
+                strict=strict_sources,
+                runtime=runtime_paths,
+            )
+            PLANNING_BENEVOLES = _download_to_tmp(
+                runtime_paths.planning_benevoles_remote,
+                "PLANNING_BENEVOLES.xlsx",
+                strict=strict_sources,
+                runtime=runtime_paths,
+            )
+            VOLS = _download_to_tmp(
+                runtime_paths.vols_remote,
+                "VOLS.xlsx",
+                strict=strict_sources,
+                runtime=runtime_paths,
+            )
             TABLEAU_DE_BORD_SRC = TABLEAU_DE_BORD
             PLANNING_BENEVOLES_SRC = PLANNING_BENEVOLES
             VOLS_SRC = VOLS
         else:
             bene_src = PLANNING_BENEVOLES_SRC if PLANNING_BENEVOLES_SRC.exists() else PLANNING_BENEVOLES_SRC_LEGACY
-            TABLEAU_DE_BORD = _copy_to_tmp(TABLEAU_DE_BORD_SRC, "TABLEAU_DE_BORD.xlsx", strict=strict_sources)
-            PLANNING_BENEVOLES = _copy_to_tmp(bene_src, "PLANNING_BENEVOLES.xlsx", strict=strict_sources)
-            VOLS = _copy_to_tmp(VOLS_SRC, "VOLS.xlsx", strict=strict_sources)
+            TABLEAU_DE_BORD = _copy_to_tmp(
+                TABLEAU_DE_BORD_SRC,
+                "TABLEAU_DE_BORD.xlsx",
+                strict=strict_sources,
+                runtime=runtime_paths,
+            )
+            PLANNING_BENEVOLES = _copy_to_tmp(
+                bene_src,
+                "PLANNING_BENEVOLES.xlsx",
+                strict=strict_sources,
+                runtime=runtime_paths,
+            )
+            VOLS = _copy_to_tmp(
+                VOLS_SRC,
+                "VOLS.xlsx",
+                strict=strict_sources,
+                runtime=runtime_paths,
+            )
     else:
         # On ne copie pas mais on s'assure que les fichiers existent au moins vides
         for dst in [TABLEAU_DE_BORD, PLANNING_BENEVOLES, VOLS]:
             dst.parent.mkdir(parents=True, exist_ok=True)
             dst.touch(exist_ok=True)
+    return get_runtime_paths()
 
 
-def cleanup_tmp() -> None:
+def cleanup_tmp(*, runtime: RuntimePaths | None = None) -> None:
     """Vide totalement le dossier TMP."""
-    if not TMP_DIR.exists():
+    runtime_paths = runtime or get_runtime_paths()
+    tmp_dir = runtime_paths.tmp_dir
+    if not tmp_dir.exists():
         return
-    for item in TMP_DIR.iterdir():
+    for item in tmp_dir.iterdir():
         try:
             if item.is_file() or item.is_symlink():
                 item.unlink()
             elif item.is_dir():
                 shutil.rmtree(item)
-        except Exception:
+        except (FileNotFoundError, OSError, PermissionError):
             pass
 
 
-def print_config_paths() -> None:
-    print("\n=== CONFIG PATHS ===")
-    print(f"ASF_ONEDRIVE            : {ASF_ONEDRIVE}")
-    print(f"TABLEAU_DE_BORD_SRC     : {TABLEAU_DE_BORD_SRC}")
-    print(f"PLANNING_BENEVOLES_SRC  : {PLANNING_BENEVOLES_SRC}")
-    print(f"PLANNING_BENEVOLES_SRC_LEGACY: {PLANNING_BENEVOLES_SRC_LEGACY}")
-    print(f"VOLS_SRC                : {VOLS_SRC}")
-    print(f"TMP_DIR                 : {TMP_DIR}")
-    print(f"OUTPUT_PLANNING_DIR     : {OUTPUT_PLANNING_DIR}")
-    print(f"TABLEAU_DE_BORD (TMP)   : {TABLEAU_DE_BORD}")
-    print(f"PLANNING_BENEVOLES (TMP): {PLANNING_BENEVOLES}")
-    print(f"VOLS (TMP)              : {VOLS}")
-    print("=====================\n")
+def print_config_paths(*, runtime: RuntimePaths | None = None) -> None:
+    runtime_paths = runtime or get_runtime_paths()
+    logger.info(
+        "\n=== CONFIG PATHS ===\n"
+        "ASF_ONEDRIVE            : %s\n"
+        "TABLEAU_DE_BORD_SRC     : %s\n"
+        "PLANNING_BENEVOLES_SRC  : %s\n"
+        "PLANNING_BENEVOLES_SRC_LEGACY: %s\n"
+        "VOLS_SRC                : %s\n"
+        "TMP_DIR                 : %s\n"
+        "OUTPUT_PLANNING_DIR     : %s\n"
+        "TABLEAU_DE_BORD (TMP)   : %s\n"
+        "PLANNING_BENEVOLES (TMP): %s\n"
+        "VOLS (TMP)              : %s\n"
+        "=====================",
+        runtime_paths.asf_onedrive,
+        runtime_paths.tableau_de_bord_src,
+        runtime_paths.planning_benevoles_src,
+        runtime_paths.planning_benevoles_src_legacy,
+        runtime_paths.vols_src,
+        runtime_paths.tmp_dir,
+        runtime_paths.output_planning_dir,
+        runtime_paths.tableau_de_bord,
+        runtime_paths.planning_benevoles,
+        runtime_paths.vols,
+    )
 
 
-def ensure_tmp_up_to_date() -> None:
+def ensure_tmp_up_to_date(*, runtime: RuntimePaths | None = None) -> None:
     """
     Fallback pour l'UI : regénère les copies si elles n'existent pas.
     """
+    runtime_paths = runtime or get_runtime_paths()
     if (
-        not TABLEAU_DE_BORD.exists()
-        or not PLANNING_BENEVOLES.exists()
-        or not VOLS.exists()
+        not runtime_paths.tableau_de_bord.exists()
+        or not runtime_paths.planning_benevoles.exists()
+        or not runtime_paths.vols.exists()
     ):
-        prepare_paths(copy_sources=True)
+        prepare_paths(copy_sources=True, runtime=runtime_paths)
 
 
 # =============================================================================
 # ONEDRIVE GRAPH HELPERS
 # =============================================================================
 
-_GRAPH_CLIENT = None
+_GRAPH_CLIENTS: dict[tuple[str, str, tuple[str, ...], str], object] = {}
 
 
 def is_graph_onedrive() -> bool:
-    return USE_GRAPH_ONEDRIVE
+    return get_runtime_paths().use_graph_onedrive
 
 
-def get_output_remote_dir(year: int) -> str:
-    return OUTPUT_PLANNING_REMOTE_DIR_TEMPLATE.format(year=year)
+def get_output_remote_dir(year: int, *, runtime: RuntimePaths | None = None) -> str:
+    runtime_paths = runtime or get_runtime_paths()
+    return runtime_paths.output_planning_remote_dir_template.format(year=year)
 
 
-def get_output_remote_path(year: int, filename: str) -> str:
-    return f"{get_output_remote_dir(year).strip('/')}/{filename}"
+def get_output_remote_path(
+    year: int,
+    filename: str,
+    *,
+    runtime: RuntimePaths | None = None,
+) -> str:
+    return f"{get_output_remote_dir(year, runtime=runtime).strip('/')}/{filename}"
 
 
-def _build_graph_client():
-    if not (GRAPH_CLIENT_ID and GRAPH_TENANT_ID):
+def _graph_client_cache_key(runtime: RuntimePaths) -> tuple[str, str, tuple[str, ...], str]:
+    return (
+        runtime.graph_tenant_id,
+        runtime.graph_client_id,
+        tuple(runtime.graph_scopes),
+        str(runtime.graph_token_cache),
+    )
+
+
+def _build_graph_client(*, runtime: RuntimePaths | None = None):
+    runtime_paths = runtime or get_runtime_paths()
+    if not (runtime_paths.graph_client_id and runtime_paths.graph_tenant_id):
         return None
     from scheduler.onedrive_graph import GraphConfig, OneDriveGraphClient
 
     cfg = GraphConfig(
-        tenant_id=GRAPH_TENANT_ID,
-        client_id=GRAPH_CLIENT_ID,
-        scopes=GRAPH_SCOPES,
-        token_cache_path=GRAPH_TOKEN_CACHE,
+        tenant_id=runtime_paths.graph_tenant_id,
+        client_id=runtime_paths.graph_client_id,
+        scopes=list(runtime_paths.graph_scopes),
+        token_cache_path=runtime_paths.graph_token_cache,
     )
     return OneDriveGraphClient(cfg)
 
 
-def get_graph_client():
-    global _GRAPH_CLIENT
-    if _GRAPH_CLIENT is None:
-        _GRAPH_CLIENT = _build_graph_client()
-    return _GRAPH_CLIENT
+def get_graph_client(*, runtime: RuntimePaths | None = None):
+    runtime_paths = runtime or get_runtime_paths()
+    key = _graph_client_cache_key(runtime_paths)
+    if key not in _GRAPH_CLIENTS:
+        _GRAPH_CLIENTS[key] = _build_graph_client(runtime=runtime_paths)
+    return _GRAPH_CLIENTS[key]
 
 
-def begin_onedrive_device_flow() -> dict | None:
-    client = get_graph_client()
+def begin_onedrive_device_flow(*, runtime: RuntimePaths | None = None) -> dict | None:
+    client = get_graph_client(runtime=runtime)
     if client is None:
         return None
     return client.begin_device_flow()
 
 
-def complete_onedrive_device_flow(flow: dict) -> bool:
-    client = get_graph_client()
+def complete_onedrive_device_flow(flow: dict, *, runtime: RuntimePaths | None = None) -> bool:
+    client = get_graph_client(runtime=runtime)
     if client is None:
         return False
     client.complete_device_flow(flow)
     return True
 
 
-def download_onedrive_file(remote_path: str, local_path: Path, *, interactive: bool = False) -> bool:
-    if not USE_GRAPH_ONEDRIVE:
+def download_onedrive_file(
+    remote_path: str,
+    local_path: Path,
+    *,
+    interactive: bool = False,
+    runtime: RuntimePaths | None = None,
+) -> bool:
+    runtime_paths = runtime or get_runtime_paths()
+    if not runtime_paths.use_graph_onedrive:
         return False
-    client = get_graph_client()
+    client = get_graph_client(runtime=runtime_paths)
     if client is None:
         return False
     from scheduler.onedrive_graph import GraphAuthRequired
@@ -478,10 +700,12 @@ def upload_onedrive_file(
     *,
     interactive: bool = False,
     conflict_behavior: str = "replace",
+    runtime: RuntimePaths | None = None,
 ) -> bool:
-    if not USE_GRAPH_ONEDRIVE:
+    runtime_paths = runtime or get_runtime_paths()
+    if not runtime_paths.use_graph_onedrive:
         return False
-    client = get_graph_client()
+    client = get_graph_client(runtime=runtime_paths)
     if client is None:
         return False
     from scheduler.onedrive_graph import GraphAuthRequired
@@ -503,10 +727,12 @@ def list_onedrive_files(
     recursive: bool = False,
     suffixes: list[str] | None = None,
     interactive: bool = False,
+    runtime: RuntimePaths | None = None,
 ) -> list[dict]:
-    if not USE_GRAPH_ONEDRIVE:
+    runtime_paths = runtime or get_runtime_paths()
+    if not runtime_paths.use_graph_onedrive:
         return []
-    client = get_graph_client()
+    client = get_graph_client(runtime=runtime_paths)
     if client is None:
         return []
     from scheduler.onedrive_graph import GraphAuthRequired
@@ -524,14 +750,19 @@ def list_onedrive_files(
         return []
 
 
-def remote_path_for_local(local_path: Path) -> str | None:
+def remote_path_for_local(
+    local_path: Path,
+    *,
+    runtime: RuntimePaths | None = None,
+) -> str | None:
+    runtime_paths = runtime or get_runtime_paths()
     local_path = Path(local_path).resolve()
-    if local_path == Path(TABLEAU_DE_BORD).resolve():
-        return TABLEAU_DE_BORD_REMOTE
-    if local_path == Path(PLANNING_BENEVOLES).resolve():
-        return PLANNING_BENEVOLES_REMOTE
-    if local_path == Path(VOLS).resolve():
-        return VOLS_REMOTE
+    if local_path == Path(runtime_paths.tableau_de_bord).resolve():
+        return runtime_paths.tableau_de_bord_remote
+    if local_path == Path(runtime_paths.planning_benevoles).resolve():
+        return runtime_paths.planning_benevoles_remote
+    if local_path == Path(runtime_paths.vols).resolve():
+        return runtime_paths.vols_remote
     return None
 
 
@@ -540,11 +771,17 @@ def sync_local_file_to_onedrive(
     *,
     remote_path: str | None = None,
     conflict_behavior: str = "replace",
+    runtime: RuntimePaths | None = None,
 ) -> bool:
-    if not USE_GRAPH_ONEDRIVE:
+    runtime_paths = runtime or get_runtime_paths()
+    if not runtime_paths.use_graph_onedrive:
         return False
-    remote_path = remote_path or remote_path_for_local(local_path)
+    remote_path = remote_path or remote_path_for_local(local_path, runtime=runtime_paths)
     if not remote_path:
         return False
-    return upload_onedrive_file(local_path, remote_path, conflict_behavior=conflict_behavior)
-logger = logging.getLogger("ASF-SCHEDULER")
+    return upload_onedrive_file(
+        local_path,
+        remote_path,
+        conflict_behavior=conflict_behavior,
+        runtime=runtime_paths,
+    )

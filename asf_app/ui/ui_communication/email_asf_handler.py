@@ -10,7 +10,6 @@
 from asf_app.ui.ui_communication.outlook import create_outlook_draft
 
 
-
 # --------------------------------------------------------
 # Sujet dynamique basé sur la semaine et l'année
 # --------------------------------------------------------

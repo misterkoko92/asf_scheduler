@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import pandas as pd
+
 import asf_app.ui.ui_communication.whatsapp_handler as wa
 
 
@@ -31,3 +33,27 @@ def test_open_whatsapp_windows_without_shell_true(monkeypatch):
     args, kwargs = calls[0]
     assert list(args[0])[:3] == ["cmd", "/c", "start"]
     assert kwargs.get("shell") is None
+
+
+def test_build_message_for_benevole_coerces_invalid_nb_colis():
+    df_bene = pd.DataFrame(
+        [
+            {
+                "DATE": "2026-01-23",
+                "Destination": "RUN",
+                "Dest_Ville": "SAINT DENIS",
+                "Code_IATA": "RUN",
+                "Numero_Vol_Aff": "AF 652",
+                "Heure_Vol_Aff": "18:20",
+                "Numero_BE_Aff": "250001",
+                "Type_Colis": "MM",
+                "Nb_Colis": "invalid",
+                "_BENE_KEY": "B1",
+                "Benevole_Prenom": "Alice",
+            }
+        ]
+    )
+
+    msg = wa._build_message_for_benevole(df_bene, vols_info={}, map_iata_city={})
+
+    assert "0 colis" in msg

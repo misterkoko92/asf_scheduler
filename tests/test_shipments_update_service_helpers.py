@@ -146,3 +146,20 @@ def test_sort_export_df_orders_by_date_time_and_be():
 
     out = sus._sort_export_df(df)
     assert out["BE_Numero"].tolist() == ["250003", "250001", "250002"]
+
+
+def test_load_export_df_returns_empty_when_excel_is_invalid(monkeypatch, tmp_path):
+    path = tmp_path / "broken.xlsx"
+    path.write_text("not-an-excel", encoding="utf-8")
+
+    def _raise_value_error(*_args, **_kwargs):
+        raise ValueError("invalid")
+
+    monkeypatch.setattr(sus.pd, "read_excel", _raise_value_error)
+
+    out = sus._load_export_df(path)
+
+    assert isinstance(out, pd.DataFrame)
+    assert out.empty
+    assert "BE_Key" in out.columns
+    assert "_STATUS" in out.columns

@@ -1,12 +1,11 @@
 # asf_app/ui/ui_stats/stats_plots.py
 # -*- coding: utf-8 -*-
 
-import streamlit as st
 import matplotlib.pyplot as plt
-import seaborn as sns
-import plotly.express as px
 import pandas as pd
-
+import plotly.express as px
+import seaborn as sns
+import streamlit as st
 
 sns.set_theme(style="whitegrid")
 

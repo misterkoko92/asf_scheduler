@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
 from urllib.parse import quote
@@ -52,7 +52,7 @@ class OneDriveGraphClient:
         if os.name != "nt":
             try:
                 os.chmod(self.config.token_cache_path, 0o600)
-            except Exception:
+            except (FileNotFoundError, OSError, PermissionError):
                 pass
 
     def _encode_path(self, path: str) -> str:

@@ -6,7 +6,7 @@ import datetime as dt
 import pandas as pd
 import pytest
 
-from scheduler.solver_ortools_v3 import solve_planning_ortools_simulation, cp_model
+from scheduler.solver_ortools_v3 import cp_model, solve_planning_ortools_simulation
 
 
 class DummyDataSource:

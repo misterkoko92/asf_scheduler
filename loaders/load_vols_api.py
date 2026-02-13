@@ -7,26 +7,34 @@ N'affecte pas le loader Excel existant.
 
 from __future__ import annotations
 
+import logging
 from datetime import date
-from typing import List, Dict
 from pathlib import Path
-import pandas as pd
+from typing import Dict, List
 
+import pandas as pd
 from openpyxl import load_workbook
 
-from asf_app.services.airfrance_api import fetch_multiple
-from scheduler.column_map import column_map_param_dest
-from scheduler.config_paths import TABLEAU_DE_BORD, SHEET_PARAM_DEST, VOLS_SRC, VOLS
 import scheduler.config_paths as cp
-from loaders.universal_loader import load_and_normalize
+from asf_app.services.airfrance_api import fetch_multiple
 from loaders.load_shipments import load_shipments_df
-from utils.datetime_utils import parse_date_series, parse_time_series, normalize_hour_str, hour_min_from_series
+from loaders.universal_loader import load_and_normalize
+from scheduler.column_map import column_map_param_dest
+from scheduler.config_paths import SHEET_PARAM_DEST, TABLEAU_DE_BORD, VOLS, VOLS_SRC
+from utils.datetime_utils import (
+    hour_min_from_series,
+    normalize_hour_str,
+    parse_date_series,
+    parse_time_series,
+)
+
+logger = logging.getLogger("ASF-SCHEDULER")
 
 
 def _fmt_date(dt) -> str:
     try:
         return pd.to_datetime(dt, errors="coerce", dayfirst=True).strftime("%d/%m/%y")
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         return ""
 
 
@@ -56,7 +64,7 @@ def load_be_dest_codes() -> List[str]:
         codes = codes.dropna().astype(str).str.upper()
         codes = codes[codes.str.len() == 3]
         return sorted(set(codes))
-    except Exception:
+    except (FileNotFoundError, OSError, KeyError, RuntimeError, TypeError, ValueError):
         return []
 
 
@@ -91,12 +99,12 @@ def load_vols_api(
         str(r.get("Dest_IATA", "")).upper(): str(r.get("Dest_Ville", "")).upper()
         for _, r in df_param.iterrows()
     }
-    iata_to_cap: Dict[str, int] = {
+    iata_to_cap: Dict[str, int | None] = {
         str(r.get("Dest_IATA", "")).upper(): r.get("Max_Colis_Par_Vol")
         for _, r in df_param.iterrows()
     }
 
-    rows: List[Dict[str, str]] = []
+    rows: List[Dict[str, object]] = []
     for f in flights:
         route_parts = f.route.split("-") if f.route else []
         if not route_parts or len(route_parts) < 2:
@@ -128,13 +136,19 @@ def load_vols_api(
         df["HEURE_MIN"] = hour_min_from_series(df["Heure_Vol"])
         df = df.drop_duplicates(subset=["Date_Vol", "Numero_Vol", "Destination"]).reset_index(drop=True)
 
-    # Debug console
+    # Debug logs
     try:
-        print("[AF API] Vols chargés :", len(df))
+        logger.info("[AF API] Vols charges: %s", len(df))
         if not df.empty:
-            print("[AF API] Dates uniques :", sorted(df["Date_Vol"].dropna().unique().tolist()))
-            print("[AF API] Destinations uniques :", sorted(df["IATA"].dropna().unique().tolist()))
-    except Exception:
+            logger.debug(
+                "[AF API] Dates uniques: %s",
+                sorted(df["Date_Vol"].dropna().unique().tolist()),
+            )
+            logger.debug(
+                "[AF API] Destinations uniques: %s",
+                sorted(df["IATA"].dropna().unique().tolist()),
+            )
+    except (AttributeError, KeyError, TypeError, ValueError):
         pass
 
     return df
@@ -159,11 +173,11 @@ def store_vols_api_sheet(df: pd.DataFrame, start_date: date, path: Path = VOLS_S
     # Nettoyage valeurs <NA> pour openpyxl
     df_to_save = df.copy()
     try:
-        df_to_save = df_to_save.applymap(lambda v: "" if pd.isna(v) else v)
-    except Exception:
+        df_to_save = df_to_save.astype(object).where(pd.notna(df_to_save), "")
+    except (TypeError, ValueError):
         pass
-    table = [list(df_to_save.columns)]
-    table.extend([list(row) for row in df_to_save.itertuples(index=False, name=None)])
+    table_rows = [list(df_to_save.columns)]
+    table_rows.extend([list(row) for row in df_to_save.itertuples(index=False, name=None)])
 
     if not path.exists():
         with pd.ExcelWriter(path, engine="openpyxl") as writer:
@@ -174,21 +188,21 @@ def store_vols_api_sheet(df: pd.DataFrame, start_date: date, path: Path = VOLS_S
     try:
         from utils.excel_automation import write_sheet_table
 
-        if write_sheet_table(path, sheet_name, table):
+        if write_sheet_table(path, sheet_name, table_rows):
             cp.sync_local_file_to_onedrive(path)
             return sheet_name
-    except Exception:
+    except (ImportError, OSError, RuntimeError, TypeError, ValueError):
         pass
 
     wb = load_workbook(path)
     ws = wb[sheet_name] if sheet_name in wb.sheetnames else wb.create_sheet(sheet_name)
-    max_row = max(ws.max_row, len(table))
-    max_col = max(ws.max_column, len(table[0]) if table else 0)
+    max_row = max(ws.max_row, len(table_rows))
+    max_col = max(ws.max_column, len(table_rows[0]) if table_rows else 0)
     if max_row and max_col:
         for row in ws.iter_rows(min_row=1, max_row=max_row, min_col=1, max_col=max_col):
             for cell in row:
                 cell.value = None
-    for r_idx, row in enumerate(table, start=1):
+    for r_idx, row in enumerate(table_rows, start=1):
         for c_idx, val in enumerate(row, start=1):
             ws.cell(row=r_idx, column=c_idx, value=val)
     # Ajuste la largeur des colonnes (sans wrap)
@@ -211,7 +225,7 @@ def store_vols_api_sheet(df: pd.DataFrame, start_date: date, path: Path = VOLS_S
                 tbls.clear()
             else:
                 ws._tables = []
-        except Exception:
+        except (AttributeError, TypeError):
             pass
         from openpyxl.worksheet.table import Table, TableStyleInfo
 
@@ -219,7 +233,7 @@ def store_vols_api_sheet(df: pd.DataFrame, start_date: date, path: Path = VOLS_S
         last_col = ws.max_column
         end_col_letter = ws.cell(row=1, column=last_col).column_letter
         table_ref = f"A1:{end_col_letter}{last_row}"
-        table = Table(displayName="VolsAPI", ref=table_ref)
+        ws_table = Table(displayName="VolsAPI", ref=table_ref)
         style = TableStyleInfo(
             name="TableStyleMedium2",
             showFirstColumn=False,
@@ -227,9 +241,9 @@ def store_vols_api_sheet(df: pd.DataFrame, start_date: date, path: Path = VOLS_S
             showRowStripes=True,
             showColumnStripes=False,
         )
-        table.tableStyleInfo = style
-        ws.add_table(table)
-    except Exception:
+        ws_table.tableStyleInfo = style
+        ws.add_table(ws_table)
+    except (ImportError, AttributeError, OSError, TypeError, ValueError):
         pass
 
     wb.save(path)
@@ -278,5 +292,5 @@ def copy_api_sheet_to_tmp(sheet_name: str, src_path: Path = VOLS_SRC, dst_path: 
 
         wb_dst.save(dst_path)
         cp.sync_local_file_to_onedrive(dst_path)
-    except Exception:
+    except (FileNotFoundError, OSError, KeyError, RuntimeError, TypeError, ValueError):
         pass

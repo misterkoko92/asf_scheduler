@@ -4,10 +4,15 @@ import pandas as pd
 
 from utils.datetime_utils import (
     coerce_datetime,
-    parse_date_series,
-    parse_time_series,
-    normalize_hour_str,
+    format_date_long_fr,
+    format_time_value,
     hour_min_from_series,
+    normalize_hour_str,
+    parse_date_long_fr,
+    parse_date_series,
+    parse_iso_datetime,
+    parse_time_series,
+    parse_time_value_as_time,
 )
 
 
@@ -76,3 +81,25 @@ def test_coerce_datetime_dayfirst_iso_emits_no_warning():
         in str(w.message)
         for w in caught
     )
+
+
+def test_parse_iso_datetime_handles_z_suffix_and_invalid():
+    dt_ok = parse_iso_datetime("2026-01-23T10:15:00Z")
+    assert dt_ok is not None
+    assert dt_ok.isoformat() == "2026-01-23T10:15:00+00:00"
+    assert parse_iso_datetime("not-a-date") is None
+
+
+def test_parse_time_value_as_time_supports_decimal_hours():
+    t = parse_time_value_as_time(14.5)
+    assert t is not None
+    assert t.hour == 14
+    assert t.minute == 30
+    assert parse_time_value_as_time("xx") is None
+
+
+def test_parse_date_long_fr_fallback_and_format_time_value():
+    parsed = parse_date_long_fr("Lundi 01/12", default_year=2026)
+    assert str(parsed.date()) == "2026-12-01"
+    assert format_date_long_fr("01/12/26") == "Mardi 01/12/26"
+    assert format_time_value("10:05") == "10h05"

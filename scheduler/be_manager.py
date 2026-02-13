@@ -3,18 +3,20 @@
 
 from __future__ import annotations
 
-from typing import Dict
+import logging
 from pathlib import Path
+from typing import Dict
 
 import pandas as pd
 
-from scheduler.config_paths import (
-    TABLEAU_DE_BORD,
-    SHEET_PARAM_BE,
-)
-
 from loaders.universal_loader import load_and_normalize
 from scheduler.column_map import column_map_param_be
+from scheduler.config_paths import (
+    SHEET_PARAM_BE,
+    TABLEAU_DE_BORD,
+)
+
+logger = logging.getLogger("ASF-SCHEDULER")
 
 
 
@@ -47,11 +49,11 @@ def normalize_param_be(param_be_raw) -> Dict[str, Dict[str, int]]:
             equiv = row.get("Equiv", 1)
             try:
                 prio = int(prio)
-            except Exception:
+            except (TypeError, ValueError, OverflowError):
                 prio = 99
             try:
                 equiv = int(equiv)
-            except Exception:
+            except (TypeError, ValueError, OverflowError):
                 equiv = 1
             param_be[t] = {"Priorite_Type": prio, "Equiv": equiv}
 
@@ -64,11 +66,11 @@ def normalize_param_be(param_be_raw) -> Dict[str, Dict[str, int]]:
             equiv = vals.get("Equiv", vals.get("equiv", 1))
             try:
                 prio = int(prio)
-            except Exception:
+            except (TypeError, ValueError, OverflowError):
                 prio = 99
             try:
                 equiv = int(equiv)
-            except Exception:
+            except (TypeError, ValueError, OverflowError):
                 equiv = 1
             param_be[key] = {"Priorite_Type": prio, "Equiv": equiv}
     else:
@@ -100,7 +102,7 @@ def load_param_be(
     if use_cache and _PARAM_BE_CACHE is not None:
         return _PARAM_BE_CACHE
 
-    print("=== PARAM_BE : Chargement ===")
+    logger.info("=== PARAM_BE : Chargement ===")
 
     df = load_and_normalize(
         path=(tdb_path or TABLEAU_DE_BORD),
@@ -109,30 +111,32 @@ def load_param_be(
         header=0,
     )
 
-    print(f"Colonnes ParamBE détectées : {list(df.columns)}")
+    logger.info("Colonnes ParamBE détectées : %s", list(df.columns))
     try:
-        print(df.head(10))
-    except Exception:
-        print("(Impossible d'afficher l'aperçu ParamBE)")
+        logger.debug("Aperçu ParamBE:\n%s", df.head(10).to_string(index=False))
+    except (AttributeError, KeyError, TypeError, ValueError):
+        logger.debug("(Impossible d'afficher l'aperçu ParamBE)")
 
     param_be = normalize_param_be(df)
 
     expected_types = ["MM", "CN", "FR", "MED", "FRE", "MOB", "AUTRE", "JOUET", "JOUETS", "LAIT"]
     found_types = sorted(param_be.keys())
     missing = [t for t in expected_types if t not in found_types]
-    print("=== CHECK PARAM_BE ===")
-    print("Types trouvés       :", found_types)
-    print("Types manquants     :", missing)
-    print("======================")
+    logger.info("=== CHECK PARAM_BE ===")
+    logger.info("Types trouvés       : %s", found_types)
+    logger.info("Types manquants     : %s", missing)
+    logger.info("======================")
     if missing:
-        print("⚠️ WARNING : ParamBE semble incomplet ! Vérifie column_map_param_be ou les noms de colonnes.")
+        logger.warning(
+            "ParamBE semble incomplet ; verifier column_map_param_be ou les noms de colonnes."
+        )
 
-    print("\n=== PARAM_BE FINAL ===")
+    logger.info("=== PARAM_BE FINAL ===")
     for t in sorted(param_be.keys()):
         p = param_be[t]["Priorite_Type"]
         e = param_be[t]["Equiv"]
-        print(f"Type={t} → Priorité={p} | Coeff Equiv={e}")
-    print("=================================\n")
+        logger.info("Type=%s -> Priorite=%s | Coeff Equiv=%s", t, p, e)
+    logger.info("=================================")
 
     _PARAM_BE_CACHE = param_be
     return param_be

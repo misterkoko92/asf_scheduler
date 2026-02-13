@@ -7,27 +7,26 @@ from typing import Optional
 
 import pandas as pd
 
-from utils.datetime_utils import format_date_value, format_time_value
-
-from loaders.universal_loader import load_and_normalize
-from loaders.load_vols import load_vols_df
 from loaders.load_params import load_param_dest_from_path
+from loaders.load_vols import load_vols_df
+from loaders.universal_loader import load_and_normalize
 from scheduler.column_map import (
+    column_map_benev_dispo,
     column_map_mag_central,
     column_map_param_be,
-    column_map_param_dest,
     column_map_param_benev,
-    column_map_benev_dispo,
+    column_map_param_dest,
     column_map_vols,
 )
 from scheduler.config_paths import (
+    SHEET_BENEV_DISPO,
     SHEET_MAG_CENTRAL,
     SHEET_PARAM_BE,
-    SHEET_PARAM_DEST,
     SHEET_PARAM_BENEV,
-    SHEET_BENEV_DISPO,
+    SHEET_PARAM_DEST,
     SHEET_VOLS,
 )
+from utils.datetime_utils import format_date_value, format_time_value
 from utils.logging_utils import get_logger
 
 
@@ -80,16 +79,16 @@ def load_vols(
     if param_dest_df is None and tdb_path is not None and Path(tdb_path).exists():
         try:
             param_dest_df = load_param_dest_from_path(Path(tdb_path))
-        except Exception:
+        except (FileNotFoundError, OSError, ValueError, RuntimeError):
             param_dest_df = None
 
     try:
         return load_vols_df(vols_path=Path(vols_path), param_dest_df=param_dest_df)
-    except Exception as exc:
+    except (FileNotFoundError, OSError, ValueError, RuntimeError, TypeError) as exc:
         logger.error("Erreur load_vols_df: %s", exc)
         try:
             return load_and_normalize(vols_path, SHEET_VOLS, column_map_vols, header=0)
-        except Exception as exc2:
+        except (FileNotFoundError, OSError, ValueError, RuntimeError, TypeError) as exc2:
             raise InputLoadError("Erreur chargement Vols") from exc2
 
 
@@ -124,5 +123,5 @@ def get_benev_source_message(path: Path) -> str:
         if d_str or h_str:
             return f"{d_str} à {h_str}".strip(" à ")
         return "N/A"
-    except Exception:
+    except (ImportError, FileNotFoundError, OSError, ValueError, TypeError, AttributeError):
         return "N/A"

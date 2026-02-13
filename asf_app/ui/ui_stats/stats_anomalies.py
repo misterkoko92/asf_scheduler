@@ -1,7 +1,6 @@
 # asf_app/ui/ui_stats/stats_anomalies.py
 # -*- coding: utf-8 -*-
 
-import pandas as pd
 
 
 def detect_outliers_zscore(series, threshold=3):

@@ -1,29 +1,41 @@
 # asf_app/ui/ui_manual.py
 # -*- coding: utf-8 -*-
 
-import streamlit as st
-import pandas as pd
-from utils.datetime_utils import coerce_datetime, format_time_value
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from asf_app.state import get_state, sync_state_paths_to_engine
-from asf_app.services.files_service import save_excel_sheet
+import pandas as pd
+import streamlit as st
 
+from asf_app.services.files_service import save_excel_sheet
+from asf_app.services.input_service import load_normalized_sheet
+from asf_app.state import get_state, sync_state_paths_to_engine
+from scheduler.column_map import (
+    column_map_benev_dispo,
+    column_map_mag_central,
+    column_map_param_benev,
+    column_map_vols,
+)
 from scheduler.config_paths import (
     SHEET_BENEV_DISPO,
+    SHEET_MAG_CENTRAL,
     SHEET_PARAM_BENEV,
     SHEET_VOLS,
-    SHEET_MAG_CENTRAL,
 )
+from utils.datetime_utils import coerce_datetime, format_time_value
+from utils.logging_utils import get_logger
 
-from asf_app.services.input_service import load_normalized_sheet
+logger = get_logger("ui_manual", console=False)
 
-from scheduler.column_map import (
-    column_map_param_benev,
-    column_map_benev_dispo,
-    column_map_vols,
-    column_map_mag_central,
+MANUAL_UI_ERRORS = (
+    FileNotFoundError,
+    OSError,
+    PermissionError,
+    KeyError,
+    ValueError,
+    TypeError,
+    RuntimeError,
+    pd.errors.ParserError,
 )
 
 
@@ -46,7 +58,8 @@ def write_excel_sheet(path: Path, sheet_name: str, df: pd.DataFrame):
         save_excel_sheet(path, sheet_name, df)
         return True
 
-    except Exception as e:
+    except MANUAL_UI_ERRORS as e:
+        logger.warning("Ecriture Excel impossible pour %s (%s): %s", sheet_name, path, e)
         st.error(f"❌ Erreur écriture Excel ({sheet_name}) : {e}")
         return False
 
@@ -99,7 +112,7 @@ def render_tab_manual():
                 try:
                     t = coerce_datetime(val, errors="coerce").time()
                     return format_time_value(t, fmt="%H:%M", default="")
-                except Exception:
+                except (AttributeError, TypeError, ValueError):
                     return str(val) if val is not None else ""
 
             for col in ["Heure_Arrivee", "Heure_Depart", "Heure_Arrivee_time", "Heure_Depart_time"]:
@@ -136,8 +149,8 @@ def render_tab_manual():
                             h = coerce_datetime(row["Heure_Arrivee"]).time()
                             new_time = (datetime.combine(datetime.today(), h) - timedelta(hours=3)).time()
                             edited.at[i, "Heure_Arrivee"] = format_time_value(new_time, fmt="%H:%M:%S", default="")
-                        except:
-                            pass
+                        except (AttributeError, TypeError, ValueError):
+                            continue
 
                 # Mise à jour
                 for _, row in edited.iterrows():

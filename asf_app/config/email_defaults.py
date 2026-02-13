@@ -9,6 +9,17 @@ from typing import Any
 
 import yaml
 
+EMAIL_DEFAULTS_LOAD_ERRORS: tuple[type[BaseException], ...] = (
+    OSError,
+    AttributeError,
+    TypeError,
+    ValueError,
+)
+if hasattr(yaml, "YAMLError"):
+    yaml_error = getattr(yaml, "YAMLError")
+    if isinstance(yaml_error, type) and issubclass(yaml_error, BaseException):
+        EMAIL_DEFAULTS_LOAD_ERRORS = EMAIL_DEFAULTS_LOAD_ERRORS + (yaml_error,)
+
 
 EMAIL_DEFAULTS_PATH = Path(__file__).parent / "email_defaults.yml"
 
@@ -64,7 +75,7 @@ def load_email_defaults() -> dict:
     try:
         with open(EMAIL_DEFAULTS_PATH, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
-    except Exception:
+    except EMAIL_DEFAULTS_LOAD_ERRORS:
         data = {}
     return normalize_email_defaults(data)
 

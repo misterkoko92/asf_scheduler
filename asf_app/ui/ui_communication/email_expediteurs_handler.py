@@ -7,16 +7,17 @@
 # - Tableau HTML commun (même que destinations)
 # --------------------------------------------------
 
-from pathlib import Path
-
 import pandas as pd
-from asf_app.ui.ui_communication.outlook import create_outlook_draft
 
 from asf_app.ui.ui_communication.helpers_email_tables import build_comm_table_html
+from asf_app.ui.ui_communication.outlook import create_outlook_draft
 from asf_app.ui.ui_communication.pdf_attachments import (
     find_be_pdf_attachments,
     index_pdfs_by_be,
 )
+from utils.logging_utils import get_logger
+
+logger = get_logger("email_expediteurs_handler", console=False)
 
 
 
@@ -133,7 +134,7 @@ def generate_expediteur_email_for_pair(
     year: int,
     custom_subject: str | None = None,
     custom_body: str | None = None,
-    pdf_index: dict[str, list[Path]] | None = None,
+    pdf_index: dict[str, list[str]] | None = None,
 ):
     """
     Génère un mail brouillon pour un couple (Expéditeur, Destination),
@@ -152,7 +153,7 @@ def generate_expediteur_email_for_pair(
     ].copy()
 
     if df_subset.empty:
-        print(f"[Expéditeurs] Aucun colis pour {expediteur} vers {destination}")
+        logger.info("Aucun colis expediteur=%s destination=%s", expediteur, destination)
         # On permet quand même la création du mail pour édition manuelle
         table_html = "<p><i>Aucun colis cette semaine.</i></p>"
     else:

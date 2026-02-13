@@ -1,5 +1,6 @@
-import pandas as pd
 from typing import Optional, Tuple
+
+import pandas as pd
 
 from utils.datetime_utils import coerce_datetime, parse_date_series, parse_time_series
 

@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 from scheduler.data_sources import (
+    AsfBenevDataSource,
+    AsfWmsDataSource,
+    CompositeDataSource,
     ExcelDataSource,
     ExcelSourcePaths,
-    AsfWmsDataSource,
-    AsfBenevDataSource,
-    CompositeDataSource,
     resolve_data_source,
 )
 

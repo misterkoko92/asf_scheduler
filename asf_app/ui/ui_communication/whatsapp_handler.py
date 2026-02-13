@@ -4,12 +4,13 @@
 # produit par clean_planning_df.py.
 # ---------------------------------------------------------
 
-import urllib.parse
-import platform
-import subprocess
-import pandas as pd
-import re
 import os
+import platform
+import re
+import subprocess
+import urllib.parse
+
+import pandas as pd
 import streamlit as st
 
 IS_STREAMLIT_CLOUD = bool(
@@ -121,9 +122,6 @@ def _build_message_for_benevole(df_bene, vols_info, map_iata_city):
             iata_display = iata_raw or dest_city
             dest_display = dest_city or iata_display
             date_display = row.get("Date_Affichage_WA", row.get("DATE", ""))
-            date_key = str(row.get("DATE", ""))
-            code_key = iata_display
-            vol_key = row.get("Numero_Vol_Aff", "")
 
             heure_display = str(row.get("Heure_Vol_Aff", row.get("HEURE VOL", "")))
             if ":" in heure_display:
@@ -134,7 +132,7 @@ def _build_message_for_benevole(df_bene, vols_info, map_iata_city):
             nb_colis = row.get("Nb_Colis", 0)
             try:
                 nb_colis = int(nb_colis)
-            except Exception:
+            except (TypeError, ValueError):
                 nb_colis = 0
             ligne = (
                 f"• {date_display} : "

@@ -5,16 +5,16 @@
 # - Bouton "Générer tous les mails"
 # - Bouton "Générer pour cette destination"
 
-import streamlit as st
 import pandas as pd
+import streamlit as st
 
 from asf_app.ui.ui_communication.email_destinations_handler import (
-    generate_destination_email_for_destination,
-    generate_all_destination_emails,
-    build_subject_destination,
     DEFAULT_BODY_DEST,
+    build_subject_destination,
+    generate_all_destination_emails,
+    generate_destination_email_for_destination,
 )
-from asf_app.ui.ui_planning.state_planning import get_planning_state
+
 
 def render_email_destinations_ui(
     df_comm: pd.DataFrame,

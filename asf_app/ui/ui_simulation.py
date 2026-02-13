@@ -1,17 +1,24 @@
-import streamlit as st
-import pandas as pd
-
-from asf_app.services.simulation_runner import run_ortools_simulation_dual
-from scheduler.solver_router import get_solver_version
-from asf_app.config.runtime import get_tableau_de_bord_src, is_graph_onedrive
-from asf_app.state import get_state, get_excel_source_paths
-from scheduler.data_sources import ExcelDataSource
-from utils.datetime_utils import parse_date_series, parse_time_series, coerce_datetime
-from utils.ui_helpers import build_iata_city_maps, sort_planning_df, format_be_label, format_vol_label
 from pathlib import Path
-from utils.benevole_utils import count_benevoles_with_dispo
+
+import pandas as pd
+import streamlit as st
+
+from asf_app.config.runtime import get_tableau_de_bord_src, is_graph_onedrive
+from asf_app.services.simulation_runner import run_ortools_simulation_dual
+from asf_app.state import get_excel_source_paths, get_state
+from scheduler.data_sources import ExcelDataSource
 from scheduler.planning_schema import normalize_planning_df
 from scheduler.planning_views import build_export_view
+from scheduler.solver_router import get_solver_version
+from utils.benevole_utils import count_benevoles_with_dispo
+from utils.datetime_utils import coerce_datetime, parse_date_series
+from utils.ui_helpers import (
+    build_iata_city_maps,
+    format_be_label,
+    format_vol_label,
+    sort_planning_df,
+)
+
 
 # Backward compatibility wrapper (historical name kept in code paths)
 def _sort_planning(df):
@@ -175,7 +182,7 @@ def _recompute_bilan_benevoles(
         dep_parsed = coerce_datetime(df_tmp.get(dep_col, ""), errors="coerce")
         df_tmp = df_tmp[arr_parsed.notna() & dep_parsed.notna()]
         dispo_counts = df_tmp.groupby("Benevole")["_Date_dt"].dt.date.nunique().to_dict()
-    except Exception:
+    except (AttributeError, KeyError, TypeError, ValueError):
         dispo_counts = {}
 
     # Affectations
@@ -190,7 +197,7 @@ def _recompute_bilan_benevoles(
     # Ajouter tous les bénévoles connus (même sans dispo)
     try:
         benevole_set.update(df_parambenev["Benevole"].dropna().unique())
-    except Exception:
+    except (AttributeError, KeyError, TypeError):
         pass
 
     for bene in benevole_set:
@@ -336,9 +343,9 @@ def _clean_for_excel(df: pd.DataFrame | None) -> pd.DataFrame | None:
 
 
 def _open_file(path_obj):
-    import subprocess
     import os
     import platform
+    import subprocess
 
     if path_obj is None:
         return
@@ -346,10 +353,12 @@ def _open_file(path_obj):
         if platform.system() == "Darwin":
             subprocess.Popen(["open", str(path_obj)])
         elif platform.system() == "Windows":
-            os.startfile(str(path_obj))  # type: ignore[attr-defined]
+            startfile = getattr(os, "startfile", None)
+            if callable(startfile):
+                startfile(str(path_obj))
         else:
             subprocess.Popen(["xdg-open", str(path_obj)])
-    except Exception:
+    except (OSError, ValueError):
         pass
 
 
@@ -371,7 +380,7 @@ def _time_from_str(val):
     try:
         if pd.isna(val):
             return None
-    except Exception:
+    except (TypeError, ValueError):
         pass
     if str(val).strip() == "":
         return None
@@ -380,7 +389,7 @@ def _time_from_str(val):
     try:
         sval = str(val).replace("h", ":")
         return coerce_datetime(sval, errors="coerce").time()
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         return None
 
 
@@ -423,7 +432,7 @@ def _filter_vols_for_selection(
             end_dt = coerce_datetime(api_end_date)
             df_vols["Date_dt"] = parse_date_series(df_vols["Date_Vol"])
             df_vols = df_vols[(df_vols["Date_dt"] >= start_dt) & (df_vols["Date_dt"] <= end_dt)]
-    except Exception:
+    except (KeyError, TypeError, ValueError):
         pass
     df_vols["Dest_UP"] = df_vols.get("IATA", "").astype(str).str.upper()
     df_vols["Destination_UP"] = df_vols.get("Destination", "").astype(str).str.upper()
@@ -456,7 +465,7 @@ def _build_vol_selector_data(
         date_dt = None
         try:
             date_dt = parse_date_series(pd.Series([date_raw])).iloc[0]
-        except Exception:
+        except (IndexError, TypeError, ValueError):
             pass
         routing_lbl = str(row.get("Routing", "")) or ""
         routing_up = routing_lbl.upper()
@@ -521,14 +530,14 @@ def _compute_bene_status(
     try:
         d = coerce_datetime(date_choice, dayfirst=True, errors="coerce").date()
         t = _time_from_str(heure_choice)
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         return "Inconnu"
     rows = df_dispo
     if "Date_dt" in df_dispo.columns:
         try:
             dates_dt = parse_date_series(df_dispo["Date_dt"])
             rows = df_dispo[dates_dt.dt.date == d]
-        except Exception:
+        except (KeyError, TypeError, ValueError):
             rows = df_dispo
     rows = rows[rows["Benevole"].astype(str) == name]
     if rows.empty:
@@ -729,10 +738,10 @@ def render_tab_simulation():
         return
 
     # Chargements nécessaires pour les statuts
+    from loaders.load_benevoles import load_benevoles
+    from loaders.load_params import get_param_benev, get_param_dest
     from loaders.load_shipments import load_shipments_df
     from loaders.load_vols import load_vols_df
-    from loaders.load_benevoles import load_benevoles
-    from loaders.load_params import get_param_dest, get_param_benev
 
     paths = get_excel_source_paths(state)
     df_be = load_shipments_df(planifiables_only=True, tdb_path=paths.tableau_de_bord)
@@ -809,7 +818,6 @@ def render_tab_simulation():
     def _export_simulation_excel(*, write_source_excel: bool, increment_version: bool):
         from asf_app.services.export_service import export_planning_excel
         current_plan = st.session_state.sim_results.get(current_mode, {}).get("planning_df", plan_df)
-        original_plan = st.session_state.get("sim_original_df", {}).get(current_mode)
         # Export sans traçage des anciennes lignes : on prend uniquement le planning courant
         df_with_status = sort_planning_df(current_plan)
         week, year = _compute_week_year(
@@ -828,7 +836,7 @@ def render_tab_simulation():
         # Tri Date/Heure avant export pour alimenter la feuille Planning dans l'ordre
         try:
             df_export = df_export.sort_values(by=["Date_Vol", "Heure_Vol"], kind="mergesort").reset_index(drop=True)
-        except Exception:
+        except (KeyError, TypeError, ValueError):
             pass
         # Nettoyage valeurs Excel (pas de NA/NaT)
         df_export = _clean_for_excel(df_export)
@@ -847,7 +855,7 @@ def render_tab_simulation():
                 vols_filtered["Date_dt"] = parse_date_series(vols_filtered["Date_Vol"])
                 vols_filtered = vols_filtered[(vols_filtered["Date_dt"] >= start_dt) & (vols_filtered["Date_dt"] <= end_dt)]
                 vols_filtered = vols_filtered.drop(columns=["Date_dt"], errors="ignore")
-        except Exception:
+        except (KeyError, TypeError, ValueError):
             pass
         vols_clean = _clean_for_excel(vols_filtered)
         dispo_clean = _clean_for_excel(df_dispo)
@@ -1031,9 +1039,9 @@ def render_tab_simulation():
                     pdf_path = export_first_sheet_to_pdf(out_path)
                     st.success(f"PDF généré : {pdf_path}")
                     _open_file(pdf_path)
-                except Exception as e_pdf:
+                except (ImportError, OSError, RuntimeError, TypeError, ValueError) as e_pdf:
                     st.warning(f"PDF non généré automatiquement : {e_pdf}")
-            except Exception as e:
+            except (AttributeError, KeyError, OSError, RuntimeError, TypeError, ValueError) as e:
                 st.error(f"Erreur lors de l'export : {e}")
 
     st.dataframe(_style_manual_df(plan_df), height=400, width="stretch", hide_index=True)

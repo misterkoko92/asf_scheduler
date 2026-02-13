@@ -7,20 +7,22 @@ Compatible Streamlit (st.session_state) mais indépendant du moteur ASF.
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Dict, List, Optional
+
 import pandas as pd
 import streamlit as st
-from typing import Optional, Dict, Any, List
-
-from scheduler.data_sources import ExcelSourcePaths
 
 import scheduler.config_paths as cp
+from scheduler.data_sources import ExcelSourcePaths
+from utils.logging_utils import get_logger
 
+logger = get_logger("state", console=False)
 
 def _get_session_context():
     try:
         from asf_app.config.session_context import get_session_context
         return get_session_context()
-    except Exception:
+    except (ImportError, OSError, RuntimeError, TypeError, ValueError):
         return None
 
 # ======================================================================
@@ -112,7 +114,7 @@ class AppState:
     def log(self, msg: str):
         """Ajoute un message au log interne."""
         self.last_engine_logs.append(msg)
-        print(msg)
+        logger.info(msg)
 
     def clear_planning(self):
         """Réinitialise le planning généré."""
@@ -184,27 +186,27 @@ def sync_state_paths_to_engine(state: AppState) -> None:
     try:
         from scheduler.be_manager import reset_param_be_cache
         reset_param_be_cache()
-    except Exception:
+    except (ImportError, AttributeError, OSError, RuntimeError, TypeError, ValueError):
         pass
     try:
         from loaders.load_params import clear_param_caches
         clear_param_caches()
-    except Exception:
+    except (ImportError, AttributeError, OSError, RuntimeError, TypeError, ValueError):
         pass
     try:
         from loaders.load_shipments import clear_shipments_cache
         clear_shipments_cache()
-    except Exception:
+    except (ImportError, AttributeError, OSError, RuntimeError, TypeError, ValueError):
         pass
     try:
         from loaders.load_benevoles import clear_benevoles_cache
         clear_benevoles_cache()
-    except Exception:
+    except (ImportError, AttributeError, OSError, RuntimeError, TypeError, ValueError):
         pass
     try:
         from loaders.load_vols import clear_vols_cache
         clear_vols_cache()
-    except Exception:
+    except (ImportError, AttributeError, OSError, RuntimeError, TypeError, ValueError):
         pass
 
 

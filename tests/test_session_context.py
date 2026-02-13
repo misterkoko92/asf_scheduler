@@ -67,3 +67,18 @@ def test_refresh_session_context_updates_sources(tmp_path, monkeypatch):
 
     assert new_ctx.session_id == ctx.session_id
     assert new_ctx.source_paths.tableau_de_bord.read_text(encoding="utf-8") == "TDB_V2"
+
+
+def test_download_source_strict_raises_on_download_error(tmp_path, monkeypatch):
+    target = tmp_path / "target.xlsx"
+    monkeypatch.setattr(cp, "download_onedrive_file", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    session_context._download_source("/remote/file.xlsx", target, strict=False)
+    assert not target.exists()
+
+    try:
+        session_context._download_source("/remote/file.xlsx", target, strict=True)
+        raised = False
+    except FileNotFoundError:
+        raised = True
+    assert raised is True

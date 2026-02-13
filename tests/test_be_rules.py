@@ -4,15 +4,15 @@ from __future__ import annotations
 import pandas as pd
 
 from scheduler.be_rules import (
-    compute_status_row,
+    STATUS_DEJA_PLANIFIE,
+    STATUS_EXCLUS_SPECIAL,
+    STATUS_INCOMPLET_COND,
+    STATUS_INCOMPLET_DEST,
+    STATUS_PLANIFIABLE,
     compute_be_priority,
     compute_equiv_colis,
+    compute_status_row,
     is_expediteur_asf,
-    STATUS_EXCLUS_SPECIAL,
-    STATUS_DEJA_PLANIFIE,
-    STATUS_INCOMPLET_DEST,
-    STATUS_INCOMPLET_COND,
-    STATUS_PLANIFIABLE,
 )
 from scheduler.models import Shipment
 
@@ -107,3 +107,23 @@ def test_is_expediteur_asf():
     assert is_expediteur_asf(be) is True
     be.expediteur = "Partner"
     assert is_expediteur_asf(be) is False
+
+
+def test_priority_and_equiv_emit_logs(caplog):
+    caplog.set_level("INFO", logger="ASF-SCHEDULER")
+    param_be = {"MM": {"Priorite_Type": 3, "Equiv": 2}, "AUTRE": {"Priorite_Type": 99, "Equiv": 1}}
+    be = Shipment(
+        be_numero="260001",
+        dest="RUN",
+        nb_colis_physiques=2,
+        nb_hf=0,
+        priority=0,
+        type_colis="MM",
+        expediteur="ASF",
+        special="",
+    )
+
+    assert compute_be_priority(be, param_be) == 3
+    assert compute_equiv_colis(be, param_be) == 4
+    assert "[PRIORITE] BE 260001" in caplog.text
+    assert "[EQUIV] BE 260001" in caplog.text

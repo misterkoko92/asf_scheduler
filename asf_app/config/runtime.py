@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 import scheduler.config_paths as cp
 
@@ -11,7 +10,7 @@ def _get_session_context():
     try:
         from asf_app.config.session_context import get_session_context
         return get_session_context()
-    except Exception:
+    except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
         return None
 
 

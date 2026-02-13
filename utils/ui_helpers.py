@@ -41,7 +41,7 @@ def format_vol_label(date_dt, iata: str, vol_num: str, heure_str: str, routing: 
         if hasattr(date_dt, "strftime"):
             jours_fr = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
             jour = jours_fr[date_dt.weekday()]
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         pass
     date_txt = f"{jour} {date_dt.strftime('%d/%m/%y')}" if getattr(date_dt, "strftime", None) else str(date_dt)
     routing_txt = routing or ""

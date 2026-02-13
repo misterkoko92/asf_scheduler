@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from utils.excel_safety import sanitize_excel_value, sanitize_dataframe_for_excel
+from utils.excel_safety import sanitize_dataframe_for_excel, sanitize_excel_value
 
 
 def test_sanitize_excel_value_formula_prefixes():

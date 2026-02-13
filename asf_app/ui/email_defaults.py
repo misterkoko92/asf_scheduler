@@ -7,7 +7,7 @@ from copy import deepcopy
 
 try:
     import streamlit as st
-except Exception:
+except (ImportError, ModuleNotFoundError):
     st = None
 
 from asf_app.config.email_defaults import (

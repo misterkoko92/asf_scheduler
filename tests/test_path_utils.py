@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from utils.path_utils import safe_cache_path

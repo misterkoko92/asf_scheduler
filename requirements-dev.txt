@@ -1,0 +1,7 @@
+-r requirements.txt
+
+pre-commit==3.8.0
+ruff==0.8.6
+mypy==1.13.0
+coverage==7.13.4
+pytest-cov==7.0.0

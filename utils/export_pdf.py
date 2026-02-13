@@ -5,10 +5,10 @@ Only the first worksheet is exported (on a duplicated workbook), preserving A1/K
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 import tempfile
-import shutil
 from pathlib import Path
 from textwrap import dedent
 
@@ -89,7 +89,7 @@ def export_first_sheet_to_pdf(xlsx_path: str | Path, pdf_path: str | Path | None
     try:
         if tmp_copy.exists():
             tmp_copy.unlink()
-    except Exception:
+    except (FileNotFoundError, OSError, PermissionError):
         pass
 
     return pdf

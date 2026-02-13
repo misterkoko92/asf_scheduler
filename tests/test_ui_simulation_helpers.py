@@ -5,19 +5,19 @@ import pandas as pd
 
 from asf_app.ui.ui_simulation import (
     _apply_manual_assignment,
-    _build_manual_row_data,
     _build_be_options,
     _build_bene_selector_data,
+    _build_manual_row_data,
     _build_vol_selector_data,
     _clean_for_excel,
     _compute_bene_status,
     _compute_week_bounds,
+    _compute_week_year,
     _delete_manual_assignment,
     _filter_vols_for_selection,
     _normalize_sort_plan,
-    _compute_week_year,
-    _recompute_bilan,
     _recompute_be_non_planifies,
+    _recompute_bilan,
     _recompute_vols,
     _time_from_str,
 )

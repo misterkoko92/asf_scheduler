@@ -3,27 +3,31 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import datetime as dt
+import logging
 import re
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
-from scheduler.models import Shipment
-from scheduler.config_paths import TABLEAU_DE_BORD, SHEET_MAG_CENTRAL
-from scheduler.be_rules import compute_be_priority, compute_equiv_colis
-from scheduler import be_manager
-from loaders.universal_loader import load_and_normalize
-from scheduler.column_map import column_map_mag_central
-from scheduler.format_rules import format_be_numero
 from loaders.load_params import get_param_be
+from loaders.universal_loader import load_and_normalize
+from scheduler import be_manager
+from scheduler.be_rules import compute_be_priority, compute_equiv_colis
+from scheduler.column_map import column_map_mag_central
+from scheduler.config_paths import SHEET_MAG_CENTRAL, TABLEAU_DE_BORD
+from scheduler.format_rules import format_be_numero
+from scheduler.models import Shipment
 from utils.cache_utils import file_mtime
 from utils.ui_notifications import warn_ui
 
 try:
     import streamlit as st
-except Exception:
+except ImportError:
     st = None
+
+logger = logging.getLogger("ASF-SCHEDULER")
 
 
 # ======================================================================
@@ -40,21 +44,21 @@ def _parse_time_generic(val) -> dt.time | None:
     for fmt in ("%Hh%M", "%H:%M:%S", "%H:%M"):
         try:
             return dt.datetime.strptime(sval, fmt).time()
-        except Exception:
+        except ValueError:
             continue
     try:
         num = float(sval)
         hours = int(num)
         minutes = int(round((num - hours) * 60))
         return dt.time(hour=hours, minute=minutes)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
 def _list_mag_central_sheets(path: Path, *, min_year: int | None = None) -> list[str]:
     try:
         xls = pd.ExcelFile(path)
-    except Exception:
+    except (FileNotFoundError, OSError, ValueError):
         return []
     names = [
         name
@@ -90,7 +94,7 @@ def load_shipments_df(
     planifiables_only=True => filtre BE_Statut == 'D'.
     """
 
-    print("\n=== LOAD_SHIPMENTS_DF ===")
+    logger.info("LOAD_SHIPMENTS_DF start")
 
     tableau_de_bord = tdb_path or TABLEAU_DE_BORD
     mag_sheets = _list_mag_central_sheets(tableau_de_bord, min_year=2025)
@@ -116,7 +120,7 @@ def load_shipments_df(
             header=5,
         )
 
-    print(f"-> BE bruts charges : {len(df_raw)}")
+    logger.info("BE bruts charges: %s", len(df_raw))
     if not isinstance(df_raw, pd.DataFrame):
         warn_ui("MAG CENTRAL illisible (format invalide).")
         df_raw = pd.DataFrame()
@@ -133,9 +137,9 @@ def load_shipments_df(
     if param_be_raw is None:
         try:
             param_be_raw = get_param_be()
-            print(f"ParamBE charge automatiquement : {len(param_be_raw)} lignes")
-        except Exception:
-            print("ParamBE introuvable ou illisible - valeurs par defaut.")
+            logger.info("ParamBE charge automatiquement: %s lignes", len(param_be_raw))
+        except (FileNotFoundError, OSError, ValueError, RuntimeError):
+            logger.warning("ParamBE introuvable ou illisible - valeurs par defaut.")
             warn_ui("ParamBE introuvable ou illisible - valeurs par defaut.")
             param_be_raw = pd.DataFrame(columns=["Type", "Priorite", "Coeff_Equiv"])
 
@@ -148,7 +152,7 @@ def load_shipments_df(
     if planifiables_only:
         df = df[df["BE_Statut"] == "D"].copy()
 
-    print(f"-> BE planifiables : {len(df)}")
+    logger.info("BE planifiables: %s", len(df))
 
     def _row_to_shipment(row):
         return Shipment(
@@ -169,7 +173,7 @@ def load_shipments_df(
         if isinstance(val, pd.DataFrame):
             try:
                 val = val.iloc[0, 0]
-            except Exception:
+            except (IndexError, KeyError):
                 val = val.values.flatten()[0] if val.values.size else 0
         if isinstance(val, (list, tuple)):
             return val[0] if val else 0
@@ -180,7 +184,7 @@ def load_shipments_df(
         if isinstance(val, dict):
             try:
                 return next(iter(val.values()))
-            except Exception:
+            except StopIteration:
                 return 0
         return val
 
@@ -189,7 +193,7 @@ def load_shipments_df(
         if isinstance(val, pd.DataFrame):
             try:
                 val = val.iloc[0, 0]
-            except Exception:
+            except (IndexError, KeyError):
                 val = val.values.flatten()[0] if val.values.size else 0
         if isinstance(val, (list, tuple)):
             return val[0] if val else 0
@@ -200,7 +204,7 @@ def load_shipments_df(
         if isinstance(val, dict):
             try:
                 return next(iter(val.values()))
-            except Exception:
+            except StopIteration:
                 return 0
         return val
 
@@ -237,7 +241,7 @@ def load_shipments_df(
     if "BE_Date_Impression" in df.columns:
         try:
             latest_impr_date = pd.to_datetime(df["BE_Date_Impression"], errors="coerce").max(skipna=True)
-        except Exception:
+        except (TypeError, ValueError, AttributeError):
             latest_impr_date = None
 
     for col in [c for c in df.columns if "Date" in c]:
@@ -245,7 +249,7 @@ def load_shipments_df(
             dt_col = pd.to_datetime(df[col], errors="coerce", dayfirst=True)
             df[col] = dt_col.dt.date
             df[f"{col}_str"] = dt_col.dt.strftime("%d/%m/%y")
-        except Exception:
+        except (TypeError, ValueError, AttributeError):
             pass
 
     if "Heure_Vol" in df.columns:
@@ -271,7 +275,7 @@ def load_shipments_df(
 
     df = df.reset_index(drop=True)
 
-    print(f"load_shipments_df OK : {len(df)} lignes, {len(df.columns)} colonnes")
+    logger.info("load_shipments_df OK: %s lignes, %s colonnes", len(df), len(df.columns))
 
     return df
 
@@ -298,5 +302,5 @@ def clear_shipments_cache() -> None:
     if cached is not None and hasattr(cached, "clear"):
         try:
             cached.clear()
-        except Exception:
+        except (AttributeError, RuntimeError):
             pass

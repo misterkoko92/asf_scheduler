@@ -4,15 +4,14 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
-import pytest
 
 import scheduler.config_paths as cp
 from asf_app.services.planning_exports_service import (
     available_weeks_from_exports,
-    parse_version_from_name,
     find_planning_files_for_week,
     load_planning_preview_with_path,
     load_planning_xlsx,
+    parse_version_from_name,
 )
 
 

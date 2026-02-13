@@ -1,11 +1,9 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from pathlib import Path
-
 import pandas as pd
 
-from asf_app.services.files_service import read_excel_sheet, save_excel_sheet
+from asf_app.services.files_service import pretty_mtime, read_excel_sheet, save_excel_sheet
 
 
 def test_read_excel_sheet_fills_na(tmp_path):
@@ -34,3 +32,8 @@ def test_save_excel_sheet_fallback_openpyxl(tmp_path, monkeypatch):
     out = pd.read_excel(path, sheet_name="Data")
     assert out.iloc[0]["A"] == "x"
     assert out.iloc[0]["B"] == "y"
+
+
+def test_pretty_mtime_missing_file_returns_na(tmp_path):
+    missing = tmp_path / "missing.xlsx"
+    assert pretty_mtime(str(missing)) == "N/A"

@@ -13,10 +13,14 @@ import pandas as pd
 
 from scheduler.solver_ortools import (
     solve_planning_ortools as solve_planning_ortools_v2,
+)
+from scheduler.solver_ortools import (
     solve_planning_ortools_simulation as solve_planning_ortools_simulation_v2,
 )
 from scheduler.solver_ortools_v3 import (
     solve_planning_ortools as solve_planning_ortools_v3,
+)
+from scheduler.solver_ortools_v3 import (
     solve_planning_ortools_simulation as solve_planning_ortools_simulation_v3,
 )
 

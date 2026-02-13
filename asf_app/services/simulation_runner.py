@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from scheduler.solver_router import solve_planning_ortools_simulation
 from scheduler.data_sources import DataSource
+from scheduler.solver_router import solve_planning_ortools_simulation
 
 
 def run_ortools_simulation(

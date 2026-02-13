@@ -2,23 +2,25 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Optional
+from zipfile import BadZipFile
 
 import pandas as pd
+from openpyxl.utils.exceptions import InvalidFileException
 
 import scheduler.config_paths as cp
+from asf_app.config.runtime import get_tableau_de_bord_src
 from loaders.universal_loader import load_and_normalize
 from scheduler.column_map import column_map_mag_central
 from scheduler.config_paths import SHEET_MAG_CENTRAL, TABLEAU_DE_BORD
-from asf_app.config.runtime import get_tableau_de_bord_src
 from utils.datetime_utils import (
+    coerce_datetime,
+    hour_min_from_series,
+    normalize_hour_str,
     parse_date_series,
     parse_time_series,
-    coerce_datetime,
-    normalize_hour_str,
-    hour_min_from_series,
 )
 from utils.identifiers import normalize_be_number
 from utils.logging_utils import get_logger
@@ -35,7 +37,7 @@ def load_be_status(status_code: str, *, tdb_path: Path | None = None) -> pd.Data
             for name in xls.sheet_names
             if str(name).strip().upper().startswith("MAG CENTRAL")
         ]
-    except Exception:
+    except (FileNotFoundError, OSError, ValueError, BadZipFile):
         sheets = []
 
     if not sheets:
@@ -97,12 +99,12 @@ def _norm_be(value: str) -> str:
 def _load_export_df(path: Path) -> pd.DataFrame:
     try:
         df_export = pd.read_excel(path, sheet_name="Export planning")
-    except Exception:
+    except (FileNotFoundError, OSError, ValueError, BadZipFile):
         df_export = pd.DataFrame()
     if df_export.empty:
         try:
             df_export = pd.read_excel(path, sheet_name=0)
-        except Exception:
+        except (FileNotFoundError, OSError, ValueError, BadZipFile):
             df_export = pd.DataFrame()
     df_export = df_export.copy()
     df_export.columns = [str(c) for c in df_export.columns]
@@ -145,7 +147,7 @@ def _apply_update_to_export_df(
         try:
             if pd.isna(val):
                 return True
-        except Exception:
+        except (TypeError, ValueError):
             pass
         sval = str(val).strip().lower()
         return sval in ("", "nan", "none")
@@ -159,12 +161,9 @@ def _apply_update_to_export_df(
     def _from_plan_row(*keys: str) -> object:
         if not plan_row_full:
             return ""
-        try:
-            for k in keys:
-                if k in plan_row_full and not _is_missing(plan_row_full.get(k)):
-                    return plan_row_full.get(k)
-        except Exception:
-            pass
+        for k in keys:
+            if k in plan_row_full and not _is_missing(plan_row_full.get(k)):
+                return plan_row_full.get(k)
         return ""
 
     if action == "Annulation":
@@ -288,7 +287,7 @@ def _mag_lookup_keys(be_key: str) -> list[str]:
             _add(suf4.lstrip("0"))
             try:
                 _add(str(int(suf4)))
-            except Exception:
+            except ValueError:
                 pass
         if len(base) >= 3:
             suf3 = base[-3:]
@@ -296,7 +295,7 @@ def _mag_lookup_keys(be_key: str) -> list[str]:
             _add(suf3.lstrip("0"))
             try:
                 _add(str(int(suf3)))
-            except Exception:
+            except ValueError:
                 pass
     return keys
 
@@ -372,7 +371,7 @@ def _parse_mag_departure_date(date_new: str) -> date | None:
         if pd.isna(parsed):
             return None
         return parsed.date()
-    except Exception:
+    except (TypeError, ValueError, AttributeError):
         return None
 
 
@@ -382,7 +381,7 @@ def _previous_iso_week_friday(date_obj: date | None) -> date | None:
     try:
         mon = date.fromisocalendar(date_obj.isocalendar()[0], date_obj.isocalendar()[1], 1)
         return mon - timedelta(days=3)
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
 
@@ -586,12 +585,12 @@ def _update_mag_central_for_be(
 
     try:
         from openpyxl import load_workbook
-    except Exception:
+    except ImportError:
         return "openpyxl_missing"
 
     try:
         wb_mag = load_workbook(path)
-    except Exception:
+    except (FileNotFoundError, OSError, ValueError, InvalidFileException, BadZipFile):
         return "read_error"
 
     mag_sheet_names = _mag_sheet_names(wb_mag)
@@ -604,7 +603,7 @@ def _update_mag_central_for_be(
     for sheet_name in mag_sheet_names:
         try:
             ws_mag = wb_mag[sheet_name]
-        except Exception:
+        except KeyError:
             continue
         mag_indexes[sheet_name] = _build_mag_index(ws_mag)
 
@@ -637,7 +636,7 @@ def _update_mag_central_for_be(
                 dm_cell = ws_mag.cell(row=target_row, column=cp.MAG_CENTRAL_COL_DEPART_MAG)
                 if dm_cell.value in (None, "") and prev_friday is not None:
                     dm_cell.value = prev_friday
-            except Exception:
+            except (TypeError, ValueError, AttributeError):
                 pass
 
         if date_obj:
@@ -656,6 +655,6 @@ def _update_mag_central_for_be(
     try:
         wb_mag.save(path)
         cp.sync_local_file_to_onedrive(path)
-    except Exception:
+    except (OSError, PermissionError, ValueError):
         return "write_error"
     return "updated"

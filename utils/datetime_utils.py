@@ -1,5 +1,6 @@
 import datetime as dt
 import warnings
+
 import pandas as pd
 
 JOURS_FR_LONG = [
@@ -179,7 +180,7 @@ def parse_iso_datetime(value: object) -> dt.datetime | None:
         return dt.datetime.combine(value, dt.time())
     try:
         sval = str(value).strip()
-    except Exception:
+    except (TypeError, ValueError):
         return None
     if not sval:
         return None
@@ -187,7 +188,7 @@ def parse_iso_datetime(value: object) -> dt.datetime | None:
         sval = f"{sval[:-1]}+00:00"
     try:
         return dt.datetime.fromisoformat(sval)
-    except Exception:
+    except ValueError:
         return None
 
 
@@ -243,14 +244,14 @@ def format_date_value(
     if isinstance(value, (dt.date, dt.datetime, pd.Timestamp)):
         try:
             return value.strftime(fmt)
-        except Exception:
+        except (TypeError, ValueError, AttributeError):
             return default if default is not None else str(value)
     dt_val = parse_date_value(value, fmt=fmt, allow_dayfirst_false=allow_dayfirst_false)
     if pd.isna(dt_val):
         return default if default is not None else str(value)
     try:
         return dt_val.strftime(fmt)
-    except Exception:
+    except (TypeError, ValueError, AttributeError):
         return default if default is not None else str(value)
 
 
@@ -267,7 +268,7 @@ def format_time_value(
     if isinstance(value, (dt.time, dt.datetime, pd.Timestamp)):
         try:
             return value.strftime(fmt)
-        except Exception:
+        except (TypeError, ValueError, AttributeError):
             return default if default is not None else str(value)
     t_val = parse_time_value(
         value,
@@ -280,7 +281,7 @@ def format_time_value(
         return default if default is not None else str(value)
     try:
         return t_val.strftime(fmt)
-    except Exception:
+    except (TypeError, ValueError, AttributeError):
         return default if default is not None else str(value)
 
 
@@ -296,11 +297,11 @@ def format_date_long_fr(
         return default if default is not None else str(value)
     try:
         day = JOURS_FR_LONG[int(dt_val.dayofweek)]
-    except Exception:
+    except (TypeError, ValueError, IndexError, AttributeError):
         day = ""
     try:
         date_str = dt_val.strftime(fmt)
-    except Exception:
+    except (TypeError, ValueError, AttributeError):
         date_str = ""
     return f"{day} {date_str}".strip()
 
@@ -344,7 +345,7 @@ def format_heure_hh_mm(value: object) -> str:
         dt_val = coerce_datetime(value, errors="coerce")
         if pd.notna(dt_val):
             return f"{dt_val.hour}h{dt_val.minute:02d}"
-    except Exception:
+    except (TypeError, ValueError, AttributeError):
         pass
     return str(value).replace(":", "h")
 
@@ -369,7 +370,7 @@ def parse_date_value_as_date(
         return None
     try:
         return dt_val.date()
-    except Exception:
+    except (TypeError, ValueError, AttributeError):
         return None
 
 
@@ -386,21 +387,21 @@ def parse_time_value_as_time(value: object) -> dt.time | None:
         return value.time()
     try:
         sval = str(value).strip().replace("h", ":")
-    except Exception:
+    except (TypeError, ValueError):
         return None
     if not sval:
         return None
     for fmt in ("%H:%M", "%H:%M:%S"):
         try:
             return dt.datetime.strptime(sval, fmt).time()
-        except Exception:
+        except ValueError:
             continue
     try:
         num = float(sval)
         hours = int(num)
         minutes = int(round((num - hours) * 60))
         return dt.time(hour=hours, minute=minutes)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -438,15 +439,12 @@ def parse_date_long_fr(value: object, *, default_year: int | None = None) -> pd.
     if len(parts) >= 2:
         date_part = parts[-1]
         year = default_year or dt.datetime.now().year
-        try:
-            return coerce_datetime(
-                f"{date_part}/{year}",
-                errors="coerce",
-                dayfirst=True,
-                fmt="%d/%m/%Y",
-            )
-        except Exception:
-            return pd.NaT
+        return coerce_datetime(
+            f"{date_part}/{year}",
+            errors="coerce",
+            dayfirst=True,
+            fmt="%d/%m/%Y",
+        )
     return pd.NaT
 
 

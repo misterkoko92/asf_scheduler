@@ -10,7 +10,7 @@ from asf_app.ui.ui_communication.whatsapp_handler import (
     generate_whatsapp_messages,
     open_whatsapp_for_benevole,
 )
-from asf_app.ui.ui_planning.state_planning import get_planning_state
+
 
 def render_whatsapp_ui(df_comm):
     """

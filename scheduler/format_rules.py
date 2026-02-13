@@ -6,23 +6,34 @@
 
 from __future__ import annotations
 
-import pandas as pd
-from datetime import datetime
 import math
+from datetime import datetime
 from typing import Any, Optional, Tuple
 
+import pandas as pd
+
+from utils.datetime_utils import (
+    coerce_datetime,
+)
+from utils.datetime_utils import (
+    format_date_fr_long_slash as _format_date_fr_long_slash,
+)
+from utils.datetime_utils import (
+    format_date_fr_words as _format_date_fr_words,
+)
+from utils.datetime_utils import (
+    format_heure_hh_mm as _format_heure_hh_mm,
+)
 from utils.identifiers import (
     digits_only,
-    format_be_display as _format_be_display,
-    format_vol_display as _format_vol_display,
     normalize_be_number,
     normalize_vol_number,
 )
-from utils.datetime_utils import (
-    coerce_datetime,
-    format_date_fr_long_slash as _format_date_fr_long_slash,
-    format_date_fr_words as _format_date_fr_words,
-    format_heure_hh_mm as _format_heure_hh_mm,
+from utils.identifiers import (
+    format_be_display as _format_be_display,
+)
+from utils.identifiers import (
+    format_vol_display as _format_vol_display,
 )
 
 # ============================================================
@@ -34,7 +45,7 @@ def _to_str(v: Any) -> str:
         return ""
     try:
         return str(v)
-    except Exception:
+    except (TypeError, ValueError):
         return ""
 
 
@@ -53,7 +64,7 @@ def _to_datetime(x):
         if pd.isna(dt):
             return None
         return dt.to_pydatetime() if hasattr(dt, "to_pydatetime") else dt
-    except Exception:
+    except (AttributeError, TypeError, ValueError, OverflowError):
         return None
 
 
@@ -74,7 +85,7 @@ def extract_be_suffix(raw_value: Any) -> Optional[int]:
         return None
     try:
         return int(float(s))
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -92,7 +103,7 @@ def infer_be_year(date_impression: Any, fallback_latest: Any) -> int:
                 return int(src.year)
             if hasattr(src, "year"):
                 return int(src.year)
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             pass
 
     return datetime.today().year
@@ -137,7 +148,7 @@ def format_flight_number(company: str, raw_number: Any) -> str:
         return comp
     try:
         num = int(digits)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         num = 0
     if num <= 0:
         return comp
@@ -160,14 +171,14 @@ def _to_dt(v: Any) -> Optional[datetime]:
     try:
         if hasattr(v, "to_pydatetime"):
             return v.to_pydatetime()
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         pass
     try:
         dt_val = coerce_datetime(v, errors="coerce")
         if pd.isna(dt_val):
             return None
         return dt_val.to_pydatetime() if hasattr(dt_val, "to_pydatetime") else dt_val
-    except Exception:
+    except (AttributeError, TypeError, ValueError, OverflowError):
         return None
 
 

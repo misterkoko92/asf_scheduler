@@ -5,8 +5,8 @@ from datetime import date
 
 from openpyxl import Workbook, load_workbook
 
-import scheduler.config_paths as cp
 import asf_app.services.shipments_update_service as sus
+import scheduler.config_paths as cp
 
 
 def test_mag_lookup_keys_includes_base_and_suffixes():

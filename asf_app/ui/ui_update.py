@@ -1,10 +1,10 @@
 # asf_app/ui/ui_update.py
 # -*- coding: utf-8 -*-
 
-import streamlit as st
-import pandas as pd
-from utils.datetime_utils import coerce_datetime, format_date_value
 from pathlib import Path
+
+import pandas as pd
+import streamlit as st
 
 import scheduler.config_paths as cp
 from asf_app.config.runtime import (
@@ -13,17 +13,20 @@ from asf_app.config.runtime import (
     get_tmp_dir,
     is_graph_onedrive,
 )
+from asf_app.ui.ui_stats.ui_stats import (
+    extract_week_version,
+    filter_latest,
+    load_planning_xlsx,
+)
 from scheduler.config_paths import (
     BASE_DIR,  # pour accéder à data/BE.csv
 )
-
-from asf_app.ui.ui_stats.ui_stats import (
-    load_planning_xlsx,
-    extract_week_version,
-    filter_latest,
-)
+from utils.datetime_utils import coerce_datetime, format_date_value
 from utils.identifiers import normalize_be_int
+from utils.logging_utils import get_logger
 from utils.path_utils import safe_cache_path
+
+logger = get_logger("ui_update", console=False)
 
 # ==== IMPORTS BE MOTEUR ======================================================
 
@@ -154,13 +157,13 @@ def render_tab_update():
         st.error("❌ Impossible de lire le planning (DataFrame vide).")
         st.stop()
 
-    print("\n🐞 DEBUG UI_UPDATE — Planning chargé")
-    print("Colonnes :", list(df_plan.columns))
+    logger.debug("🐞 DEBUG UI_UPDATE — Planning charge")
+    logger.debug("Colonnes : %s", list(df_plan.columns))
     try:
-        print(df_plan.head())
-    except Exception:
+        logger.debug("\n%s", df_plan.head())
+    except (AttributeError, TypeError, ValueError):
         pass
-    print("====================================\n")
+    logger.debug("====================================")
 
     # ------------------------------------------------------------------
     # 3) BLOCS ACTIONS
@@ -194,7 +197,7 @@ def render_tab_update():
                 df_show[col] = coerce_datetime(df_show[col], errors="coerce").astype(
                     str
                 )
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
                 df_show[col] = df_show[col].astype(str)
 
     st.dataframe(df_show, width="stretch")
@@ -220,7 +223,7 @@ def render_block_add(df_plan):
 
     try:
         df_be_raw = pd.read_csv(be_csv, dtype=object)
-    except Exception as e:
+    except (FileNotFoundError, OSError, pd.errors.ParserError, ValueError) as e:
         st.error(f"Erreur lecture BE.csv : {e}")
         return
 
@@ -345,7 +348,7 @@ def render_block_add(df_plan):
             .astype(str)
             .str.upper()
         )
-    except Exception:
+    except (AttributeError, KeyError, TypeError, ValueError):
         pass
 
     bene_list = sorted(df_benev["NomAff"].tolist())
@@ -507,7 +510,7 @@ def render_block_modify(df_plan):
             .astype(str)
             .str.upper()
         )
-    except Exception:
+    except (AttributeError, KeyError, TypeError, ValueError):
         pass
 
     bene_list = sorted(df_benev["NomAff"].tolist())

@@ -4,19 +4,19 @@ from __future__ import annotations
 import fnmatch
 import re
 from pathlib import Path
-from typing import Optional, List
+from typing import List, Optional
 
 import pandas as pd
 
 import scheduler.config_paths as cp
 from asf_app.config.runtime import (
     get_onedrive_root,
+    get_output_remote_dir,
     get_tmp_dir,
     is_graph_onedrive,
-    get_output_remote_dir,
 )
-from utils.logging_utils import get_logger
 from utils.datetime_utils import parse_date_long_fr
+from utils.logging_utils import get_logger
 from utils.path_utils import safe_cache_path
 
 logger = get_logger("planning_exports_service", console=False)
@@ -41,10 +41,10 @@ def load_planning_preview_with_path(
         if path_override:
             remote_path = str(path_override)
         else:
-            candidates = find_planning_files_for_week(week, year)
-            if not candidates:
+            remote_candidates = find_planning_files_for_week(week, year)
+            if not remote_candidates:
                 return None, f"Fichier introuvable : S{week:02d}-{year}", None
-            remote_path = str(candidates[0])
+            remote_path = str(remote_candidates[0])
         cache_root = get_tmp_dir() / "onedrive_cache" / "planning_exports"
         try:
             local_path = safe_cache_path(cache_root, remote_path)
@@ -69,15 +69,15 @@ def load_planning_preview_with_path(
                     f"ASFmm*{week:02d}*{year}.xls*",
                     f"*PLANNING*{week:02d}*{year}.xls*",
                 ]
-                candidates = []
+                local_candidates: list[Path] = []
                 for pat in patterns:
-                    candidates.extend(base_dir.glob(pat))
-                if candidates:
+                    local_candidates.extend(base_dir.glob(pat))
+                if local_candidates:
                     # garder ceux qui contiennent la semaine précise
-                    def _score(p):
+                    def _score(p: Path) -> int:
                         name_up = p.name.upper()
                         return int(f"{name_up.count(str(week).zfill(2))}{name_up.count(str(year))}")
-                    path = sorted(candidates, key=_score, reverse=True)[0]
+                    path = sorted(local_candidates, key=_score, reverse=True)[0]
                     msg_missing = f"Fichier exact introuvable, utilisation de : {path.name}"
                 else:
                     return None, f"Fichier introuvable : {path}", None
@@ -92,7 +92,7 @@ def load_planning_preview_with_path(
                 if msg_missing:
                     return df_prev, f"{msg_missing} — Aperçu basé sur la feuille « {sh} »", path
                 return df_prev, f"Aperçu basé sur la feuille « {sh} »", path
-        except Exception as exc:
+        except (FileNotFoundError, OSError, ValueError) as exc:
             logger.debug("Erreur lecture preview %s/%s: %s", path, sh, exc)
             continue
     if msg_missing:
@@ -122,7 +122,7 @@ def available_weeks_from_exports() -> set[tuple[int, int]]:
                     wk = int(m_week.group(1))
                     yr = int(m_year.group(1))
                     weeks.add((wk, yr))
-            except Exception:
+            except (TypeError, ValueError, OverflowError):
                 continue
         return weeks
 
@@ -138,7 +138,7 @@ def available_weeks_from_exports() -> set[tuple[int, int]]:
             continue
         try:
             year = int(re.sub(r"\D", "", sub.name)[-4:])
-        except Exception:
+        except (TypeError, ValueError):
             continue
         for f in sub.glob("ASFmm - PLANNING SEMAINE *.xls*"):
             m_new = re.search(r"SEMAINE\s*(20\d{2})\D+(\d{1,2})", f.name, re.IGNORECASE)
@@ -150,7 +150,7 @@ def available_weeks_from_exports() -> set[tuple[int, int]]:
                 elif m_old:
                     wk = int(m_old.group(1))
                     weeks.add((wk, year))
-            except Exception:
+            except (TypeError, ValueError, OverflowError):
                 continue
     return weeks
 
@@ -165,7 +165,7 @@ def parse_version_from_name(path: Path) -> tuple[int, int]:
         try:
             major = int(m.group(1))
             return major, 0
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             pass
     m = re.search(r"V(\d+)(?:-(\d+))?", stem)
     if m:
@@ -173,7 +173,7 @@ def parse_version_from_name(path: Path) -> tuple[int, int]:
             major = int(m.group(1))
             minor = int(m.group(2) or 0)
             return major, minor
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             pass
     return 1, 0
 
@@ -210,15 +210,15 @@ def find_planning_files_for_week(week: int, year: int) -> List[Path | str]:
     files = list(base_dir.glob(pattern_old)) + list(base_dir.glob(pattern_new))
     files = [p for p in files if p.is_file()]
 
-    def _sort_key(p: Path):
+    def _sort_key_local(p: Path):
         major, minor = parse_version_from_name(p)
         try:
             mtime = p.stat().st_mtime
-        except Exception:
+        except OSError:
             mtime = 0
         return (major, minor, mtime)
 
-    files.sort(key=_sort_key, reverse=True)
+    files.sort(key=_sort_key_local, reverse=True)
     return files
 
 
@@ -259,7 +259,7 @@ def load_planning_xlsx(path: Path, default_year: int | None = None) -> pd.DataFr
 
     try:
         df_raw = pd.read_excel(path, sheet_name=0, header=None, dtype=object)
-    except Exception as exc:
+    except (FileNotFoundError, OSError, ValueError) as exc:
         logger.warning("[load_planning_xlsx] Erreur lecture Excel %s: %s", path, exc)
         return pd.DataFrame()
 
@@ -323,7 +323,7 @@ def load_planning_xlsx(path: Path, default_year: int | None = None) -> pd.DataFr
             .fillna(0)
             .astype(int)
         )
-    except Exception:
+    except (TypeError, ValueError):
         df2["nb_colis"] = 0
 
     for col in [

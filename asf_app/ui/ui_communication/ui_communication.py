@@ -5,16 +5,24 @@ Communication 4.0 — Version stable
 Compatible avec enrich_planning() (planning enrichi complet).
 """
 
-import streamlit as st
-import pandas as pd
-from utils.datetime_utils import coerce_datetime
-import re
 import fnmatch
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
-# PlanningState
-from asf_app.ui.ui_planning.state_planning import get_planning_state
+import pandas as pd
+import streamlit as st
+
+import scheduler.config_paths as cp
+from asf_app.config.runtime import (
+    get_onedrive_root,
+    get_output_remote_dir,
+    get_tmp_dir,
+    is_graph_onedrive,
+)
+from asf_app.state import get_excel_source_paths, get_state
+
+# Loaders (nouveau)
+from asf_app.ui.loader import load_parameters
 
 # Build df_comm
 from asf_app.ui.ui_communication.clean_planning_df import build_df_comm
@@ -24,24 +32,46 @@ from asf_app.ui.ui_communication.email_airfrance_ui import render_email_airfranc
 from asf_app.ui.ui_communication.email_asf_ui import render_email_asf_ui
 from asf_app.ui.ui_communication.email_destinations_ui import render_email_destinations_ui
 from asf_app.ui.ui_communication.email_expediteurs_ui import render_email_expediteurs_ui
-from asf_app.ui.ui_communication.whatsapp_ui import render_whatsapp_ui
+from asf_app.ui.ui_communication.ui_communication_helpers import (
+    build_communication_display_dataframe,
+    build_destinataire_mapping,
+    build_session_source_options,
+    build_sim_mode_selector_data,
+    fill_missing_destinataire,
+    is_empty_dataframe,
+    reset_onedrive_loaded_state_for_year,
+    resolve_default_session_source,
+)
 from asf_app.ui.ui_communication.whatsapp_handler import (
     generate_whatsapp_messages,
-    open_whatsapp_for_benevole
+    open_whatsapp_for_benevole,
 )
-from scheduler.format_rules import format_be_number, format_vol_display
-from utils.identifiers import normalize_be_number
+
+# PlanningState
+from asf_app.ui.ui_planning.state_planning import get_planning_state
 from loaders.load_shipments import get_shipments_df_cached
 from scheduler.planning_schema import normalize_planning_df
-from asf_app.state import get_state, get_excel_source_paths
-
-# Loaders (nouveau)
-from asf_app.ui.loader import load_parameters
-import scheduler.config_paths as cp
-from asf_app.config.runtime import get_onedrive_root, get_output_remote_dir, get_tmp_dir, is_graph_onedrive
+from utils.datetime_utils import coerce_datetime
+from utils.logging_utils import get_logger
 from utils.path_utils import safe_cache_path
+
 # load_parameters() retourne :
 #   df_paramdest, df_paramexpediteur, df_parambenev, df_parambe
+
+
+logger = get_logger("ui_communication", console=False)
+
+COMM_IO_ERRORS = (
+    FileNotFoundError,
+    OSError,
+    PermissionError,
+    ValueError,
+    TypeError,
+    RuntimeError,
+    KeyError,
+    pd.errors.ParserError,
+    ImportError,
+)
 
 
 # ==========================================================
@@ -61,7 +91,7 @@ def _parse_onedrive_datetime(value: str | None) -> datetime | None:
         return None
     try:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         return None
 
 
@@ -99,11 +129,141 @@ def _list_onedrive_planning_files(year: int) -> list[dict]:
 def _read_export_planning(path: Path) -> pd.DataFrame:
     try:
         df_raw = pd.read_excel(path, sheet_name="Export planning", dtype=object)
-    except Exception:
+    except COMM_IO_ERRORS as exc:
+        logger.warning("Lecture export planning impossible (%s): %s", path, exc)
         return pd.DataFrame()
     if df_raw is None or df_raw.empty:
         return pd.DataFrame()
     return normalize_planning_df(df_raw)
+
+
+def _load_session_planning_ui() -> pd.DataFrame | None:
+    planning_state = get_planning_state()
+    df_plan_main = normalize_planning_df(planning_state.planning)
+
+    # OR-Tools V2 dans l'onglet simulation : stocké dans sim_results
+    sim_res_modes = st.session_state.get("sim_results") or {}
+    sim_active = st.session_state.get("sim_active_mode")
+    df_plan_sim = None
+    if sim_res_modes:
+        if sim_active and sim_active in sim_res_modes:
+            df_plan_sim = normalize_planning_df(sim_res_modes[sim_active].get("planning_df"))
+        else:
+            # premier mode disponible
+            df_plan_sim = normalize_planning_df(next(iter(sim_res_modes.values())).get("planning_df"))
+
+    if is_empty_dataframe(df_plan_main) and is_empty_dataframe(df_plan_sim):
+        st.warning("⚠️ Aucun planning principal. Génère un planning dans l'onglet Planning pour alimenter la communication.")
+        return None
+
+    options = build_session_source_options(df_plan_main=df_plan_main, sim_res_modes=sim_res_modes)
+    if not options:
+        st.warning("⚠️ Aucun planning disponible. Génère un planning (onglet Planning).")
+        return None
+
+    default_source = resolve_default_session_source(options)
+    source = st.radio(
+        "Source session",
+        options=options,
+        format_func=lambda x: "Moteur principal" if x == "planning" else "Planning (OR-Tools)",
+        index=options.index(default_source),
+        horizontal=True,
+    )
+
+    df_planning = df_plan_main if source == "planning" else df_plan_sim
+    # Si source = simulation et plusieurs modes, proposer un choix
+    if source == "simulation" and sim_res_modes:
+        mode_values, mode_labels = build_sim_mode_selector_data(sim_res_modes)
+        selected_idx = mode_values.index(sim_active) if sim_active in mode_values else 0
+        sel_mode = st.radio(
+            "Mode OR-Tools",
+            options=mode_values,
+            format_func=lambda m: mode_labels.get(m, m),
+            index=selected_idx,
+            horizontal=True,
+        )
+        st.session_state["sim_active_mode"] = sel_mode
+        df_planning = normalize_planning_df(sim_res_modes[sel_mode].get("planning_df"))
+    if is_empty_dataframe(df_planning):
+        st.warning("⚠️ Le planning choisi est vide.")
+        return None
+
+    st.info("✔ Planning chargé depuis : " + ("Moteur principal" if source == "planning" else "Planning OR-Tools"))
+    return df_planning
+
+
+def _load_onedrive_planning_ui() -> pd.DataFrame | None:
+    year_default = datetime.now().year
+    year = int(
+        st.number_input(
+            "Année du planning",
+            min_value=2024,
+            max_value=2100,
+            value=year_default,
+            step=1,
+            key="comm_onedrive_year",
+        )
+    )
+
+    reset_onedrive_loaded_state_for_year(st.session_state, year=year)
+
+    if is_graph_onedrive():
+        remote_files = _list_onedrive_planning_files(year)
+        if not remote_files:
+            st.warning("⚠️ Aucun fichier Excel trouvé dans OneDrive pour cette année.")
+        else:
+            labels = [f["name"] for f in remote_files]
+            choice = st.radio("Fichiers Excel disponibles", options=labels, index=0, key="comm_onedrive_file")
+            if st.button("✅ Valider ce planning", type="primary"):
+                chosen = remote_files[labels.index(choice)]
+                remote_path = chosen.get("path", "")
+                if not remote_path:
+                    st.error("Chemin OneDrive invalide.")
+                else:
+                    cache_root = get_tmp_dir() / "onedrive_cache" / "planning_xlsx"
+                    try:
+                        local_path = safe_cache_path(cache_root, remote_path)
+                    except ValueError:
+                        st.error(f"Chemin OneDrive invalide : {remote_path}")
+                        local_path = None
+                    if local_path:
+                        ok = cp.download_onedrive_file(remote_path, local_path, interactive=False)
+                        if not ok and not local_path.exists():
+                            st.error("Téléchargement OneDrive impossible.")
+                        else:
+                            df_loaded = _read_export_planning(local_path)
+                            if df_loaded.empty:
+                                st.error("Feuille 'Export planning' introuvable ou vide.")
+                            else:
+                                st.session_state["comm_onedrive_df"] = df_loaded
+                                st.session_state["comm_onedrive_file_label"] = chosen.get("name", "")
+                                st.session_state["comm_onedrive_file_path"] = remote_path
+                                st.session_state["comm_onedrive_loaded_year"] = year
+    else:
+        local_files = _list_local_planning_files(year)
+        if not local_files:
+            st.warning("⚠️ Aucun fichier Excel trouvé dans OneDrive pour cette année.")
+        else:
+            labels = [f.name for f in local_files]
+            choice = st.radio("Fichiers Excel disponibles", options=labels, index=0, key="comm_onedrive_file")
+            if st.button("✅ Valider ce planning", type="primary"):
+                chosen_local = local_files[labels.index(choice)]
+                df_loaded = _read_export_planning(chosen_local)
+                if df_loaded.empty:
+                    st.error("Feuille 'Export planning' introuvable ou vide.")
+                else:
+                    st.session_state["comm_onedrive_df"] = df_loaded
+                    st.session_state["comm_onedrive_file_label"] = chosen_local.name
+                    st.session_state["comm_onedrive_file_path"] = str(chosen_local)
+                    st.session_state["comm_onedrive_loaded_year"] = year
+
+    df_planning = st.session_state.get("comm_onedrive_df")
+    file_label = st.session_state.get("comm_onedrive_file_label", "")
+    if is_empty_dataframe(df_planning):
+        st.info("Sélectionne un fichier puis clique sur “Valider ce planning” pour continuer.")
+        return None
+    st.info(f"✔ Planning chargé depuis OneDrive : {file_label}")
+    return df_planning
 
 
 # ==========================================================
@@ -127,144 +287,12 @@ def render_tab_communication():
         key="comm_source_mode",
     )
 
-    df_planning = None
     if source_mode == "session":
-        planning_state = get_planning_state()
-        df_plan_main = normalize_planning_df(planning_state.planning)
-        # OR-Tools V2 dans l'onglet simulation : stocké dans sim_results
-        sim_res_modes = st.session_state.get("sim_results") or {}
-        sim_active = st.session_state.get("sim_active_mode")
-        df_plan_sim = None
-        if sim_res_modes:
-            if sim_active and sim_active in sim_res_modes:
-                df_plan_sim = normalize_planning_df(sim_res_modes[sim_active].get("planning_df"))
-            else:
-                # premier mode disponible
-                df_plan_sim = normalize_planning_df(next(iter(sim_res_modes.values())).get("planning_df"))
-
-        if (df_plan_main is None or getattr(df_plan_main, "empty", True)) and (df_plan_sim is None or getattr(df_plan_sim, "empty", True)):
-            st.warning("⚠️ Aucun planning principal. Génère un planning dans l'onglet Planning pour alimenter la communication.")
-            return
-
-        options = []
-        if df_plan_main is not None and not df_plan_main.empty:
-            options.append("planning")
-        if sim_res_modes:
-            options.append("simulation")
-        if not options:
-            st.warning("⚠️ Aucun planning disponible. Génère un planning (onglet Planning).")
-            return
-        default_source = "planning" if "planning" in options else options[0]
-        source = st.radio(
-            "Source session",
-            options=options,
-            format_func=lambda x: "Moteur principal" if x == "planning" else "Planning (OR-Tools)",
-            index=options.index(default_source),
-            horizontal=True,
-        )
-
-        df_planning = df_plan_main if source == "planning" else df_plan_sim
-        # Si source = simulation et plusieurs modes, proposer un choix
-        if source == "simulation" and sim_res_modes:
-            mode_labels = []
-            mode_values = []
-            for key, res in sim_res_modes.items():
-                stats_mode = res.get("statistiques", {})
-                label = "Priorité Colis" if key == "colis" else "Priorité Bénévoles"
-                extra = f" ({stats_mode.get('nb_colis_expedies', 0)} colis / {stats_mode.get('nb_benevoles_mobilises', 0)} bénév)"
-                mode_labels.append(f"{label}{extra}")
-                mode_values.append(key)
-            sel_mode = st.radio(
-                "Mode OR-Tools",
-                options=mode_values,
-                format_func=lambda m: mode_labels[mode_values.index(m)],
-                index=mode_values.index(sim_active) if sim_active in mode_values else 0,
-                horizontal=True,
-            )
-            st.session_state["sim_active_mode"] = sel_mode
-            df_planning = normalize_planning_df(sim_res_modes[sel_mode].get("planning_df"))
-            df_plan_sim = df_planning
-        if df_planning is None or getattr(df_planning, "empty", True):
-            st.warning("⚠️ Le planning choisi est vide.")
-            return
-
-        st.info("✔ Planning chargé depuis : " + ("Moteur principal" if source == "planning" else "Planning OR-Tools"))
+        df_planning = _load_session_planning_ui()
     else:
-        year_default = datetime.now().year
-        year = int(
-            st.number_input(
-                "Année du planning",
-                min_value=2024,
-                max_value=2100,
-                value=year_default,
-                step=1,
-                key="comm_onedrive_year",
-            )
-        )
-
-        loaded_year = st.session_state.get("comm_onedrive_loaded_year")
-        if loaded_year is not None and loaded_year != year:
-            st.session_state.pop("comm_onedrive_df", None)
-            st.session_state.pop("comm_onedrive_file_label", None)
-            st.session_state.pop("comm_onedrive_file_path", None)
-            st.session_state["comm_onedrive_loaded_year"] = None
-
-        if is_graph_onedrive():
-            files = _list_onedrive_planning_files(year)
-            if not files:
-                st.warning("⚠️ Aucun fichier Excel trouvé dans OneDrive pour cette année.")
-            else:
-                labels = [f["name"] for f in files]
-                choice = st.radio("Fichiers Excel disponibles", options=labels, index=0, key="comm_onedrive_file")
-                if st.button("✅ Valider ce planning", type="primary"):
-                    chosen = files[labels.index(choice)]
-                    remote_path = chosen.get("path", "")
-                    if not remote_path:
-                        st.error("Chemin OneDrive invalide.")
-                    else:
-                        cache_root = get_tmp_dir() / "onedrive_cache" / "planning_xlsx"
-                        try:
-                            local_path = safe_cache_path(cache_root, remote_path)
-                        except ValueError:
-                            st.error(f"Chemin OneDrive invalide : {remote_path}")
-                            local_path = None
-                        if local_path:
-                            ok = cp.download_onedrive_file(remote_path, local_path, interactive=False)
-                            if not ok and not local_path.exists():
-                                st.error("Téléchargement OneDrive impossible.")
-                            else:
-                                df_loaded = _read_export_planning(local_path)
-                                if df_loaded.empty:
-                                    st.error("Feuille 'Export planning' introuvable ou vide.")
-                                else:
-                                    st.session_state["comm_onedrive_df"] = df_loaded
-                                    st.session_state["comm_onedrive_file_label"] = chosen.get("name", "")
-                                    st.session_state["comm_onedrive_file_path"] = remote_path
-                                    st.session_state["comm_onedrive_loaded_year"] = year
-        else:
-            files = _list_local_planning_files(year)
-            if not files:
-                st.warning("⚠️ Aucun fichier Excel trouvé dans OneDrive pour cette année.")
-            else:
-                labels = [f.name for f in files]
-                choice = st.radio("Fichiers Excel disponibles", options=labels, index=0, key="comm_onedrive_file")
-                if st.button("✅ Valider ce planning", type="primary"):
-                    chosen = files[labels.index(choice)]
-                    df_loaded = _read_export_planning(chosen)
-                    if df_loaded.empty:
-                        st.error("Feuille 'Export planning' introuvable ou vide.")
-                    else:
-                        st.session_state["comm_onedrive_df"] = df_loaded
-                        st.session_state["comm_onedrive_file_label"] = chosen.name
-                        st.session_state["comm_onedrive_file_path"] = str(chosen)
-                        st.session_state["comm_onedrive_loaded_year"] = year
-
-        df_planning = st.session_state.get("comm_onedrive_df")
-        file_label = st.session_state.get("comm_onedrive_file_label", "")
-        if df_planning is None or getattr(df_planning, "empty", True):
-            st.info("Sélectionne un fichier puis clique sur “Valider ce planning” pour continuer.")
-            return
-        st.info(f"✔ Planning chargé depuis OneDrive : {file_label}")
+        df_planning = _load_onedrive_planning_ui()
+    if is_empty_dataframe(df_planning):
+        return
 
     # -------------------------------------------------------
     # 2) Charger ParamDest / ParamBenev / ParamExp / ParamBE
@@ -289,56 +317,12 @@ def render_tab_communication():
     # Compléter Destinataire via mapping BE (MAG CENTRAL + planning), avec tolérance format
     try:
         df_be = get_shipments_df_cached(tdb_path=paths.tableau_de_bord)
-    except Exception:
+    except COMM_IO_ERRORS as exc:
+        logger.warning("Chargement MAG CENTRAL impossible: %s", exc)
         df_be = pd.DataFrame()
 
-    def _norm_be(val):
-        return normalize_be_number(val) or str(val).strip()
-
-    def _keys_from_be(val):
-        d = _norm_be(val)
-        keys = {d}
-        for n in [6, 5, 4, 3]:
-            if len(d) >= n:
-                keys.add(d[-n:])
-        return [k for k in keys if k]
-
-    def _collect_map(df_source):
-        mapping = {}
-        if df_source is None or df_source.empty:
-            return mapping
-        for _, row in df_source.iterrows():
-            dest_val = row.get("BE_Destinataire", "")
-            if pd.isna(dest_val) or str(dest_val).strip() == "":
-                continue
-            for k in _keys_from_be(row.get("BE_Numero", "")):
-                if k not in mapping:
-                    mapping[k] = dest_val
-        return mapping
-
-    map_dest_be = {}
-    map_dest_be.update(_collect_map(df_be))
-    if "BE_Destinataire" in df_planning.columns:
-        map_dest_be.update(_collect_map(df_planning))
-
-    if map_dest_be:
-        if "Destinataire" not in df_comm.columns:
-            df_comm["Destinataire"] = ""
-        df_comm["Destinataire"] = df_comm["Destinataire"].replace("", pd.NA)
-        # Chercher un numéro de BE exploitable dans df_comm
-        def _key_from_row(r):
-            for col in ["NUMERO BE", "BE_Numero", "Numero_BE_Aff", "Numero_BE"]:
-                if col in r and str(r[col]).strip():
-                    return _norm_be(r[col])
-            return ""
-        def _lookup_dest(row):
-            keys = _keys_from_be(_key_from_row(row))
-            for k in keys:
-                if k in map_dest_be:
-                    return map_dest_be[k]
-            return ""
-        mask_dest_empty = df_comm["Destinataire"].isna() | df_comm["Destinataire"].astype(str).str.strip().eq("")
-        df_comm.loc[mask_dest_empty, "Destinataire"] = df_comm.loc[mask_dest_empty].apply(_lookup_dest, axis=1)
+    map_dest_be = build_destinataire_mapping(df_be=df_be, df_planning=df_planning)
+    df_comm = fill_missing_destinataire(df_comm, map_dest_be)
 
     if df_comm.empty:
         st.error("❌ Impossible de générer df_comm (problème données).")
@@ -405,7 +389,8 @@ def render_tab_communication():
                         horizontal=True,
                     )
                     pdf_attach_path = candidates[labels.index(pdf_choice)]
-    except Exception:
+    except COMM_IO_ERRORS as exc:
+        logger.warning("Recherche PDF communication impossible: %s", exc)
         pdf_attach_path = None
 
     if pdf_attach_path:
@@ -419,33 +404,7 @@ def render_tab_communication():
     # 📋 Aperçu planning enrichi (formats BE/Vol/Heure)
     # ----------------------------------------------------------------------
     with st.expander("📋 Aperçu Planning (Enrichi)", expanded=False):
-        df_display = df_comm.copy()
-        # Formats
-        # BE format YYNNNN avec fallback (si ajout manuel)
-        df_display["Numero_BE_Aff"] = (
-            df_display.get("Numero_BE_Aff", df_display.get("NUMERO BE", df_display.get("BE_Numero", ""))))
-        df_display["Numero_BE_Aff"] = df_display["Numero_BE_Aff"].apply(format_be_number)
-        df_display["Numero_Vol_Aff"] = df_display.get("Numero_Vol_Aff", df_display.get("NUMERO VOL", "")).apply(format_vol_display)
-        df_display["Heure_Vol_Aff"] = (
-            df_display.get("Heure_Vol_Aff", df_display.get("HEURE VOL", ""))
-            .astype(str)
-            .str.slice(0, 5)
-            .str.replace(":", "h", 1)
-        )
-        # Destinataire / Expéditeur : fallbacks depuis différentes colonnes
-        def _fill_from_candidates(df, target, keywords):
-            if target not in df.columns:
-                df[target] = ""
-            df[target] = df[target].replace("", pd.NA)
-            for col in df.columns:
-                if any(k.lower() in col.lower() for k in keywords):
-                    df[target] = df[target].fillna(df[col]).replace("", pd.NA)
-            df[target] = df[target].fillna("").astype(str)
-            return df
-
-        df_display = _fill_from_candidates(df_display, "Destinataire", ["destinataire"])
-        df_display = _fill_from_candidates(df_display, "Expediteur", ["expediteur", "expéditeur"])
-
+        df_display = build_communication_display_dataframe(df_comm)
         st.dataframe(df_display, hide_index=True, width="stretch", height=320)
 
     st.divider()

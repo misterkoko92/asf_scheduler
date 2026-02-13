@@ -7,25 +7,36 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from asf_app.state import get_state
 from asf_app.services.files_service import save_excel_sheet
+from asf_app.services.input_service import InputLoadError, load_normalized_sheet
+from asf_app.state import get_state
 from asf_app.ui.email_defaults import get_email_defaults, set_email_defaults
-
-from scheduler.config_paths import (
-    TABLEAU_DE_BORD_SRC,
-    PLANNING_BENEVOLES_SRC,
-    SHEET_PARAM_DEST,
-    SHEET_PARAM_BE,
-    SHEET_PARAM_BENEV,
-    detect_onedrive_asf,
-    ASF_ONEDRIVE,
-)
-
-from asf_app.services.input_service import load_normalized_sheet
 from scheduler.column_map import (
-    column_map_param_dest,
     column_map_param_be,
     column_map_param_benev,
+    column_map_param_dest,
+)
+from scheduler.config_paths import (
+    ASF_ONEDRIVE,
+    SHEET_PARAM_BE,
+    SHEET_PARAM_BENEV,
+    SHEET_PARAM_DEST,
+    detect_onedrive_asf,
+)
+from utils.logging_utils import get_logger
+
+logger = get_logger("ui_params", console=False)
+
+PARAM_UI_ERRORS = (
+    InputLoadError,
+    FileNotFoundError,
+    OSError,
+    PermissionError,
+    KeyError,
+    ValueError,
+    TypeError,
+    RuntimeError,
+    pd.errors.ParserError,
 )
 
 
@@ -63,7 +74,8 @@ def write_excel_sheet(path: Path, sheet_name: str, df: pd.DataFrame):
         save_excel_sheet(path, sheet_name, df)
         return True
 
-    except Exception as e:
+    except PARAM_UI_ERRORS as e:
+        logger.warning("Ecriture Excel impossible pour %s (%s): %s", sheet_name, path, e)
         st.error(f"❌ Erreur écriture Excel ({sheet_name}) : {e}")
         return False
 
@@ -235,7 +247,8 @@ def render_tab_params():
                 state.df_param_dest = edited
                 st.success("✔ ParamDest mis à jour pour la session.")
 
-        except Exception as e:
+        except PARAM_UI_ERRORS as e:
+            logger.warning("Chargement ParamDest impossible: %s", e)
             st.error(f"❌ Erreur ParamDest : {e}")
 
 
@@ -262,7 +275,8 @@ def render_tab_params():
                 state.df_param_be = edited
                 st.success("✔ ParamBE mis à jour pour la session.")
 
-        except Exception as e:
+        except PARAM_UI_ERRORS as e:
+            logger.warning("Chargement ParamBE impossible: %s", e)
             st.error(f"❌ Erreur ParamBE : {e}")
 
 
@@ -289,7 +303,8 @@ def render_tab_params():
                 state.df_param_benev = edited
                 st.success("✔ ParamBenev mis à jour pour la session.")
 
-        except Exception as e:
+        except PARAM_UI_ERRORS as e:
+            logger.warning("Chargement ParamBenev impossible: %s", e)
             st.error(f"❌ Erreur ParamBenev : {e}")
 
     # ------------------------------------------------------------

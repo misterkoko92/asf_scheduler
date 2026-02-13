@@ -14,6 +14,24 @@ from openpyxl.utils.datetime import to_excel
 
 from utils.applescript_utils import applescript_escape
 
+WIN_AUTOMATION_ERRORS: tuple[type[BaseException], ...] = (
+    ImportError,
+    AttributeError,
+    FileNotFoundError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
+try:  # pragma: no cover - dépend de l'environnement Windows
+    import pywintypes
+
+    com_error = getattr(pywintypes, "com_error", Exception)
+    if isinstance(com_error, type) and issubclass(com_error, BaseException):
+        WIN_AUTOMATION_ERRORS = WIN_AUTOMATION_ERRORS + (com_error,)
+except ImportError:  # pragma: no cover - pywin32 absent hors Windows
+    pass
+
 
 def _coerce_excel_value(value):
     if value is None or value == "":
@@ -21,12 +39,12 @@ def _coerce_excel_value(value):
     if hasattr(value, "to_pydatetime"):
         try:
             value = value.to_pydatetime()
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             pass
     if isinstance(value, (dt.datetime, dt.date)):
         try:
             return float(to_excel(value))
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             return value.strftime("%Y-%m-%d")
     return value
 
@@ -63,7 +81,7 @@ def _as_applescript_value(value: object) -> str:
 
 def _update_excel_windows(path: Path, sheet_name: str, updates: list[tuple[int, int, object]]) -> bool:
     try:
-        import win32com.client  # type: ignore
+        import win32com.client
 
         excel = win32com.client.Dispatch("Excel.Application")
         excel.DisplayAlerts = False
@@ -75,7 +93,7 @@ def _update_excel_windows(path: Path, sheet_name: str, updates: list[tuple[int, 
         wb.Close(SaveChanges=True)
         excel.Quit()
         return True
-    except Exception:
+    except WIN_AUTOMATION_ERRORS:
         return False
 
 
@@ -142,14 +160,14 @@ def _write_table_windows(
     clear_contents: bool = True,
 ) -> bool:
     try:
-        import win32com.client  # type: ignore
+        import win32com.client
 
         excel = win32com.client.Dispatch("Excel.Application")
         excel.DisplayAlerts = False
         wb = excel.Workbooks.Open(str(path))
         try:
             ws = wb.Worksheets(sheet_name)
-        except Exception:
+        except WIN_AUTOMATION_ERRORS:
             ws = wb.Worksheets.Add()
             ws.Name = sheet_name
         if clear_contents:
@@ -163,7 +181,7 @@ def _write_table_windows(
         wb.Close(SaveChanges=True)
         excel.Quit()
         return True
-    except Exception:
+    except WIN_AUTOMATION_ERRORS:
         return False
 
 
@@ -176,7 +194,6 @@ def _write_table_macos(
 ) -> bool:
     if not table:
         return False
-    rows = len(table)
     cols = len(table[0])
     last_col = get_column_letter(cols)
     lines = []
@@ -237,14 +254,14 @@ def replace_sheet_table(path: Path, sheet_name: str, data: Iterable[Iterable[obj
     table = _normalize_table(data)
     if sys.platform.startswith("win"):
         try:
-            import win32com.client  # type: ignore
+            import win32com.client
 
             excel = win32com.client.Dispatch("Excel.Application")
             excel.DisplayAlerts = False
             wb = excel.Workbooks.Open(str(path))
             try:
                 wb.Worksheets(sheet_name).Delete()
-            except Exception:
+            except WIN_AUTOMATION_ERRORS:
                 pass
             ws = wb.Worksheets.Add()
             ws.Name = sheet_name
@@ -257,7 +274,7 @@ def replace_sheet_table(path: Path, sheet_name: str, data: Iterable[Iterable[obj
             wb.Close(SaveChanges=True)
             excel.Quit()
             return True
-        except Exception:
+        except WIN_AUTOMATION_ERRORS:
             return False
     if sys.platform == "darwin":
         path_esc = applescript_escape(str(path))

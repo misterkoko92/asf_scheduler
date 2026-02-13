@@ -1,0 +1,12 @@
+target-version = "py311"
+line-length = 100
+
+src = ["asf_app", "scheduler", "loaders", "utils", "tests", "tools"]
+extend-exclude = [".venv", "venv", "build", "dist", ".tmp_asf", "new_repo", "~"]
+
+[lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]
+
+[lint.isort]
+known-first-party = ["asf_app", "scheduler", "loaders", "utils", "tools"]

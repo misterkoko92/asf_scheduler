@@ -187,6 +187,44 @@ source .venv/bin/activate
 python -m pytest
 ```
 
+## 🏭 Outillage Qualité (P2)
+
+Installation outillage local :
+
+```bash
+cd asf_scheduler/new_repo
+source .venv/bin/activate
+python -m pip install -r requirements-dev.txt
+```
+
+Activer les hooks locaux au commit :
+
+```bash
+PRE_COMMIT_HOME=.tmp_asf/.pre-commit-cache pre-commit install
+```
+
+Exécution manuelle des checks :
+
+```bash
+PRE_COMMIT_HOME=.tmp_asf/.pre-commit-cache pre-commit run --all-files
+```
+
+Commandes directes équivalentes :
+
+```bash
+ruff check asf_app scheduler loaders utils tests --config .ruff.toml
+mypy --config-file mypy.ini asf_app scheduler loaders utils
+pytest -q --cov=asf_app --cov=scheduler --cov=loaders --cov=utils --cov-report=term-missing --cov-report=xml
+```
+
+Notes :
+- Les hooks `pre-commit` sont configurés sur les stages `pre-commit` et `manual`.
+- La CI exécute ces checks dans un job dédié `quality` bloquant avant la matrice build.
+- Le scan secrets est actif dans les hooks locaux (`pre-commit` et `manual`) :
+  `PRE_COMMIT_HOME=.tmp_asf/.pre-commit-cache pre-commit run secret-scan --all-files`
+- Les faux positifs du scanner peuvent être neutralisés via `.secret-scan-allowlist` (regex explicites et tracées).
+- La CI exécute aussi ce scan dans le job bloquant `security`.
+
 ## 💬 Support / contributions
 
 Ouvert aux issues et PR sur le repo GitHub. Pense à joindre un extrait de log/trace et, si possible, un échantillon de données anonymisées.

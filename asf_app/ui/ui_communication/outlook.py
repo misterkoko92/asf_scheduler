@@ -9,6 +9,29 @@ import platform
 import subprocess
 from typing import List, Optional
 
+from utils.logging_utils import get_logger
+
+logger = get_logger("ui_communication_outlook", console=False)
+
+OUTLOOK_WINDOWS_ERRORS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    ImportError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
+
+try:
+    import pywintypes
+
+    com_error = getattr(pywintypes, "com_error", Exception)
+    if isinstance(com_error, type) and issubclass(com_error, BaseException):
+        OUTLOOK_WINDOWS_ERRORS = OUTLOOK_WINDOWS_ERRORS + (com_error,)
+except (ImportError, AttributeError):
+    pass
+
 # ============================================================
 # Helper : nettoyage liste d'emails
 # ============================================================
@@ -82,7 +105,7 @@ def _create_outlook_windows(to_list, cc_list, bcc_list,
                             use_signature):
 
     try:
-        import win32com.client  # type: ignore
+        import win32com.client
         outlook = win32com.client.Dispatch("Outlook.Application")
         mail = outlook.CreateItem(0)
 
@@ -102,7 +125,7 @@ def _create_outlook_windows(to_list, cc_list, bcc_list,
             # charger signature utilisateur
             try:
                 sig = mail.HTMLBody  # déjà la signature Outlook
-            except Exception:
+            except OUTLOOK_WINDOWS_ERRORS:
                 sig = ""
 
             mail.HTMLBody = body_html + "<br>" + sig
@@ -114,14 +137,14 @@ def _create_outlook_windows(to_list, cc_list, bcc_list,
             for f in attachments:
                 try:
                     mail.Attachments.Add(f)
-                except Exception:
-                    pass
+                except OUTLOOK_WINDOWS_ERRORS as exc:
+                    logger.warning("Piece jointe Outlook ignoree (%s): %s", f, exc)
 
         mail.Display(True)  # premier plan
         return True
 
-    except Exception as e:
-        print("ERREUR Outlook Windows :", e)
+    except OUTLOOK_WINDOWS_ERRORS as e:
+        logger.error("ERREUR Outlook Windows: %s", e)
         return False
 
 
@@ -176,9 +199,9 @@ def _create_outlook_mac(to_list, cc_list, bcc_list,
             text=True,
         )
         if res.returncode != 0:
-            print("ERREUR Outlook Mac :", res.stderr or res.stdout)
+            logger.error("ERREUR Outlook Mac: %s", (res.stderr or res.stdout).strip())
             return False
         return True
-    except Exception as e:
-        print("ERREUR Outlook Mac :", e)
+    except (OSError, ValueError, TypeError, RuntimeError, subprocess.SubprocessError) as e:
+        logger.error("ERREUR Outlook Mac: %s", e)
         return False

@@ -63,7 +63,7 @@ def _compute_week_dates(
                 today_iso = today.isocalendar()
                 monday = datetime.fromisocalendar(int(today_iso.year), int(week), 1)
                 return [monday + pd.Timedelta(days=i) for i in range(7)]
-            except Exception:
+            except (TypeError, ValueError, OverflowError):
                 pass
         ref = today
 

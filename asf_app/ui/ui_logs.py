@@ -3,28 +3,29 @@
 
 from __future__ import annotations
 
-import streamlit as st
-import pathlib
-import os
-import sys
-from datetime import datetime
-import shutil
 import io
-import zipfile
+import os
+import pathlib
 import platform
+import shutil
+import sys
+import zipfile
+from datetime import datetime
+
+import streamlit as st
+
 import scheduler.config_paths as cp
 from asf_app.config.runtime import (
-    get_tmp_dir,
-    get_output_planning_dir,
-    is_graph_onedrive,
-    get_tableau_de_bord_remote,
-    get_planning_benevoles_remote,
-    get_vols_remote,
     get_listes_colisage_remote_dir,
+    get_output_planning_dir,
     get_output_remote_dir_template,
+    get_planning_benevoles_remote,
+    get_tableau_de_bord_remote,
+    get_tmp_dir,
+    get_vols_remote,
+    is_graph_onedrive,
 )
 from utils.datetime_utils import format_date_value
-
 
 # =============================================================================
 # 🔍 Détermination robuste de l’emplacement réel du fichier de logs
@@ -70,7 +71,7 @@ def pretty_mtime(path: pathlib.Path) -> str:
     try:
         ts = os.path.getmtime(path)
         return format_date_value(datetime.fromtimestamp(ts), fmt="%d/%m/%Y %H:%M:%S", default="N/A")
-    except Exception:
+    except (OSError, TypeError, ValueError):
         return "N/A"
 
 
@@ -83,7 +84,7 @@ def write_log_file(path: pathlib.Path, content: str) -> bool:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
         return True
-    except Exception as e:
+    except (OSError, TypeError, ValueError) as e:
         st.error(f"⚠️ Impossible d'écrire dans le fichier log : {e}")
         return False
 
@@ -96,7 +97,7 @@ def sync_to_onedrive(tmp_log: pathlib.Path) -> bool:
         LOG_FILE_ONEDRIVE.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(tmp_log, LOG_FILE_ONEDRIVE)
         return True
-    except Exception as e:
+    except (OSError, shutil.Error, TypeError, ValueError) as e:
         st.error(f"⚠️ Impossible de synchroniser vers OneDrive : {e}")
         return False
 
@@ -105,7 +106,7 @@ def read_log_file(path: pathlib.Path) -> str:
     """Lecture robuste du fichier de logs."""
     try:
         return path.read_text(encoding="utf-8", errors="replace")
-    except Exception as e:
+    except (OSError, TypeError, ValueError) as e:
         st.error(f"⚠️ Erreur lors de la lecture des logs : {e}")
         return ""
 
@@ -120,7 +121,7 @@ def build_logs_export_bundle(log_path: pathlib.Path) -> bytes:
     try:
         if version_path.exists():
             app_version = version_path.read_text(encoding="utf-8").strip()
-    except Exception:
+    except (OSError, TypeError, ValueError):
         app_version = "unknown"
     info_lines = [
         f"timestamp={format_date_value(datetime.now(), fmt='%Y-%m-%d %H:%M:%S', default='')}",
@@ -191,7 +192,7 @@ def render_tab_logs():
     with col3:
         download = st.button("⬇ Télécharger le log", width="stretch")
     with col4:
-        export_bundle = st.download_button(
+        st.download_button(
             "📤 Exporter logs",
             data=build_logs_export_bundle(LOG_FILE),
             file_name="asf_logs_export.zip",
@@ -217,7 +218,7 @@ def render_tab_logs():
         st.info("Aucun log trouvé. Le moteur n'a peut-être rien écrit pour l’instant.")
         try:
             LOG_FILE.touch()
-        except:
+        except OSError:
             pass
         return
 
@@ -247,7 +248,7 @@ def render_tab_logs():
         try:
             raw = LOG_FILE.read_bytes()
             st.code(raw.decode("utf-8", errors="replace"))
-        except Exception as e:
+        except OSError as e:
             st.error(f"Erreur lecture brut : {e}")
 
     # ----------------------------------------------------------------------
@@ -271,7 +272,7 @@ def render_tab_logs():
                 st.rerun()
             else:
                 st.experimental_rerun()
-        except Exception:
+        except (AttributeError, RuntimeError):
             pass
 
     st.markdown("---")
@@ -299,12 +300,12 @@ def render_tab_logs():
             test = LOG_FILE.open("a")
             test.close()
             st.success("✔ Écriture locale autorisée")
-        except Exception as e:
+        except OSError as e:
             st.error(f"❌ Écriture locale impossible : {e}")
 
         if sync_enabled:
             try:
                 LOG_FILE_ONEDRIVE.parent.mkdir(parents=True, exist_ok=True)
                 st.success("✔ OneDrive accessible")
-            except Exception as e:
+            except OSError as e:
                 st.error(f"❌ OneDrive inaccessible : {e}")
