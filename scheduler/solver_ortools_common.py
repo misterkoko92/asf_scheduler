@@ -29,6 +29,7 @@ from scheduler.config import (
 )
 from utils.datetime_utils import (
     coerce_datetime,
+    format_time_value,
     parse_date_value_as_date,
     parse_time_value_as_time,
 )
@@ -646,6 +647,218 @@ def optimize_equilibrage(
                     int(delta),
                 )
             model.Add(max_c - min_c <= int(delta) + 1)
+
+
+def extract_solver_results(
+    *,
+    solver: cp_model.CpSolver,
+    x: Dict[Tuple[int, int], cp_model.IntVar],
+    y: Dict[Tuple[int, int], cp_model.IntVar],
+    u: Dict[int, cp_model.IntVar],
+    charge: Dict[int, cp_model.IntVar],
+    nb_be: Dict[int, cp_model.IntVar],
+    be_groups: pd.DataFrame,
+    df_be_original: pd.DataFrame,
+    df_vols: pd.DataFrame,
+    df_param_benev: pd.DataFrame,
+    status: int,
+    verbose: bool = False,
+    priority_mode: str = "colis",
+    include_assignations: bool = False,
+    z: Dict[Tuple[int, int, int], cp_model.IntVar] | None = None,
+) -> Dict[str, Any]:
+    affectations: List[Dict[str, Any]] = []
+    be_affectes: set[Any] = set()
+
+    for (be_idx, v_idx), var in x.items():
+        if solver.Value(var) != 1:
+            continue
+        be = be_groups.loc[be_idx]
+        vol = df_vols.loc[v_idx]
+        be_num = be["BE_Numero"]
+        be_affectes.add(be_num)
+        affectations.append(
+            {
+                "BE_Numero": be_num,
+                "BE_Expediteur": be.get("BE_Expediteur", ""),
+                "BE_Destinataire": be.get("BE_Destinataire", ""),
+                "Destination": be["Destination"],
+                "BE_Nb_Colis": int(be["nb_colis"]),
+                "BE_Poids_Equiv": int(be["poids_total"]),
+                "BE_Type": be.get("type", ""),
+                "Vol_Routing": vol.get("Routing", ""),
+                "Vol_Date": vol.get("Date_Vol") or vol["datetime"].date(),
+                "Vol_Heure": vol.get("Heure_Vol") or format_time_value(
+                    vol["datetime"].time(),
+                    fmt="%Hh%M",
+                    default="",
+                ),
+                "Vol_Numero": vol.get("Numero_Vol", ""),
+                "Vol_Destination": vol.get("Destination", vol.get("dest_iata", "")),
+                "Vol_Index": v_idx,
+            }
+        )
+    df_affectations = pd.DataFrame(affectations)
+
+    assignations_benev: List[Dict[str, int]] = []
+    if include_assignations and z:
+        for (be_idx, benev_id, v_idx), var in z.items():
+            if solver.Value(var) == 1:
+                assignations_benev.append(
+                    {
+                        "BE_Index": int(be_idx),
+                        "Benevole_ID": int(benev_id),
+                        "Vol_Index": int(v_idx),
+                    }
+                )
+
+    planning_benevoles: List[Dict[str, Any]] = []
+    for (benev_id, v_idx), var in y.items():
+        if solver.Value(var) != 1:
+            continue
+        vol = df_vols.loc[v_idx]
+        benev_info = df_param_benev[df_param_benev["ID"] == benev_id]
+        nom = (
+            benev_info["Benevole"].iloc[0]
+            if len(benev_info) > 0
+            else f"ID_{benev_id}"
+        )
+        phone = benev_info["Telephone"].iloc[0] if len(benev_info) > 0 else ""
+        planning_benevoles.append(
+            {
+                "Benevole_ID": benev_id,
+                "Benevole": nom,
+                "Telephone": phone,
+                "Vol_Index": v_idx,
+                "Vol_Date": vol.get("Date_Vol") or vol["datetime"].date(),
+                "Vol_Heure": vol.get("Heure_Vol") or format_time_value(
+                    vol["datetime"].time(),
+                    fmt="%Hh%M",
+                    default="",
+                ),
+                "Vol_Numero": vol.get("Numero_Vol", ""),
+                "Destination": vol.get("Destination", vol.get("dest_iata", "")),
+                "Charge_Equiv": int(solver.Value(charge[v_idx])),
+                "Nb_BE": int(solver.Value(nb_be[v_idx])),
+            }
+        )
+    df_planning_benev = pd.DataFrame(planning_benevoles)
+
+    vols_utilises: List[Dict[str, Any]] = []
+    for v_idx in df_vols.index:
+        if solver.Value(u[v_idx]) != 1:
+            continue
+        vol = df_vols.loc[v_idx]
+        nb_benevoles = sum(
+            1 for (b, v) in y if v == v_idx and solver.Value(y[(b, v)]) == 1
+        )
+        vols_utilises.append(
+            {
+                "Vol_Numero": vol.get("Numero_Vol", ""),
+                "Date": vol.get("Date_Vol") or vol["datetime"].date(),
+                "Heure": vol.get("Heure_Vol") or format_time_value(
+                    vol["datetime"].time(),
+                    fmt="%Hh%M",
+                    default="",
+                ),
+                "Destination": vol.get("Destination", vol.get("dest_iata", "")),
+                "Charge": int(solver.Value(charge[v_idx])),
+                "Nb_BE": int(solver.Value(nb_be[v_idx])),
+                "Nb_Benevoles": nb_benevoles,
+                "Vol_Index": v_idx,
+            }
+        )
+    df_vols_utilises = pd.DataFrame(vols_utilises)
+
+    df_non_planifies = df_be_original[
+        ~df_be_original["BE_Numero"].isin(be_affectes)
+    ].copy()
+
+    # Détail par destination
+    dest_stats_rows: List[Dict[str, Any]] = []
+    if not df_be_original.empty:
+        be_by_dest = (
+            df_be_original.groupby("Destination")["BE_Nb_Colis"]
+            .sum()
+            .fillna(0)
+        )
+        be_count_by_dest = df_be_original.groupby("Destination")["BE_Numero"].nunique()
+        aff_by_dest = (
+            df_affectations.groupby("Destination")[["BE_Numero", "BE_Nb_Colis"]]
+            .agg({"BE_Numero": "nunique", "BE_Nb_Colis": "sum"})
+            if not df_affectations.empty
+            else pd.DataFrame(columns=["BE_Numero", "BE_Nb_Colis"])
+        )
+        for dest, total_colis in be_by_dest.items():
+            be_planifies = (
+                int(aff_by_dest.loc[dest, "BE_Numero"])
+                if dest in aff_by_dest.index
+                else 0
+            )
+            colis_expedies = (
+                int(aff_by_dest.loc[dest, "BE_Nb_Colis"])
+                if dest in aff_by_dest.index
+                else 0
+            )
+            dest_stats_rows.append(
+                {
+                    "Destination": dest,
+                    "BE_total": int(be_count_by_dest.get(dest, 0)),
+                    "BE_planifies": be_planifies,
+                    "Colis_total": int(total_colis),
+                    "Colis_expedies": colis_expedies,
+                }
+            )
+    df_dest_stats = pd.DataFrame(dest_stats_rows)
+
+    df_vols_diag = build_vols_compatibility_df(df_vols, x, y, u=u, solver=solver)
+    vols_diag_stats = summarize_vols_compatibility(df_vols_diag)
+
+    nb_colis_total = int(
+        pd.to_numeric(
+            df_be_original.get("BE_Nb_Colis", 0),
+            errors="coerce",
+        )
+        .fillna(0)
+        .sum()
+    )
+    nb_colis_expedies = (
+        int(df_affectations["BE_Nb_Colis"].sum()) if not df_affectations.empty else 0
+    )
+    stats = {
+        "status": "OPTIMAL" if status == cp_model.OPTIMAL else "FEASIBLE",
+        "priority_mode": priority_mode,
+        "nb_be_total": len(be_groups),
+        "nb_be_envoyes": len(be_affectes),
+        "taux_be": round(len(be_affectes) / len(be_groups) * 100, 1) if len(be_groups) else 0,
+        "nb_vols_utilises": len(df_vols_utilises),
+        "nb_benevoles_mobilises": len(df_planning_benev["Benevole_ID"].unique())
+        if not df_planning_benev.empty
+        else 0,
+        "nb_colis_total": nb_colis_total,
+        "nb_colis_expedies": nb_colis_expedies,
+        **vols_diag_stats,
+    }
+    stats["taux_colis"] = (
+        round(nb_colis_expedies / nb_colis_total * 100, 1) if nb_colis_total else 0
+    )
+
+    if verbose:
+        get_logger("ortools_sim", console=True).info("[ORTOOLS] Résumé : %s", stats)
+
+    payload: Dict[str, Any] = {
+        "affectations_be": df_affectations,
+        "planning_benevoles": df_planning_benev,
+        "vols_utilises": df_vols_utilises,
+        "statistiques": stats,
+        "status": stats["status"],
+        "be_non_planifies": df_non_planifies,
+        "dest_stats": df_dest_stats,
+        "vols_diagnostics": df_vols_diag,
+    }
+    if include_assignations:
+        payload["assignations_benev"] = assignations_benev
+    return payload
 
 
 def build_planning_bilan(

@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pandas as pd
 
 from asf_app.ui.ui_simulation import (
@@ -8,12 +10,14 @@ from asf_app.ui.ui_simulation import (
     _build_be_options,
     _build_bene_selector_data,
     _build_manual_row_data,
+    _build_mode_selector_data,
     _build_vol_selector_data,
     _clean_for_excel,
     _compute_bene_status,
     _compute_week_bounds,
     _compute_week_year,
     _delete_manual_assignment,
+    _filter_vols_for_export,
     _filter_vols_for_selection,
     _normalize_sort_plan,
     _recompute_be_non_planifies,
@@ -29,6 +33,44 @@ def test_compute_week_year_prefers_current_state_values():
     df = pd.DataFrame([{"Date_Vol": "01/01/2026"}])
     week, year = _compute_week_year(df, current_week=12, current_year=2027)
     assert (week, year) == (12, 2027)
+
+
+def test_build_mode_selector_data_formats_labels():
+    labels, values = _build_mode_selector_data(
+        {
+            "colis": {"statistiques": {"nb_colis_expedies": 10, "nb_benevoles_mobilises": 2}},
+            "benevoles": {"statistiques": {"nb_colis_expedies": 8, "nb_benevoles_mobilises": 3}},
+        }
+    )
+    assert values == ["colis", "benevoles"]
+    assert labels[0] == "Priorité Colis — 10 colis / 2 bénév"
+    assert labels[1] == "Priorité Bénévole — 8 colis / 3 bénév"
+
+
+def test_filter_vols_for_export_uses_api_dates_then_export_fallback():
+    df_vols = pd.DataFrame(
+        [
+            {"Date_Vol": "2026-01-18", "Numero_Vol": "AF100"},
+            {"Date_Vol": "2026-01-20", "Numero_Vol": "AF200"},
+            {"Date_Vol": "2026-01-22", "Numero_Vol": "AF300"},
+        ]
+    )
+
+    state_with_bounds = SimpleNamespace(api_start_date="2026-01-19", api_end_date="2026-01-21")
+    out_bounds = _filter_vols_for_export(
+        df_vols,
+        state=state_with_bounds,
+        df_export=pd.DataFrame(),
+    )
+    assert list(out_bounds["Numero_Vol"]) == ["AF200"]
+
+    state_without_bounds = SimpleNamespace(api_start_date=None, api_end_date=None)
+    out_fallback = _filter_vols_for_export(
+        df_vols,
+        state=state_without_bounds,
+        df_export=pd.DataFrame([{"Date_Vol": "2026-01-20"}, {"Date_Vol": "2026-01-22"}]),
+    )
+    assert list(out_fallback["Numero_Vol"]) == ["AF200", "AF300"]
 
 
 def test_compute_week_year_falls_back_to_planning_dates():

@@ -840,6 +840,124 @@ def _open_file(path_obj):
         pass
 
 
+def _ensure_simulation_session_state() -> None:
+    if "sim_results" not in st.session_state:
+        st.session_state.sim_results = None
+    if "sim_active_mode" not in st.session_state:
+        st.session_state.sim_active_mode = "colis"
+
+
+def _build_mode_selector_data(modes: dict[str, dict[str, Any]]) -> tuple[list[str], list[str]]:
+    mode_labels: list[str] = []
+    mode_values: list[str] = []
+    for key, res in modes.items():
+        stats_mode = res.get("statistiques", {})
+        label = "Priorité Colis" if key == "colis" else "Priorité Bénévole"
+        extra = f" — {stats_mode.get('nb_colis_expedies', 0)} colis / {stats_mode.get('nb_benevoles_mobilises', 0)} bénév"
+        mode_labels.append(f"{label}{extra}")
+        mode_values.append(key)
+    return mode_labels, mode_values
+
+
+def _filter_vols_for_export(
+    df_vols_all: pd.DataFrame,
+    *,
+    state: Any,
+    df_export: pd.DataFrame,
+) -> pd.DataFrame:
+    vols_filtered = df_vols_all.copy()
+    try:
+        start_dt = coerce_datetime(state.api_start_date) if state.api_start_date else None
+        end_dt = coerce_datetime(state.api_end_date) if state.api_end_date else None
+        if start_dt is None or end_dt is None:
+            if df_export is not None and not df_export.empty:
+                dates_plan = coerce_datetime(
+                    df_export["Date_Vol"],
+                    errors="coerce",
+                    dayfirst=True,
+                ).dropna()
+                if not dates_plan.empty:
+                    start_dt = dates_plan.min()
+                    end_dt = dates_plan.max()
+        if start_dt is not None and end_dt is not None and "Date_Vol" in vols_filtered.columns:
+            vols_filtered["Date_dt"] = parse_date_series(vols_filtered["Date_Vol"])
+            vols_filtered = vols_filtered[
+                (vols_filtered["Date_dt"] >= start_dt) & (vols_filtered["Date_dt"] <= end_dt)
+            ]
+            vols_filtered = vols_filtered.drop(columns=["Date_dt"], errors="ignore")
+    except (KeyError, TypeError, ValueError):
+        pass
+    return vols_filtered
+
+
+def _resolve_tdb_write_path(*, state: Any, write_source_excel: bool) -> Path:
+    paths = get_excel_source_paths(state)
+    tdb_write_path = paths.tableau_de_bord
+    if write_source_excel and not is_graph_onedrive():
+        tdb_src = get_tableau_de_bord_src()
+        if tdb_src.exists():
+            tdb_write_path = tdb_src
+    return tdb_write_path
+
+
+def _export_simulation_excel(
+    *,
+    current_plan: pd.DataFrame,
+    state: Any,
+    df_paramdest: pd.DataFrame,
+    df_vols_all: pd.DataFrame,
+    df_dispo: pd.DataFrame,
+    df_parambenev: pd.DataFrame,
+    write_source_excel: bool,
+    increment_version: bool,
+):
+    from asf_app.services.export_service import export_planning_excel
+
+    df_with_status = sort_planning_df(current_plan)
+    week, year = _compute_week_year(
+        current_plan,
+        current_week=state.current_week,
+        current_year=state.current_year,
+    )
+    df_export = pd.DataFrame(df_with_status).copy()
+    df_export = df_export.drop(columns=["_MANUEL", "_STATUS"], errors="ignore")
+    df_export = build_export_view(
+        df_export,
+        df_paramdest=df_paramdest,
+        df_vols=df_vols_all,
+    )
+    df_export["Ville"] = df_export.get("Dest_Ville", "")
+
+    try:
+        df_export = df_export.sort_values(
+            by=["Date_Vol", "Heure_Vol"],
+            kind="mergesort",
+        ).reset_index(drop=True)
+    except (KeyError, TypeError, ValueError):
+        pass
+
+    df_export = _clean_for_excel(df_export)
+    vols_filtered = _filter_vols_for_export(df_vols_all, state=state, df_export=df_export)
+    vols_clean = _clean_for_excel(vols_filtered)
+    dispo_clean = _clean_for_excel(df_dispo)
+    paths = get_excel_source_paths(state)
+    tdb_write_path = _resolve_tdb_write_path(state=state, write_source_excel=write_source_excel)
+    return export_planning_excel(
+        df_export,
+        week,
+        year,
+        df_vols=vols_clean,
+        df_parambenev=df_parambenev,
+        df_dispos=dispo_clean,
+        df_paramdest=df_paramdest,
+        create_tables=False,  # éviter les tables qui peuvent corrompre l'export en V2
+        write_source_excel=write_source_excel,
+        increment_version=increment_version,
+        benev_path=paths.planning_benevoles,
+        tdb_source_path=tdb_write_path,
+    )
+
+
 def _compute_week_bounds(*, api_start_date, api_end_date, planning_df: pd.DataFrame | None):
     if api_start_date and api_end_date:
         return coerce_datetime(api_start_date), coerce_datetime(api_end_date)
@@ -1179,10 +1297,7 @@ def render_tab_simulation():
     with col_verbose:
         verbose = st.checkbox("Log console détaillé", value=True)
 
-    if "sim_results" not in st.session_state:
-        st.session_state.sim_results = None
-    if "sim_active_mode" not in st.session_state:
-        st.session_state.sim_active_mode = "colis"
+    _ensure_simulation_session_state()
 
     if st.button("Générer le planning", type="primary"):
         with st.spinner("Optimisation OR-Tools en cours…"):
@@ -1205,18 +1320,7 @@ def render_tab_simulation():
         return
 
     # Choix du mode affiché
-    mode_labels = []
-    mode_values = []
-    for key, res in modes.items():
-        stats_mode = res.get("statistiques", {})
-        label = (
-            "Priorité Colis"
-            if key == "colis"
-            else "Priorité Bénévole"
-        )
-        extra = f" — {stats_mode.get('nb_colis_expedies', 0)} colis / {stats_mode.get('nb_benevoles_mobilises', 0)} bénév"
-        mode_labels.append(f"{label}{extra}")
-        mode_values.append(key)
+    mode_labels, mode_values = _build_mode_selector_data(modes)
     current_mode = st.radio(
         "Sélectionner le planning affiché",
         options=mode_values,
@@ -1275,125 +1379,6 @@ def render_tab_simulation():
     plan_df = sort_planning_df(plan_df)
     # On conserve le tri dans le state pour l'affichage final
     st.session_state.sim_results[current_mode]["planning_df"] = plan_df
-
-    def _build_export_with_diff(current_plan: pd.DataFrame, original_plan: pd.DataFrame | None) -> pd.DataFrame:
-        cur = pd.DataFrame(current_plan).copy()
-        cur["_STATUS"] = "normal"
-        if original_plan is None or getattr(original_plan, "empty", True):
-            # Tout est considéré comme nouveau si aucune base
-            cur["_STATUS"] = "new"
-            return cur
-        orig = pd.DataFrame(original_plan).copy()
-        orig["_STATUS"] = "orig"
-        # Normaliser clé BE
-        def _key(df):
-            return df["BE_Numero"].astype(str).str.strip()
-        cur["__KEY"] = _key(cur)
-        orig["__KEY"] = _key(orig)
-        orig_by_key = {k: r for k, r in orig.groupby("__KEY")}
-        rows = []
-        # Détections
-        for _, row in cur.iterrows():
-            key = row["__KEY"]
-            if key not in orig_by_key:
-                row["_STATUS"] = "new"
-                rows.append(row)
-            else:
-                # comparer valeurs principales
-                ref = orig_by_key[key].iloc[0]
-                cols_cmp = ["Date_Vol", "Heure_Vol", "Numero_Vol", "Destination", "Benevole"]
-                changed = any(str(row.get(c, "")) != str(ref.get(c, "")) for c in cols_cmp)
-                if changed:
-                    # ancienne version
-                    ref_old = ref.copy()
-                    ref_old["_STATUS"] = "old"
-                    rows.append(ref_old)
-                    row["_STATUS"] = "new"
-                    rows.append(row)
-                else:
-                    row["_STATUS"] = "normal"
-                    rows.append(row)
-        # BE supprimés
-        keys_cur = set(cur["__KEY"])
-        for _, ref in orig.iterrows():
-            if ref["__KEY"] not in keys_cur:
-                ref_old = ref.copy()
-                ref_old["_STATUS"] = "old_deleted"
-                rows.append(ref_old)
-        df_out = pd.DataFrame(rows).drop(columns=["__KEY"], errors="ignore")
-        return df_out
-
-    def _export_simulation_excel(*, write_source_excel: bool, increment_version: bool):
-        from asf_app.services.export_service import export_planning_excel
-        current_plan = st.session_state.sim_results.get(current_mode, {}).get("planning_df", plan_df)
-        # Export sans traçage des anciennes lignes : on prend uniquement le planning courant
-        df_with_status = sort_planning_df(current_plan)
-        week, year = _compute_week_year(
-            current_plan,
-            current_week=state.current_week,
-            current_year=state.current_year,
-        )
-        df_export = pd.DataFrame(df_with_status).copy()
-        df_export = df_export.drop(columns=["_MANUEL", "_STATUS"], errors="ignore")
-        df_export = build_export_view(
-            df_export,
-            df_paramdest=df_paramdest,
-            df_vols=df_vols_all,
-        )
-        df_export["Ville"] = df_export.get("Dest_Ville", "")
-        # Tri Date/Heure avant export pour alimenter la feuille Planning dans l'ordre
-        try:
-            df_export = df_export.sort_values(by=["Date_Vol", "Heure_Vol"], kind="mergesort").reset_index(drop=True)
-        except (KeyError, TypeError, ValueError):
-            pass
-        # Nettoyage valeurs Excel (pas de NA/NaT)
-        df_export = _clean_for_excel(df_export)
-        # Filtrer les vols à la période du planning (si bornes dispo)
-        vols_filtered = df_vols_all.copy()
-        try:
-            start_dt = coerce_datetime(state.api_start_date) if state.api_start_date else None
-            end_dt = coerce_datetime(state.api_end_date) if state.api_end_date else None
-            if start_dt is None or end_dt is None:
-                if df_export is not None and not df_export.empty:
-                    dates_plan = coerce_datetime(df_export["Date_Vol"], errors="coerce", dayfirst=True).dropna()
-                    if not dates_plan.empty:
-                        start_dt = dates_plan.min()
-                        end_dt = dates_plan.max()
-            if start_dt is not None and end_dt is not None and "Date_Vol" in vols_filtered.columns:
-                vols_filtered["Date_dt"] = parse_date_series(vols_filtered["Date_Vol"])
-                vols_filtered = vols_filtered[(vols_filtered["Date_dt"] >= start_dt) & (vols_filtered["Date_dt"] <= end_dt)]
-                vols_filtered = vols_filtered.drop(columns=["Date_dt"], errors="ignore")
-        except (KeyError, TypeError, ValueError):
-            pass
-        vols_clean = _clean_for_excel(vols_filtered)
-        dispo_clean = _clean_for_excel(df_dispo)
-        paths = get_excel_source_paths(state)
-        tdb_write_path = paths.tableau_de_bord
-        if write_source_excel and not is_graph_onedrive():
-            tdb_src = get_tableau_de_bord_src()
-            if tdb_src.exists():
-                tdb_write_path = tdb_src
-        result = export_planning_excel(
-            df_export,
-            week,
-            year,
-            df_vols=vols_clean,
-            df_parambenev=df_parambenev,
-            df_dispos=dispo_clean,
-            df_paramdest=df_paramdest,
-            create_tables=False,  # éviter les tables qui peuvent corrompre l'export en V2
-            write_source_excel=write_source_excel,
-            increment_version=increment_version,
-            benev_path=paths.planning_benevoles,
-            tdb_source_path=tdb_write_path,
-        )
-        if write_source_excel:
-            st.session_state["mag_central_write_method"] = result.mag_write_method
-        else:
-            st.session_state.pop("mag_central_write_method", None)
-        for msg in result.warnings:
-            st.warning(msg)
-        return result.output_path
 
     # ------------------------------------------------------------------
     # Edition manuelle du planning de simulation (sélecteurs alignés onglet Planning)
@@ -1533,12 +1518,25 @@ def render_tab_simulation():
     with col_export:
         if st.button("📤 Exporter le planning simulé (Excel)", type="primary"):
             try:
-                out_path = Path(
-                    _export_simulation_excel(
-                        write_source_excel=write_source_excel,
-                        increment_version=increment_version,
-                    )
+                current_plan = st.session_state.sim_results.get(current_mode, {}).get("planning_df", plan_df)
+                export_result = _export_simulation_excel(
+                    current_plan=current_plan,
+                    state=state,
+                    df_paramdest=df_paramdest,
+                    df_vols_all=df_vols_all,
+                    df_dispo=df_dispo,
+                    df_parambenev=df_parambenev,
+                    write_source_excel=write_source_excel,
+                    increment_version=increment_version,
                 )
+                if write_source_excel:
+                    st.session_state["mag_central_write_method"] = export_result.mag_write_method
+                else:
+                    st.session_state.pop("mag_central_write_method", None)
+                for msg in export_result.warnings:
+                    st.warning(msg)
+
+                out_path = Path(export_result.output_path)
                 st.success(f"Planning simulé exporté : {out_path}")
                 from asf_app.ui.ui_planning.utils import show_mag_central_status
                 show_mag_central_status()

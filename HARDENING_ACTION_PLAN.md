@@ -15,8 +15,8 @@ Solidifier le projet (qualité, sécurité, maintenabilité, évolutivité) sans
 - Signaux de complexité (patterns `except/print` dans code + tests): `375`
 
 ## État courant (re-baseline 2026-02-13)
-- Tests: `458 passed`
-- Tests collectés: `458` (`pytest --collect-only -q`)
+- Tests: `460 passed`
+- Tests collectés: `460` (`pytest --collect-only -q`)
 - Couverture globale locale (`pytest-cov`): `77%` (`8560/11078`)
 - Qualité statique:
   - `ruff`: OK (`All checks passed`)
@@ -111,6 +111,9 @@ Solidifier le projet (qualité, sécurité, maintenabilité, évolutivité) sans
 ## Journal d'actions
 | Date/Heure | Action | Résultat |
 |---|---|---|
+| 2026-02-13 | R2: extraction du contrat d’extraction solveur V2/V3 dans `scheduler/solver_ortools_common.py::extract_solver_results` + simplification wrappers `_extract_results` | OK |
+| 2026-02-13 | R1: extraction helpers `ui_simulation` (state/session, mode selector, préparation export, filtrage vols période, résolution path source) + suppression code mort `_build_export_with_diff` | OK |
+| 2026-02-13 | Validation lot R1/R2: `pytest -q` (`460 passed`), ciblés solveur/UI (`32 passed`), `ruff` OK, `mypy` OK | OK |
 | 2026-02-13 | S0 one-pass: ajout utilitaire de redaction (`utils/security_redaction.py`) et intégration logs/export (`ui_logs.py`, `logging_utils.py`) | OK |
 | 2026-02-13 | S0 one-pass: validation AF_API_KEY (rejet placeholder) dans `airfrance_api.py` + tests dédiés | OK |
 | 2026-02-13 | S1 one-pass: ajout `pip-audit` + orchestrateur `tools/run_security.py` (secrets/deps/all) | OK |
