@@ -161,6 +161,52 @@ class _StubSt:
         return self._number_value
 
 
+class _RenderCol:
+    def __init__(self, parent: "_RenderStubSt"):
+        self.parent = parent
+
+    def button(self, label, **kwargs):
+        return self.parent.button(label, **kwargs)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        _ = exc_type, exc, tb
+        return False
+
+
+class _RenderStubSt(_StubSt):
+    def __init__(self):
+        super().__init__()
+        self.successes: list[str] = []
+        self.titles: list[str] = []
+
+    def title(self, msg):
+        self.titles.append(str(msg))
+
+    def success(self, msg):
+        self.successes.append(str(msg))
+
+    def divider(self):
+        return None
+
+    def dataframe(self, *_args, **_kwargs):
+        return None
+
+    def markdown(self, *_args, **_kwargs):
+        return None
+
+    def expander(self, *_args, **_kwargs):
+        return _RenderCol(self)
+
+    def columns(self, n, **_kwargs):
+        return [_RenderCol(self) for _ in range(int(n))]
+
+    def code(self, *_args, **_kwargs):
+        return None
+
+
 def test_load_session_planning_ui_main_mode(monkeypatch):
     stub = _StubSt()
     monkeypatch.setattr(comm, "st", stub)
@@ -222,3 +268,57 @@ def test_load_onedrive_planning_ui_local_without_file(monkeypatch):
 
     assert out is None
     assert any("Aucun fichier Excel" in msg for msg in stub.warnings)
+
+
+def test_render_tab_communication_session_whatsapp_smoke(monkeypatch):
+    stub = _RenderStubSt()
+    monkeypatch.setattr(comm, "st", stub)
+    monkeypatch.setattr(comm, "get_state", lambda: SimpleNamespace())
+    monkeypatch.setattr(
+        comm,
+        "get_excel_source_paths",
+        lambda _state: SimpleNamespace(
+            tableau_de_bord=Path("tdb.xlsx"),
+            planning_benevoles=Path("benev.xlsx"),
+            vols=Path("vols.xlsx"),
+        ),
+    )
+    monkeypatch.setattr(
+        comm,
+        "_load_session_planning_ui",
+        lambda: pd.DataFrame([{"Date_Vol": "2026-01-19", "BE_Numero": "260001"}]),
+    )
+    monkeypatch.setattr(comm, "_load_onedrive_planning_ui", lambda: None)
+    monkeypatch.setattr(
+        comm,
+        "load_parameters",
+        lambda **_kwargs: (pd.DataFrame([{"Dest_IATA": "RUN"}]), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()),
+    )
+    monkeypatch.setattr(
+        comm,
+        "build_df_comm",
+        lambda **_kwargs: pd.DataFrame(
+            [
+                {
+                    "DATE": "2026-01-19",
+                    "Destination": "RUN",
+                    "Expediteur": "ASF",
+                    "Destinataire": "Hopital",
+                    "Benevole": "ALICE",
+                    "Telephone": "0600000000",
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(comm, "get_shipments_df_cached", lambda **_kwargs: pd.DataFrame())
+    monkeypatch.setattr(comm, "build_destinataire_mapping", lambda **_kwargs: {})
+    monkeypatch.setattr(comm, "fill_missing_destinataire", lambda df, _map: df)
+    monkeypatch.setattr(comm, "is_graph_onedrive", lambda: False)
+    monkeypatch.setattr(comm, "get_onedrive_root", lambda: Path("/nonexistent"))
+    monkeypatch.setattr(comm, "build_communication_display_dataframe", lambda df: df)
+    monkeypatch.setattr(comm, "generate_whatsapp_messages", lambda _df: [])
+
+    comm.render_tab_communication()
+
+    assert any("Communication pour S4" in msg for msg in stub.successes)
+    assert any("Pas de planning PDF trouvé" in msg for msg in stub.warnings)

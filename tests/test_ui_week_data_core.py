@@ -93,3 +93,188 @@ def test_load_be_moteur_success_formats_and_sorts(monkeypatch, tmp_path):
     assert list(df["BE_Numero"]) == ["260001", "260002"]
     assert list(df["Douane"]) == ["OUI", "NON"]
     assert set(["Type", "Destination", "IATA", "Nb_Colis", "Equiv_colis", "Priorité"]).issubset(df.columns)
+
+
+class _StubWeekContainer:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        _ = exc_type, exc, tb
+        return False
+
+
+class _StubWeekSt:
+    def __init__(self):
+        self.infos: list[str] = []
+        self._sort = None
+        self.captured_df = None
+
+    def container(self):
+        return _StubWeekContainer()
+
+    def markdown(self, *_args, **_kwargs):
+        return None
+
+    def subheader(self, *_args, **_kwargs):
+        return None
+
+    def info(self, msg):
+        self.infos.append(str(msg))
+
+    def selectbox(self, _label, options, index=0, **_kwargs):
+        if self._sort in options:
+            return self._sort
+        return options[index]
+
+    def data_editor(self, df, **_kwargs):
+        self.captured_df = df.copy()
+        return df
+
+
+def test_bloc_with_sort_handles_empty_and_sorted_dataframe(monkeypatch):
+    stub = _StubWeekSt()
+    monkeypatch.setattr(ui_week_data, "st", stub)
+
+    ui_week_data.bloc_with_sort(
+        title="Bloc vide",
+        df=pd.DataFrame(),
+        sort_options=["A"],
+        default_sort="A",
+    )
+    assert any("Aucune donnée" in msg for msg in stub.infos)
+
+    stub._sort = "A"
+    src = pd.DataFrame([{"A": 2}, {"A": 1}])
+    ui_week_data.bloc_with_sort(
+        title="Bloc tri",
+        df=src,
+        sort_options=["A"],
+        default_sort="A",
+    )
+    assert stub.captured_df is not None
+    assert stub.captured_df["A"].tolist() == [1, 2]
+
+
+class _RenderCtx:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        _ = exc_type, exc, tb
+        return False
+
+
+class _RenderWeekSt:
+    def __init__(self):
+        self.infos: list[str] = []
+        self.errors: list[str] = []
+
+    def header(self, *_args, **_kwargs):
+        return None
+
+    def columns(self, n, **_kwargs):
+        _ = _kwargs
+        return [_RenderCtx() for _ in range(int(n))]
+
+    def error(self, msg):
+        self.errors.append(str(msg))
+
+    def info(self, msg):
+        self.infos.append(str(msg))
+
+    def expander(self, *_args, **_kwargs):
+        return _RenderCtx()
+
+    def dataframe(self, *_args, **_kwargs):
+        return None
+
+
+def test_render_tab_week_data_builds_unique_flights_with_real_routing(monkeypatch):
+    stub = _RenderWeekSt()
+    monkeypatch.setattr(ui_week_data, "st", stub)
+    captured: dict[str, pd.DataFrame] = {}
+    monkeypatch.setattr(
+        ui_week_data,
+        "bloc_with_sort",
+        lambda title, df, **_kwargs: captured.__setitem__(title, df.copy() if df is not None else pd.DataFrame()),
+    )
+    monkeypatch.setattr(
+        ui_week_data,
+        "load_be_moteur",
+        lambda: (
+            pd.DataFrame(
+                [
+                    {
+                        "BE_Numero": "260001",
+                        "Type": "MM",
+                        "Destination": "DOUALA",
+                        "IATA": "DLA",
+                        "Expéditeur": "test",
+                        "Nb_Colis": 10,
+                        "Equiv_colis": 10,
+                        "Priorité": 1,
+                        "Douane": "NON",
+                        "Special": "",
+                    }
+                ]
+            ),
+            None,
+        ),
+    )
+    monkeypatch.setattr(ui_week_data, "_compute_week_dates", lambda **_kwargs: [])
+    monkeypatch.setattr(ui_week_data, "_build_day_labels", lambda _week_dates: [])
+    monkeypatch.setattr(
+        ui_week_data,
+        "_build_benev_week_table",
+        lambda *_args, **_kwargs: (pd.DataFrame(), pd.DataFrame()),
+    )
+    monkeypatch.setattr(
+        ui_week_data,
+        "_build_flights_week_table",
+        lambda *_args, **_kwargs: (pd.DataFrame(), pd.DataFrame()),
+    )
+    state = SimpleNamespace(
+        api_start_date="2026-02-16",
+        api_end_date="2026-02-22",
+        df_param_dest=pd.DataFrame([{"Dest_IATA": "DLA", "Ville": "DOUALA"}]),
+        df_be=pd.DataFrame([{"Status_BE": "D", "Dest_IATA": "DLA"}]),
+        df_benev=pd.DataFrame(
+            [
+                {
+                    "Nom": "ALBISSER Philippe",
+                    "Date": "16/02/26",
+                    "Heure_Arrivee": "08:00",
+                    "Heure_Depart": "13:00",
+                }
+            ]
+        ),
+        df_vols=pd.DataFrame(
+            [
+                {
+                    "Date_Vol": "16/02/26",
+                    "Heure_Vol": "11h00",
+                    "Routing": "CDG-SSG-DLA",
+                    "Numero_Vol": "AF 822",
+                    "Source": "excel",
+                },
+                {
+                    "Date_Vol": "16/02/26",
+                    "Heure_Vol": "11h00",
+                    "Routing": "CDG-SSG-DLA",
+                    "Numero_Vol": "AF 822",
+                    "Source": "api",
+                },
+            ]
+        ),
+        tdb_tmp=None,
+    )
+    monkeypatch.setattr(ui_week_data, "get_state", lambda: state)
+
+    ui_week_data.render_tab_week_data()
+
+    assert "Vols disponibles" in captured
+    flights = captured["Vols disponibles"]
+    assert len(flights) == 1
+    assert flights.iloc[0]["Routing"] == "CDG-SSG-DLA"
+    assert flights.iloc[0]["Source"] == "api"

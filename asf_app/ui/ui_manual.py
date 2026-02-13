@@ -79,9 +79,13 @@ def render_tab_manual():
     # Chemins TMP uniquement (car l’AppState ne stocke PAS les chemins OneDrive)
     # ==========================================================================
 
-    benev_tmp = Path(state.benev_tmp)
-    vols_tmp = Path(state.vols_tmp)
-    tdb_tmp = Path(state.tdb_tmp)
+    if not state.benev_tmp or not state.vols_tmp or not state.tdb_tmp:
+        st.error("❌ Chemins TMP non initialisés. Recharge les fichiers d'entrée avant les ajouts manuels.")
+        return
+
+    benev_tmp = Path(str(state.benev_tmp))
+    vols_tmp = Path(str(state.vols_tmp))
+    tdb_tmp = Path(str(state.tdb_tmp))
 
     # =====================================================================
     # 1️⃣ AJOUT / MODIFICATION DISPONIBILITÉS BÉNÉVOLES

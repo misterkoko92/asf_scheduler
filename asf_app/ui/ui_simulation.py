@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any, cast
 
 import pandas as pd
 import streamlit as st
@@ -51,14 +52,12 @@ def _normalize_be_key(value: object) -> str:
 
 def _to_int_or_zero(value: object) -> int:
     try:
-        if pd.isna(value):
-            return 0
-    except (TypeError, ValueError):
-        pass
-    try:
-        return int(float(value))
+        numeric = pd.to_numeric(value, errors="coerce")
     except (TypeError, ValueError):
         return 0
+    if pd.isna(numeric):
+        return 0
+    return int(numeric)
 
 
 def _build_reason_context(
@@ -68,8 +67,8 @@ def _build_reason_context(
     df_dispo_src: pd.DataFrame | None,
     start_dt,
     end_dt,
-) -> dict[str, object]:
-    context: dict[str, object] = {
+) -> dict[str, Any]:
+    context: dict[str, Any] = {
         "vols": pd.DataFrame(),
         "dispos": pd.DataFrame(),
         "plan_load": {},
@@ -164,14 +163,14 @@ def _build_reason_context(
 def _infer_non_affectation_reason(
     *,
     dest_code: str,
-    reason_context: dict[str, object],
+    reason_context: dict[str, Any],
 ) -> str:
     if not dest_code:
         return "Destination manquante"
 
-    vols = reason_context.get("vols", pd.DataFrame())
-    dispos = reason_context.get("dispos", pd.DataFrame())
-    plan_load = reason_context.get("plan_load", {})
+    vols = cast(pd.DataFrame, reason_context.get("vols", pd.DataFrame()))
+    dispos = cast(pd.DataFrame, reason_context.get("dispos", pd.DataFrame()))
+    plan_load = cast(dict[tuple[object, object, object], float], reason_context.get("plan_load", {}))
 
     if vols is None or vols.empty:
         return f"Aucun vol vers {dest_code} sur la période"
@@ -233,7 +232,7 @@ def _recompute_bilan(
     end_dt=None,
 ) -> pd.DataFrame:
     cols = []
-    reason_context: dict[str, object] | None = None
+    reason_context: dict[str, Any] | None = None
     if (df_vols_src is not None and not df_vols_src.empty) or (
         df_dispo_src is not None and not df_dispo_src.empty
     ):

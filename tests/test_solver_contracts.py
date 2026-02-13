@@ -430,6 +430,202 @@ def _make_missing_paramdest_stop_data_source() -> DummyDataSource:
     )
 
 
+def _make_priority_mode_divergence_data_source() -> DummyDataSource:
+    vol_date = dt.date(2025, 1, 3)
+
+    df_param_be = pd.DataFrame(
+        [
+            {"Type": "MM", "Priorite_Type": 1, "Equiv": 1},
+            {"Type": "AUTRE", "Priorite_Type": 99, "Equiv": 1},
+        ]
+    )
+    df_param_dest = pd.DataFrame(
+        [
+            {"Dest_IATA": "RUN", "Max_Colis_Par_Vol": 30, "Freq_Semaine": 7},
+        ]
+    )
+    df_param_benev = pd.DataFrame(
+        [
+            {
+                "ID": 1,
+                "Benevole": "Alice",
+                "Nom": "DUPONT",
+                "Prenom": "Alice",
+                "Prenom_Court": "Alice",
+                "Telephone": "0600000000",
+                "Max_Colis_Vol": 30,
+                "Max_Jours_Semaine": 7,
+                "Max_Exp_Semaine": 10,
+                "Max_Exp_Jour": 5,
+                "Attente_Max_Heures": 8,
+            },
+            {
+                "ID": 2,
+                "Benevole": "Bob",
+                "Nom": "MARTIN",
+                "Prenom": "Bob",
+                "Prenom_Court": "Bob",
+                "Telephone": "0600000001",
+                "Max_Colis_Vol": 30,
+                "Max_Jours_Semaine": 7,
+                "Max_Exp_Semaine": 10,
+                "Max_Exp_Jour": 5,
+                "Attente_Max_Heures": 8,
+            },
+        ]
+    )
+    df_be = pd.DataFrame(
+        [
+            {
+                "BE_Numero": "BE_RUN_101",
+                "Destination": "RUN",
+                "BE_Nb_Colis": 10,
+                "Equiv_Colis": 10,
+                "Priorite": 1,
+                "BE_Type": "MM",
+                "BE_Expediteur": "ASF",
+                "BE_Destinataire": "Hopital",
+            },
+            {
+                "BE_Numero": "BE_RUN_102",
+                "Destination": "RUN",
+                "BE_Nb_Colis": 10,
+                "Equiv_Colis": 10,
+                "Priorite": 1,
+                "BE_Type": "MM",
+                "BE_Expediteur": "ASF",
+                "BE_Destinataire": "Hopital",
+            },
+        ]
+    )
+    df_vols = pd.DataFrame(
+        [
+            {
+                "Date_Vol": vol_date,
+                "Heure_Vol": "10:00",
+                "IATA": "RUN",
+                "Destination": "RUN",
+                "Numero_Vol": "AF9001",
+                "Routing": "CDG-RUN",
+            }
+        ]
+    )
+    df_benev = pd.DataFrame(
+        [
+            {
+                "ID": 1,
+                "Benevole": "Alice",
+                "Date": vol_date,
+                "Date_dt": pd.Timestamp(vol_date),
+                "Heure_Arrivee": "00:00",
+                "Heure_Depart": "23:59",
+                "Heure_Arrivee_time": dt.time(0, 0),
+                "Heure_Depart_time": dt.time(23, 59),
+            },
+            {
+                "ID": 2,
+                "Benevole": "Bob",
+                "Date": vol_date,
+                "Date_dt": pd.Timestamp(vol_date),
+                "Heure_Arrivee": "00:00",
+                "Heure_Depart": "23:59",
+                "Heure_Arrivee_time": dt.time(0, 0),
+                "Heure_Depart_time": dt.time(23, 59),
+            },
+        ]
+    )
+    return DummyDataSource(
+        df_param_be=df_param_be,
+        df_param_dest=df_param_dest,
+        df_param_benev=df_param_benev,
+        df_be=df_be,
+        df_vols=df_vols,
+        df_benev=df_benev,
+    )
+
+
+def _make_no_benevole_compatible_data_source() -> DummyDataSource:
+    vol_date = dt.date(2025, 1, 4)
+
+    df_param_be = pd.DataFrame(
+        [
+            {"Type": "MM", "Priorite_Type": 1, "Equiv": 1},
+            {"Type": "AUTRE", "Priorite_Type": 99, "Equiv": 1},
+        ]
+    )
+    df_param_dest = pd.DataFrame(
+        [
+            {"Dest_IATA": "DLA", "Max_Colis_Par_Vol": 25, "Freq_Semaine": 7},
+        ]
+    )
+    df_param_benev = pd.DataFrame(
+        [
+            {
+                "ID": 1,
+                "Benevole": "Alice",
+                "Nom": "DUPONT",
+                "Prenom": "Alice",
+                "Prenom_Court": "Alice",
+                "Telephone": "0600000000",
+                "Max_Colis_Vol": 30,
+                "Max_Jours_Semaine": 7,
+                "Max_Exp_Semaine": 10,
+                "Max_Exp_Jour": 5,
+                "Attente_Max_Heures": 8,
+            }
+        ]
+    )
+    df_be = pd.DataFrame(
+        [
+            {
+                "BE_Numero": "BE_DLA_900",
+                "Destination": "DLA",
+                "BE_Nb_Colis": 10,
+                "Equiv_Colis": 10,
+                "Priorite": 1,
+                "BE_Type": "MM",
+                "BE_Expediteur": "ASF",
+                "BE_Destinataire": "Hopital",
+            }
+        ]
+    )
+    df_vols = pd.DataFrame(
+        [
+            {
+                "Date_Vol": vol_date,
+                "Heure_Vol": "10:00",
+                "IATA": "DLA",
+                "Destination": "DLA",
+                "Numero_Vol": "AF9002",
+                "Routing": "CDG-DLA",
+            }
+        ]
+    )
+    # Bénévole présent le bon jour, mais indisponible aux horaires du vol.
+    df_benev = pd.DataFrame(
+        [
+            {
+                "ID": 1,
+                "Benevole": "Alice",
+                "Date": vol_date,
+                "Date_dt": pd.Timestamp(vol_date),
+                "Heure_Arrivee": "11:00",
+                "Heure_Depart": "11:05",
+                "Heure_Arrivee_time": dt.time(11, 0),
+                "Heure_Depart_time": dt.time(11, 5),
+            }
+        ]
+    )
+    return DummyDataSource(
+        df_param_be=df_param_be,
+        df_param_dest=df_param_dest,
+        df_param_benev=df_param_benev,
+        df_be=df_be,
+        df_vols=df_vols,
+        df_benev=df_benev,
+    )
+
+
 def _assert_solver_contract(res: dict) -> None:
     status = str(res.get("status", ""))
     stats = res.get("statistiques", {}) or {}
@@ -573,3 +769,46 @@ def test_solver_v2_v3_multistop_with_unknown_intermediate_stop_keeps_final_desti
         assert not planning_df.empty
         assert set(planning_df["Destination"].astype(str).str.upper()) == {"DLA"}
         assert len(set(planning_df["BE_Numero"].astype(str))) == 3
+
+
+@pytest.mark.skipif(cp_model_v2 is None or cp_model_v3 is None, reason="OR-Tools non disponible")
+def test_solver_v2_v3_priority_modes_can_diverge_on_benevole_mobilization():
+    ds = _make_priority_mode_divergence_data_source()
+
+    for solve_fn in (solve_v2, solve_v3):
+        res_colis = solve_fn(timeout_seconds=5, data_source=ds, priority_mode="colis")
+        res_benev = solve_fn(timeout_seconds=5, data_source=ds, priority_mode="benevoles")
+
+        assert str(res_colis.get("status", "")) in {"OPTIMAL", "FEASIBLE"}
+        assert str(res_benev.get("status", "")) in {"OPTIMAL", "FEASIBLE"}
+
+        stats_colis = res_colis.get("statistiques", {}) or {}
+        stats_benev = res_benev.get("statistiques", {}) or {}
+
+        assert int(stats_colis.get("nb_colis_expedies", 0)) == 20
+        assert int(stats_benev.get("nb_colis_expedies", 0)) == 20
+        assert int(stats_colis.get("nb_benevoles_mobilises", 0)) == 1
+        assert int(stats_benev.get("nb_benevoles_mobilises", 0)) >= 2
+
+
+@pytest.mark.skipif(cp_model_v2 is None or cp_model_v3 is None, reason="OR-Tools non disponible")
+def test_solver_v2_v3_reports_no_compatible_benevole_diagnostic():
+    ds = _make_no_benevole_compatible_data_source()
+
+    for solve_fn in (solve_v2, solve_v3):
+        res = solve_fn(timeout_seconds=5, data_source=ds, priority_mode="colis")
+        assert str(res.get("status", "")) in {"OPTIMAL", "FEASIBLE"}
+
+        stats = res.get("statistiques", {}) or {}
+        assert int(stats.get("nb_be_envoyes", 0)) == 0
+        assert int(stats.get("nb_colis_expedies", 0)) == 0
+        assert int(stats.get("nb_vols_total", 0)) == 1
+        assert int(stats.get("nb_vols_sans_benevole_compatible", 0)) == 1
+        assert int(stats.get("nb_vols_sans_compatibilite_complete", 0)) == 1
+
+        diag_df = res.get("vols_diagnostics", pd.DataFrame())
+        assert isinstance(diag_df, pd.DataFrame)
+        assert len(diag_df) == 1
+        row = diag_df.iloc[0]
+        assert int(row.get("BE_Compat_Count", 0)) >= 1
+        assert int(row.get("Benev_Compat_Count", 0)) == 0

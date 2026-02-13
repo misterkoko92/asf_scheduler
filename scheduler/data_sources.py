@@ -470,7 +470,8 @@ class AsfBenevDataSource(BaseDataSource):
                 if pd.isna(row.get("ID")):
                     continue
                 try:
-                    param_map[int(row.get("ID"))] = row
+                    # Store plain dict to avoid ambiguous truthiness checks on pandas Series.
+                    param_map[int(row.get("ID"))] = row.to_dict()
                 except (TypeError, ValueError):
                     continue
         params = {}

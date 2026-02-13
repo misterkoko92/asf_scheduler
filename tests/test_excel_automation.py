@@ -37,3 +37,33 @@ def test_write_sheet_table_unsupported_platform(monkeypatch, tmp_path):
     monkeypatch.setattr(ea.sys, "platform", "linux")
     result = ea.write_sheet_table(tmp_path / "dummy.xlsx", "Sheet1", [["A"]])
     assert result is False
+
+
+def test_as_applescript_value_covers_primitives_and_strings():
+    assert ea._as_applescript_value(True) == "true"
+    assert ea._as_applescript_value(False) == "false"
+    assert ea._as_applescript_value(12) == "12"
+    assert ea._as_applescript_value("") == "\"\""
+    assert ea._as_applescript_value("A\"B").startswith("\"")
+
+
+def test_update_excel_cells_returns_true_when_all_values_empty(monkeypatch, tmp_path):
+    monkeypatch.setattr(ea.sys, "platform", "darwin")
+    # Toutes les valeurs deviennent None => rien à appliquer => True
+    out = ea.update_excel_cells(
+        tmp_path / "dummy.xlsx",
+        "Sheet1",
+        [(1, 1, None), (2, 2, "")],
+    )
+    assert out is True
+
+
+def test_write_sheet_table_returns_false_on_empty_data(monkeypatch, tmp_path):
+    monkeypatch.setattr(ea.sys, "platform", "darwin")
+    assert ea.write_sheet_table(tmp_path / "dummy.xlsx", "Sheet1", []) is False
+
+
+def test_replace_sheet_table_unsupported_platform(monkeypatch, tmp_path):
+    monkeypatch.setattr(ea.sys, "platform", "linux")
+    out = ea.replace_sheet_table(tmp_path / "dummy.xlsx", "Sheet1", [["A"]])
+    assert out is False

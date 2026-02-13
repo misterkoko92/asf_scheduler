@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 QUALITY_SCOPE = ["asf_app", "scheduler", "loaders", "utils", "tests"]
+DEFAULT_COVERAGE_MIN = "70"
 
 
 def _resolve_python() -> str:
@@ -58,11 +60,36 @@ def run_mypy(python_exec: str) -> int:
     )
 
 
+def run_coverage(python_exec: str) -> int:
+    min_cov = str(
+        os.getenv("ASF_COVERAGE_MIN")
+        or os.getenv("COVERAGE_MIN")
+        or DEFAULT_COVERAGE_MIN
+    )
+    return _run(
+        [
+            python_exec,
+            "-m",
+            "pytest",
+            "-q",
+            "--maxfail=1",
+            "--disable-warnings",
+            "--cov=asf_app",
+            "--cov=scheduler",
+            "--cov=loaders",
+            "--cov=utils",
+            "--cov-report=term",
+            "--cov-report=xml",
+            f"--cov-fail-under={min_cov}",
+        ]
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run repository quality checks.")
     parser.add_argument(
         "target",
-        choices=["ruff", "mypy", "all"],
+        choices=["ruff", "mypy", "coverage", "all"],
         nargs="?",
         default="all",
     )
@@ -75,6 +102,8 @@ def main() -> int:
         exit_code = max(exit_code, run_ruff(python_exec))
     if args.target in {"mypy", "all"}:
         exit_code = max(exit_code, run_mypy(python_exec))
+    if args.target in {"coverage", "all"}:
+        exit_code = max(exit_code, run_coverage(python_exec))
 
     return int(exit_code)
 

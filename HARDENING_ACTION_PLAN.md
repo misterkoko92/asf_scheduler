@@ -14,10 +14,17 @@ Solidifier le projet (qualité, sécurité, maintenabilité, évolutivité) sans
 - Fichiers suivis dans le repo (approx): `244`
 - Signaux de complexité (patterns `except/print` dans code + tests): `375`
 
-## État courant (après actions)
-- Tests: `387 passed`
-- Tests collectés: `387` (`pytest --collect-only -q`)
-- Couverture globale locale (`pytest-cov`): `65.60%` (`6946/10589`)
+## État courant (re-baseline 2026-02-13)
+- Tests: `446 passed`
+- Tests collectés: `446` (`pytest --collect-only -q`)
+- Couverture globale locale (`pytest-cov`): `77%` (`8522/11042`)
+- Qualité statique:
+  - `ruff`: OK (`All checks passed`)
+  - `mypy`: OK (`Success: no issues found in 101 source files`)
+- Sécurité:
+  - `tools/scan_secrets.py`: OK (`no suspicious hardcoded secret found`)
+- Hygiène dépôt:
+  - artefacts runtime sortis de l’index Git: `Bilan.xlsx`, `Planning.xlsx`, `engine_run_stats.json`, `test_api/export_vols.xlsx`
 
 ## Backlog priorisé
 1. Audit technique exhaustif (complexité, dette, duplication, robustesse erreurs, sécurité).
@@ -27,12 +34,40 @@ Solidifier le projet (qualité, sécurité, maintenabilité, évolutivité) sans
 5. Durcissement outillage qualité (CI, checks locaux, documentation d'exploitation).
 6. Préparer les lots de refactor lourds (UI monolithique, export monolithique, solveur dupliqué) avec stratégie anti-régression.
 
-## Prochains lots (sans interruption)
-1. Continuer la montée de niveau `mypy` (activation progressive de `check_untyped_defs` / `disallow_untyped_defs`) par sous-modules prioritaires.
-2. Réduire les fonctions UI les plus longues (`ui_shipments_update`, `ui_simulation`, `ui_week_data`) via extractions non-fonctionnelles supplémentaires.
-3. Stabiliser les contrats de tests d’intégration solveur (V2/V3) sur jeux de données figés.
-4. Poursuivre la migration des appels historiques basés sur globals vers injection explicite de snapshots runtime.
-5. Remonter la couverture sur les modules critiques faiblement couverts (<50%) avec priorité `ui_communication` (UI), `ui_stats`, `ui_inputs`, `excel_automation`.
+## Prochains lots ajustés (priorisés)
+1. **P2 clôture technique (terminé sur cette passe)**  
+   - job `coverage` CI dédié ajouté (seuil progressif `70%`) et branché en gate avant `build`  
+   - outillage local enrichi (`tools/run_quality.py coverage`, hook pre-commit manuel)  
+   - palier mypy appliqué (`check_untyped_defs=True`) sur modules UI stabilisés
+2. **Couverture résiduelle ciblée (P2 terminé sur modules prioritaires)**  
+   - `ui_logs.py`: `39%` -> `82%`  
+   - `ui_manual.py`: `24%` -> `94%`  
+   - `whatsapp_handler.py`: `49%` -> `92%`  
+   - `stats_processor.py`: `47%` -> `94%`
+3. **Réduction des monolithes restants (P3)**  
+   - extractions non-fonctionnelles additionnelles sur `render_tab_simulation`, `render_tab_week_data`, `render_tab_params`, `render_tab_inputs`  
+   - poursuivre la réduction de `ui_shipments_update_helpers.py` (découpage par domaine)
+4. **Couverture résiduelle hors P2 (P3)**  
+   - modules encore faibles: `ui_logs.py` et `ui_manual.py` sont remontés; restent surtout `asf_app/ui/email_defaults.py`, `asf_app/config/email_defaults.py`, `state_planning.py`
+5. **Industrialisation CI avancée (P3)**  
+   - monter progressivement le seuil coverage CI (70 -> 75 -> 80) en gardant la stabilité des releases
+
+## Diagnostic global approfondi (2026-02-13)
+- Points forts consolidés:
+  - zéro hotspot `except Exception` et `print` dans l’audit automatique
+  - socle tests en forte progression (`446` tests collectés)
+  - factorisation solver V2/V3 avancée via `scheduler/solver_ortools_common.py`
+  - gates qualité/sécurité restaurées (`ruff`/`mypy`/`secret-scan` OK) + gate coverage CI dédié
+- Risques actifs:
+  - **couverture insuffisante** sur quelques modules non critiques UI/config (email defaults, state planning)
+  - **monolithes persistants** (fonctions 200-500+ lignes) augmentant le coût de maintenance
+  - **outillage sensible aux régressions rapides** (imports/typage/tests outillage sécurité) nécessitant discipline CI
+- Top dette technique (taille/fonctions):
+  - `asf_app/ui/ui_shipments_update_helpers.py` (~1720 lignes)
+  - `asf_app/ui/ui_simulation.py` (~1574 lignes)
+  - `asf_app/services/export_service.py` (~1308 lignes)
+  - `asf_app/ui/ui_stats/ui_stats.py` (~1205 lignes)
+  - solveurs: `scheduler/solver_ortools_v3.py` (~1028), `scheduler/solver_ortools.py` (~829)
 
 ## Constats d'audit (en cours)
 - Très grosses unités à risque maintenance:
@@ -42,14 +77,14 @@ Solidifier le projet (qualité, sécurité, maintenabilité, évolutivité) sans
   - `asf_app/ui/ui_communication/ui_communication.py::render_tab_communication` (~208 lignes, après extraction de la sélection source session/OneDrive)
 - Modules volumineux:
   - `asf_app/ui/ui_shipments_update.py` (713 lignes, après extraction de helpers queue/notifs/session/sélection BE/vol-bénévole/dispo-BE/prefill/notifications/apply-batch + sélection semaine/version/aperçu)
-  - `asf_app/ui/ui_shipments_update_helpers.py` (1701 lignes, helperization UI shipments)
+  - `asf_app/ui/ui_shipments_update_helpers.py` (1720 lignes, helperization UI shipments)
   - `asf_app/services/export_service.py` (~1307 lignes, après extraction des helpers de rendu planning Excel + versioning/sortie + durcissement exceptions techniques)
-  - `asf_app/ui/ui_simulation.py` (1058 lignes, helpers de logique manuelle extraits en module unique)
+  - `asf_app/ui/ui_simulation.py` (~1574 lignes, helpers de logique manuelle et bilans enrichis)
   - `asf_app/ui/ui_communication/ui_communication.py` (~474 lignes, logique I/O PDF OneDrive/local encore à extraire)
   - `scheduler/config_paths.py` (~788 lignes, migration `RuntimePaths` finalisée sur `prepare_paths` + cache Graph runtime-aware)
-  - `scheduler/solver_ortools_v3.py` (~941 lignes)
-  - `scheduler/solver_ortools.py` (~743 lignes)
-  - `scheduler/solver_ortools_common.py` (~570 lignes, noyau commun V2/V3)
+  - `scheduler/solver_ortools_v3.py` (~1028 lignes)
+  - `scheduler/solver_ortools.py` (~829 lignes)
+  - `scheduler/solver_ortools_common.py` (~730 lignes, noyau commun V2/V3)
 - Gestion d'erreurs très large (`except Exception`):
   - aucun hotspot restant dans le code scanné par l’audit
 - Duplication solver:
@@ -60,12 +95,12 @@ Solidifier le projet (qualité, sécurité, maintenabilité, évolutivité) sans
   - non importés directement: 42 (majoritairement couche UI communication/statistiques)
 - Hygiène dépôt:
   - `.env` sorti de l'index Git et `.env*` ignorés
-  - artefacts runtime sortis de l'index Git et ignorés (`Planning.xlsx`, `Bilan.xlsx`, `engine_run_stats.json`, `test_api/export_vols.xlsx`)
+  - règles d’ignore en place et artefacts runtime retirés de l’index (`Planning.xlsx`, `Bilan.xlsx`, `engine_run_stats.json`, `test_api/export_vols.xlsx`)
 - Outillage qualité:
   - `pre-commit` + `ruff` + `mypy` actifs en local (stage `pre-commit` + `manual`) avec runner robuste `tools/run_quality.py`
   - CI qualité bloquante activée via job `quality` (pré-requis de `build`)
   - scan secrets activé en gate locale/CI: script `tools/scan_secrets.py`, hook `pre-commit` (`pre-commit` + `manual`), job CI bloquant `security`, allowlist contrôlée `.secret-scan-allowlist`
-  - dette bootstrap résorbée sur le périmètre configuré: `ruff` = `0`, `mypy` = `0` (`100` fichiers checkés), `warn_unused_ignores = True`
+  - état instantané 2026-02-13 (après P0): gates restaurées (`ruff`, `mypy`, `secret-scan`) et `pre-commit --all-files` vert
 - Audit automatisable:
   - script: `tools/hardening_audit.py`
   - rapport généré: `HARDENING_AUDIT_REPORT.md`
@@ -75,6 +110,17 @@ Solidifier le projet (qualité, sécurité, maintenabilité, évolutivité) sans
 ## Journal d'actions
 | Date/Heure | Action | Résultat |
 |---|---|---|
+| 2026-02-13 | P2 one-pass: ajout du job CI `coverage` (seuil progressif 70%) + artefact `coverage.xml` | OK |
+| 2026-02-13 | P2 one-pass: extension `tools/run_quality.py` avec cible `coverage` + hook pre-commit manuel | OK |
+| 2026-02-13 | P2 one-pass: palier mypy strict sur sous-ensemble stable (`ui_logs`, `ui_manual`, `stats_processor`, `whatsapp_handler`) | OK |
+| 2026-02-13 | Correctif robustesse `ui_manual`: garde-fou chemins TMP non initialisés (retour UI explicite) | OK |
+| 2026-02-13 | P2 one-pass: lot tests couverture (`ui_logs`, `ui_manual`, `stats_processor`, `whatsapp_handler`, outillage quality) | OK |
+| 2026-02-13 | Validation finale P2: `446 passed`, `coverage=77%`, gate coverage local `ASF_COVERAGE_MIN=70` vert | OK |
+| 2026-02-13 | P1 one-pass: ajout lot tests solveur (`priority_mode` divergent + diagnostic bénévoles incompatibles) | OK |
+| 2026-02-13 | P1 one-pass: ajout lot tests UI communication/stats/params + render/smoke `ui_inputs` et `ui_week_data` | OK |
+| 2026-02-13 | Correctif robustesse `scheduler/data_sources.py`: mapping `param_benev` stocké en `dict` (suppression truth-value ambiguë pandas) | OK |
+| 2026-02-13 | Validation globale qualité: `431 passed`, `coverage=75%`, `ruff` OK, `mypy` OK | OK |
+| 2026-02-13 | Régénération audit projet (`tools/hardening_audit.py`) + mise à jour plan d'action | OK |
 | 2026-02-12 | Création du plan de durcissement | OK |
 | 2026-02-12 | Baseline complète (status git, collecte tests, exécution tests) | OK |
 | 2026-02-12 | Audit structurel auto (taille, fonctions longues, exceptions, duplication, couverture structurelle) | OK |
@@ -341,3 +387,12 @@ Solidifier le projet (qualité, sécurité, maintenabilité, évolutivité) sans
 | 2026-02-13 | Validation ciblée diagnostic solveur: `.venv pytest -q tests/test_solver_contracts.py tests/test_solver_v3_strict_capacity.py tests/test_loaders.py` (`16 passed`) | OK |
 | 2026-02-13 | Paramétrage runtime non-fonctionnel: `DUREE_MISSION_HEURES` et `MIN_HOURS_BETWEEN_FLIGHTS` lisibles via env (`ASF_DUREE_MISSION_HEURES`, `ASF_MIN_HOURS_BETWEEN_FLIGHTS`) avec valeurs par défaut inchangées | OK |
 | 2026-02-13 | Documentation env mise à jour (`.env.example`) + tests dédiés config runtime (`tests/test_config_runtime_values.py`) | OK |
+| 2026-02-13 | Re-baseline complète du plan: audit technique régénéré (`tools/hardening_audit.py`), collecte tests (`396`) et couverture locale (`401 passed`, `67%`, `coverage.xml`) | OK |
+| 2026-02-13 | Passe qualité/sécurité globale: `ruff` KO (2 `I001`), `mypy` KO (6 erreurs `ui_simulation`), `scan_secrets` KO (6 faux positifs tests outillage) | À traiter en P0 |
+| 2026-02-13 | Ajustement du phasage: priorité P0 sur restauration des gates qualité/sécurité + hygiène dépôt, puis P1 couverture ciblée UI/communication/stats et stabilisation solveur | Plan révisé |
+| 2026-02-13 | P0 qualité: correction import-order solver (`solver_ortools.py`, `solver_ortools_v3.py`) + validation `ruff` (`All checks passed`) | OK |
+| 2026-02-13 | P0 typage: correction régression `mypy` dans `ui_simulation` (conversions numériques + typage du contexte de raisons) | OK |
+| 2026-02-13 | P0 sécurité: ajout allowlist ciblée des faux positifs dans `tests/test_tools_quality_security.py` + `tools/scan_secrets.py` vert | OK |
+| 2026-02-13 | P0 hygiène dépôt: retrait de l’index Git des artefacts runtime (`Bilan.xlsx`, `Planning.xlsx`, `engine_run_stats.json`, `test_api/export_vols.xlsx`) | OK |
+| 2026-02-13 | Validation P0 complète: `ruff` OK, `mypy` OK, `secret-scan` OK, `.venv pytest -q` OK (`401 passed`), `pre-commit --all-files` OK | OK |
+| 2026-02-13 | Audit régénéré après P0 (`tools/hardening_audit.py`) : artefacts runtime résiduels supprimés de la liste (reste `.vscode/settings.json`) | OK |

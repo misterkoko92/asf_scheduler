@@ -50,10 +50,10 @@ from scheduler.solver_ortools_common import (
     build_dest_info as _core_build_dest_info,
 )
 from scheduler.solver_ortools_common import (
-    build_vols_compatibility_df as _core_build_vols_compatibility_df,
+    build_planning_bilan as _core_build_planning_bilan,
 )
 from scheduler.solver_ortools_common import (
-    build_planning_bilan as _core_build_planning_bilan,
+    build_vols_compatibility_df as _core_build_vols_compatibility_df,
 )
 from scheduler.solver_ortools_common import (
     create_be_variables as _core_create_be_variables,

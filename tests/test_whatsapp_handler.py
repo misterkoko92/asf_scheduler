@@ -6,6 +6,16 @@ import pandas as pd
 import asf_app.ui.ui_communication.whatsapp_handler as wa
 
 
+def test_encode_for_whatsapp_and_normalize_dest():
+    encoded = wa._encode_for_whatsapp("Bonjour Alice & Bob")
+    assert "%20" in encoded
+    assert "%26" in encoded
+
+    df = pd.DataFrame([{"Dest_Ville": "douala", "Destination": "DLA"}])
+    norm = wa._normalize_dest(df)
+    assert norm.iloc[0] == "DOUALA"
+
+
 def test_open_whatsapp_cloud_mode_does_not_spawn_process(monkeypatch):
     monkeypatch.setattr(wa, "IS_STREAMLIT_CLOUD", True)
     calls = {"info": [], "code": [], "popen": []}
@@ -35,6 +45,21 @@ def test_open_whatsapp_windows_without_shell_true(monkeypatch):
     assert kwargs.get("shell") is None
 
 
+def test_open_whatsapp_darwin_and_linux(monkeypatch):
+    monkeypatch.setattr(wa, "IS_STREAMLIT_CLOUD", False)
+    calls = []
+    monkeypatch.setattr(wa.subprocess, "Popen", lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    monkeypatch.setattr(wa.platform, "system", lambda: "Darwin")
+    wa._open_whatsapp("https://wa.me/33600000000?text=test")
+    assert calls
+    assert list(calls[-1][0][0]) == ["open", "https://wa.me/33600000000?text=test"]
+
+    monkeypatch.setattr(wa.platform, "system", lambda: "Linux")
+    wa._open_whatsapp("https://wa.me/33611111111?text=test")
+    assert list(calls[-1][0][0]) == ["xdg-open", "https://wa.me/33611111111?text=test"]
+
+
 def test_build_message_for_benevole_coerces_invalid_nb_colis():
     df_bene = pd.DataFrame(
         [
@@ -57,3 +82,83 @@ def test_build_message_for_benevole_coerces_invalid_nb_colis():
     msg = wa._build_message_for_benevole(df_bene, vols_info={}, map_iata_city={})
 
     assert "0 colis" in msg
+
+
+def test_compute_vols_info_and_generate_messages_multi_benevole():
+    df = pd.DataFrame(
+        [
+            {
+                "DATE": "2026-01-23",
+                "Destination": "DOUALA",
+                "Dest_Ville": "DOUALA",
+                "Code_IATA": "DLA",
+                "Numero_Vol_Aff": "822",
+                "Heure_Vol_Aff": "11:00",
+                "Numero_BE_Aff": "260001",
+                "Type_Colis": "MM",
+                "Nb_Colis": 10,
+                "BENEVOLE": "ALBISSER Philippe",
+                "BENEVOLE_ID": 1,
+                "Benevole_Prenom": "Philippe",
+                "Benevole_Prenom_Court": "P.",
+                "Benevole_Nom": "ALBISSER",
+                "Benevole_Tel": "+33 6 12 34 56 78",
+                "Date_Affichage_WA": "Lundi 23/01",
+            },
+            {
+                "DATE": "2026-01-23",
+                "Destination": "DOUALA",
+                "Dest_Ville": "DOUALA",
+                "Code_IATA": "DLA",
+                "Numero_Vol_Aff": "AF 822",
+                "Heure_Vol_Aff": "11:00",
+                "Numero_BE_Aff": "260002",
+                "Type_Colis": "MM",
+                "Nb_Colis": 5,
+                "BENEVOLE": "PIERSON Gilles",
+                "BENEVOLE_ID": 2,
+                "Benevole_Prenom": "Gilles",
+                "Benevole_Prenom_Court": "G.",
+                "Benevole_Nom": "PIERSON",
+                "Benevole_Tel": "06.11.22.33.44",
+                "Date_Affichage_WA": "Lundi 23/01",
+            },
+        ]
+    )
+
+    vols_info = wa._compute_vols_info(df)
+    assert ("2026-01-23", "DLA", "AF 822") in vols_info
+    assert int(vols_info[("2026-01-23", "DLA", "AF 822")]["total_colis"]) == 15
+
+    messages = wa.generate_whatsapp_messages(df)
+    assert len(messages) == 2
+    assert all(msg["url"].startswith("https://wa.me/") for msg in messages)
+    assert "en double" in messages[0]["message"] or "en double" in messages[1]["message"]
+
+
+def test_generate_whatsapp_messages_skips_empty_phone_and_open_delegate(monkeypatch):
+    df = pd.DataFrame(
+        [
+            {
+                "DATE": "2026-01-23",
+                "Destination": "RUN",
+                "Dest_Ville": "SAINT DENIS",
+                "Code_IATA": "RUN",
+                "Numero_Vol_Aff": "AF 652",
+                "Heure_Vol_Aff": "18:20",
+                "Numero_BE_Aff": "260010",
+                "Type_Colis": "MM",
+                "Nb_Colis": 1,
+                "BENEVOLE": "Sans Tel",
+                "BENEVOLE_ID": 99,
+                "Benevole_Tel": "",
+                "Benevole_Prenom": "Sans",
+            }
+        ]
+    )
+    assert wa.generate_whatsapp_messages(df) == []
+
+    called = {"url": None}
+    monkeypatch.setattr(wa, "_open_whatsapp", lambda url: called.__setitem__("url", url))
+    wa.open_whatsapp_for_benevole("https://wa.me/33600000000?text=ok")
+    assert called["url"] == "https://wa.me/33600000000?text=ok"
