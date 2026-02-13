@@ -16,6 +16,7 @@ from typing import Any, Dict, List
 import requests
 
 from utils.datetime_utils import format_date_value, format_time_value, parse_iso_datetime
+from utils.security_redaction import is_placeholder_secret
 
 try:
     from dotenv import load_dotenv
@@ -116,6 +117,20 @@ def _get_api_key() -> str | None:
     Récupère la clé API depuis les secrets Streamlit ou les variables d'env.
     """
     return _get_config_value("AF_API_KEY")
+
+
+def _validate_api_key(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+    api_key = str(raw).strip()
+    if not api_key:
+        return None
+    if is_placeholder_secret(api_key):
+        raise RuntimeError(
+            "AF_API_KEY invalide: valeur placeholder détectée. "
+            "Configure une clé réelle dans .env (ou secrets Streamlit)."
+        )
+    return api_key
 
 
 def _as_positive_int(raw: str | None, default: int) -> int:
@@ -225,7 +240,7 @@ def fetch_flights(
     """
     Appelle l'endpoint flightstatus pour une destination et une fenêtre de dates.
     """
-    api_key = _get_api_key()
+    api_key = _validate_api_key(_get_api_key())
     if not api_key:
         raise RuntimeError("AF_API_KEY manquant (secret Streamlit ou variable d'environnement).")
 

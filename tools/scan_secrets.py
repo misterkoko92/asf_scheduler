@@ -149,6 +149,10 @@ def _scan_file(
                 token = match.group(1) if match.lastindex else ""
                 if len(token) < 16:
                     continue
+                # Ignore obvious Python identifier/function assignments (e.g. api_key = _get_api_key()).
+                tail = line[match.end(1):].lstrip()
+                if tail.startswith("("):
+                    continue
             if _is_allowlisted(rel_path, line_no, line.strip(), active_allowlist):
                 continue
             findings.append((line_no, finding_type, line.strip()))

@@ -228,6 +228,7 @@ ruff check asf_app scheduler loaders utils tests --config .ruff.toml
 mypy --config-file mypy.ini asf_app scheduler loaders utils
 pytest -q --cov=asf_app --cov=scheduler --cov=loaders --cov=utils --cov-report=term-missing --cov-report=xml
 ASF_COVERAGE_MIN=70 python tools/run_quality.py coverage
+python tools/run_security.py all
 ```
 
 Notes :
@@ -235,6 +236,9 @@ Notes :
 - La CI exécute ces checks dans un job dédié `quality` bloquant avant la matrice build.
 - Le scan secrets est actif dans les hooks locaux (`pre-commit` et `manual`) :
   `PRE_COMMIT_HOME=.tmp_asf/.pre-commit-cache pre-commit run secret-scan --all-files`
+- L’audit dépendances local (manuel) est disponible :
+  `PRE_COMMIT_HOME=.tmp_asf/.pre-commit-cache pre-commit run dependency-audit --all-files`
+  (si offline, le check est ignoré par défaut; forcer l'échec avec `ASF_FAIL_ON_OFFLINE_AUDIT=1`)
 - Les faux positifs du scanner peuvent être neutralisés via `.secret-scan-allowlist` (regex explicites et tracées).
 - La CI exécute aussi ce scan dans le job bloquant `security`.
 - Le job CI `coverage` applique un seuil progressif (`COVERAGE_MIN`, défaut `70`) avant le build multi-OS.

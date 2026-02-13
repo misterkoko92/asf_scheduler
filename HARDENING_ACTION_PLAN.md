@@ -15,14 +15,16 @@ Solidifier le projet (qualité, sécurité, maintenabilité, évolutivité) sans
 - Signaux de complexité (patterns `except/print` dans code + tests): `375`
 
 ## État courant (re-baseline 2026-02-13)
-- Tests: `446 passed`
-- Tests collectés: `446` (`pytest --collect-only -q`)
-- Couverture globale locale (`pytest-cov`): `77%` (`8522/11042`)
+- Tests: `458 passed`
+- Tests collectés: `458` (`pytest --collect-only -q`)
+- Couverture globale locale (`pytest-cov`): `77%` (`8560/11078`)
 - Qualité statique:
   - `ruff`: OK (`All checks passed`)
   - `mypy`: OK (`Success: no issues found in 101 source files`)
 - Sécurité:
   - `tools/scan_secrets.py`: OK (`no suspicious hardcoded secret found`)
+  - `tools/run_security.py secrets`: OK
+  - `tools/run_security.py deps`: skip contrôlé en offline (`ASF_FAIL_ON_OFFLINE_AUDIT=0`)
 - Hygiène dépôt:
   - artefacts runtime sortis de l’index Git: `Bilan.xlsx`, `Planning.xlsx`, `engine_run_stats.json`, `test_api/export_vols.xlsx`
 
@@ -35,19 +37,17 @@ Solidifier le projet (qualité, sécurité, maintenabilité, évolutivité) sans
 6. Préparer les lots de refactor lourds (UI monolithique, export monolithique, solveur dupliqué) avec stratégie anti-régression.
 
 ## Prochains lots ajustés (priorisés)
-1. **P2 clôture technique (terminé sur cette passe)**  
-   - job `coverage` CI dédié ajouté (seuil progressif `70%`) et branché en gate avant `build`  
-   - outillage local enrichi (`tools/run_quality.py coverage`, hook pre-commit manuel)  
-   - palier mypy appliqué (`check_untyped_defs=True`) sur modules UI stabilisés
-2. **Couverture résiduelle ciblée (P2 terminé sur modules prioritaires)**  
-   - `ui_logs.py`: `39%` -> `82%`  
-   - `ui_manual.py`: `24%` -> `94%`  
-   - `whatsapp_handler.py`: `49%` -> `92%`  
-   - `stats_processor.py`: `47%` -> `94%`
-3. **Réduction des monolithes restants (P3)**  
+1. **S0/S1 local (terminé sur cette passe)**  
+   - masquage tel/email/token dans logs/export diagnostic (`utils/security_redaction.py`, `ui_logs.py`, `logging_utils.py`)  
+   - validation clé AF (rejet placeholder) côté `airfrance_api.py`  
+   - outillage sécurité local ajouté (`tools/run_security.py`: secrets + dependency audit offline-aware)
+2. **Réduction des monolithes restants (R1)**  
    - extractions non-fonctionnelles additionnelles sur `render_tab_simulation`, `render_tab_week_data`, `render_tab_params`, `render_tab_inputs`  
    - poursuivre la réduction de `ui_shipments_update_helpers.py` (découpage par domaine)
-4. **Couverture résiduelle hors P2 (P3)**  
+3. **Refactor solver/contrats (R2)**  
+   - formaliser le contrat solveur unique (I/O + diagnostics)  
+   - poursuivre la réduction des duplications V2/V3 autour de `solver_ortools_common.py`
+4. **Couverture résiduelle hors P2/S1 (P3)**  
    - modules encore faibles: `ui_logs.py` et `ui_manual.py` sont remontés; restent surtout `asf_app/ui/email_defaults.py`, `asf_app/config/email_defaults.py`, `state_planning.py`
 5. **Industrialisation CI avancée (P3)**  
    - monter progressivement le seuil coverage CI (70 -> 75 -> 80) en gardant la stabilité des releases
@@ -55,9 +55,10 @@ Solidifier le projet (qualité, sécurité, maintenabilité, évolutivité) sans
 ## Diagnostic global approfondi (2026-02-13)
 - Points forts consolidés:
   - zéro hotspot `except Exception` et `print` dans l’audit automatique
-  - socle tests en forte progression (`446` tests collectés)
+  - socle tests en forte progression (`458` tests collectés)
   - factorisation solver V2/V3 avancée via `scheduler/solver_ortools_common.py`
   - gates qualité/sécurité restaurées (`ruff`/`mypy`/`secret-scan` OK) + gate coverage CI dédié
+  - chaîne sécurité locale opérationnelle (`run_security.py`) avec comportement offline explicite
 - Risques actifs:
   - **couverture insuffisante** sur quelques modules non critiques UI/config (email defaults, state planning)
   - **monolithes persistants** (fonctions 200-500+ lignes) augmentant le coût de maintenance
@@ -110,6 +111,12 @@ Solidifier le projet (qualité, sécurité, maintenabilité, évolutivité) sans
 ## Journal d'actions
 | Date/Heure | Action | Résultat |
 |---|---|---|
+| 2026-02-13 | S0 one-pass: ajout utilitaire de redaction (`utils/security_redaction.py`) et intégration logs/export (`ui_logs.py`, `logging_utils.py`) | OK |
+| 2026-02-13 | S0 one-pass: validation AF_API_KEY (rejet placeholder) dans `airfrance_api.py` + tests dédiés | OK |
+| 2026-02-13 | S1 one-pass: ajout `pip-audit` + orchestrateur `tools/run_security.py` (secrets/deps/all) | OK |
+| 2026-02-13 | S1 one-pass: hook manuel `dependency-audit` + documentation sécurité locale mise à jour | OK |
+| 2026-02-13 | Durcissement scanner secrets: réduction faux positifs d’assignations Python + allowlist fixtures tests | OK |
+| 2026-02-13 | Validation S0/S1: `458 passed`, `coverage=77%`, `run_security.py secrets` vert, `deps` skip offline contrôlé | OK |
 | 2026-02-13 | P2 one-pass: ajout du job CI `coverage` (seuil progressif 70%) + artefact `coverage.xml` | OK |
 | 2026-02-13 | P2 one-pass: extension `tools/run_quality.py` avec cible `coverage` + hook pre-commit manuel | OK |
 | 2026-02-13 | P2 one-pass: palier mypy strict sur sous-ensemble stable (`ui_logs`, `ui_manual`, `stats_processor`, `whatsapp_handler`) | OK |

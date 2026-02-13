@@ -26,6 +26,7 @@ from asf_app.config.runtime import (
     is_graph_onedrive,
 )
 from utils.datetime_utils import format_date_value
+from utils.security_redaction import redact_sensitive_text
 
 # =============================================================================
 # 🔍 Détermination robuste de l’emplacement réel du fichier de logs
@@ -116,6 +117,7 @@ def build_logs_export_bundle(log_path: pathlib.Path) -> bytes:
     Avoids dumping sensitive environment variables.
     """
     logs = read_log_file(log_path) if log_path.exists() else ""
+    safe_logs = redact_sensitive_text(logs)
     version_path = cp.BASE_DIR / "VERSION"
     app_version = "unknown"
     try:
@@ -146,7 +148,7 @@ def build_logs_export_bundle(log_path: pathlib.Path) -> bytes:
     ]
     payload = io.BytesIO()
     with zipfile.ZipFile(payload, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("asf_scheduler.log", logs)
+        zf.writestr("asf_scheduler.log", safe_logs)
         zf.writestr("context.txt", "\n".join(info_lines))
     return payload.getvalue()
 
@@ -223,6 +225,7 @@ def render_tab_logs():
         return
 
     logs = read_log_file(LOG_FILE)
+    safe_logs = redact_sensitive_text(logs)
 
     # ----------------------------------------------------------------------
     # Infos fichier
@@ -257,7 +260,7 @@ def render_tab_logs():
     if download:
         st.download_button(
             "⬇ Télécharger asf_scheduler.log",
-            data=logs.encode("utf-8"),
+            data=safe_logs.encode("utf-8"),
             file_name="asf_scheduler.log",
             mime="text/plain"
         )

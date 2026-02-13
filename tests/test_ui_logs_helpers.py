@@ -62,6 +62,24 @@ def test_build_logs_export_bundle_contains_log_and_context(monkeypatch, tmp_path
         assert "app_version=1.2.3" in context
 
 
+def test_build_logs_export_bundle_redacts_sensitive_content(tmp_path):
+    log_path = tmp_path / "asf_scheduler.log"
+    log_path.write_text(
+        "Authorization: Bearer ABCDEFGHIJKLMNOPQRSTUVWXYZ123456\n"
+        "email=test.user@example.org\n"
+        "phone=+33 6 12 34 56 78\n"
+        "API_KEY=supersecretvalue123456\n",
+        encoding="utf-8",
+    )
+    payload = ui_logs.build_logs_export_bundle(log_path)
+    with zipfile.ZipFile(io.BytesIO(payload), "r") as zf:
+        logs = zf.read("asf_scheduler.log").decode("utf-8")
+        assert "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456" not in logs
+        assert "test.user@example.org" not in logs
+        assert "supersecretvalue123456" not in logs
+        assert "***REDACTED***" in logs
+
+
 class _Ctx:
     def __enter__(self):
         return self
@@ -199,3 +217,21 @@ def test_render_tab_logs_download_and_reload(monkeypatch, tmp_path):
     assert stub.text_areas and "line1" in stub.text_areas[0]
     assert len(stub.download_calls) >= 2
     assert stub.rerun_called is True
+
+
+def test_render_tab_logs_download_is_redacted(monkeypatch, tmp_path):
+    stub = _StubLogsSt()
+    stub._buttons["⬇ Télécharger le log"] = True
+    monkeypatch.setattr(ui_logs, "st", stub)
+    log_path = tmp_path / "asf_scheduler.log"
+    log_path.write_text("API_KEY=supersecretvalue123456", encoding="utf-8")
+    monkeypatch.setattr(ui_logs, "LOG_FILE", log_path)
+    monkeypatch.setattr(ui_logs, "build_logs_export_bundle", lambda _p: b"zip")
+
+    ui_logs.render_tab_logs()
+
+    raw_downloads = [d for d in stub.download_calls if d.get("file_name") == "asf_scheduler.log"]
+    assert raw_downloads
+    downloaded = bytes(raw_downloads[0]["data"]).decode("utf-8")
+    assert "supersecretvalue123456" not in downloaded
+    assert "***REDACTED***" in downloaded

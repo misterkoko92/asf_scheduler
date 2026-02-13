@@ -2,6 +2,12 @@ import logging
 from pathlib import Path
 
 from asf_app.config.runtime import get_tmp_dir
+from utils.security_redaction import redact_sensitive_text
+
+
+class _RedactingFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        return redact_sensitive_text(super().format(record))
 
 
 def get_logger(
@@ -29,7 +35,7 @@ def get_logger(
     )
     if not has_file_handler:
         fh = logging.FileHandler(log_path, mode="a", encoding="utf-8")
-        fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+        fh.setFormatter(_RedactingFormatter("%(asctime)s [%(levelname)s] %(message)s"))
         logger.addHandler(fh)
 
     # Console handler optionnel
@@ -37,7 +43,7 @@ def get_logger(
         has_console = any(isinstance(h, logging.StreamHandler) for h in logger.handlers)
         if not has_console:
             ch = logging.StreamHandler()
-            ch.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+            ch.setFormatter(_RedactingFormatter("%(asctime)s [%(levelname)s] %(message)s"))
             logger.addHandler(ch)
 
     logger.propagate = False

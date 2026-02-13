@@ -25,6 +25,13 @@ repos:
         pass_filenames: false
         stages: [pre-commit, manual]
 
+      - id: dependency-audit
+        name: dependency audit
+        entry: python3 tools/run_security.py deps
+        language: system
+        pass_filenames: false
+        stages: [manual]
+
       - id: coverage
         name: coverage gate
         entry: python3 tools/run_quality.py coverage

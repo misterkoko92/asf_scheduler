@@ -103,6 +103,18 @@ def test_fetch_flights_validates_time_origin_type(monkeypatch):
         )
 
 
+def test_fetch_flights_rejects_placeholder_api_key(monkeypatch):
+    monkeypatch.setattr(af, "_get_api_key", lambda: "replace_with_real_key")
+    with pytest.raises(RuntimeError, match="placeholder"):
+        af.fetch_flights(
+            dest="RUN",
+            start_date="2026-01-23",
+            end_date="2026-01-23",
+            origin="CDG",
+            airline="AF",
+        )
+
+
 def test_fetch_flights_uses_config_default_time_origin_type(monkeypatch):
     monkeypatch.setattr(af, "_get_api_key", lambda: "valid-key")
     monkeypatch.setattr(af, "get_default_time_origin_type", lambda: "M")
@@ -250,3 +262,9 @@ def test_fetch_multiple_applies_min_delay(monkeypatch):
     )
 
     assert sleep_calls == [1.1]
+
+
+def test_validate_api_key_blank_and_valid_values():
+    assert af._validate_api_key(None) is None
+    assert af._validate_api_key("  ") is None
+    assert af._validate_api_key("valid-af-key-123456") == "valid-af-key-123456"

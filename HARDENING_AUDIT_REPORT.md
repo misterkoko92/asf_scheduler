@@ -1,7 +1,7 @@
 # Hardening Audit Report
 
-- Generated: 2026-02-13 19:36:17 CET
-- Python files scanned: 100
+- Generated: 2026-02-13 19:56:35 CET
+- Python files scanned: 101
 
 ## Largest Files
 - `/Users/EdouardGonnu/asf_scheduler/new_repo/asf_app/ui/ui_shipments_update_helpers.py`: 1720 lines
@@ -21,7 +21,7 @@
 - `/Users/EdouardGonnu/asf_scheduler/new_repo/asf_app/ui/ui_week_data.py`: 499 lines
 - `/Users/EdouardGonnu/asf_scheduler/new_repo/asf_app/ui/ui_communication/ui_communication.py`: 481 lines
 - `/Users/EdouardGonnu/asf_scheduler/new_repo/loaders/load_vols.py`: 467 lines
-- `/Users/EdouardGonnu/asf_scheduler/new_repo/asf_app/services/airfrance_api.py`: 387 lines
+- `/Users/EdouardGonnu/asf_scheduler/new_repo/asf_app/services/airfrance_api.py`: 402 lines
 - `/Users/EdouardGonnu/asf_scheduler/new_repo/asf_app/services/be_placement_service.py`: 383 lines
 - `/Users/EdouardGonnu/asf_scheduler/new_repo/asf_app/ui/ui_params.py`: 382 lines
 
