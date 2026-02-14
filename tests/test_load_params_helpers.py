@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import importlib
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -224,3 +226,51 @@ def test_get_param_cached_wrappers_use_file_mtime_and_cache_functions(monkeypatc
         ("exp", str(tdb), 12.5),
         ("benev", str(benev), 12.5),
     ]
+
+
+def test_get_param_wrappers_fallback_when_streamlit_unavailable(monkeypatch, tmp_path):
+    real_streamlit = sys.modules.get("streamlit")
+    monkeypatch.setitem(sys.modules, "streamlit", None)
+    lp_no_st = importlib.reload(lp)
+    calls: list[tuple[str, Path | None]] = []
+
+    monkeypatch.setattr(
+        lp_no_st,
+        "_load_param_be",
+        lambda tableau_de_bord_path=None: calls.append(("be", tableau_de_bord_path)) or pd.DataFrame(),
+    )
+    monkeypatch.setattr(
+        lp_no_st,
+        "_load_param_dest",
+        lambda tableau_de_bord_path=None: calls.append(("dest", tableau_de_bord_path)) or pd.DataFrame(),
+    )
+    monkeypatch.setattr(
+        lp_no_st,
+        "_load_param_exp",
+        lambda tableau_de_bord_path=None: calls.append(("exp", tableau_de_bord_path)) or pd.DataFrame(),
+    )
+    monkeypatch.setattr(
+        lp_no_st,
+        "_load_param_benev",
+        lambda planning_benevoles_path=None: calls.append(("benev", planning_benevoles_path)) or pd.DataFrame(),
+    )
+
+    tdb = tmp_path / "tdb.xlsx"
+    benev = tmp_path / "benev.xlsx"
+    lp_no_st.get_param_be(tdb)
+    lp_no_st.get_param_dest(tdb)
+    lp_no_st.get_param_exp(tdb)
+    lp_no_st.get_param_benev(benev)
+
+    assert calls == [
+        ("be", tdb),
+        ("dest", tdb),
+        ("exp", tdb),
+        ("benev", benev),
+    ]
+
+    if real_streamlit is None:
+        sys.modules.pop("streamlit", None)
+    else:
+        sys.modules["streamlit"] = real_streamlit
+    importlib.reload(lp)

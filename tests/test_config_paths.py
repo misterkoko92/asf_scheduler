@@ -318,3 +318,146 @@ def test_download_upload_list_helpers_handle_non_graph_or_auth_required(tmp_path
     assert cp.download_onedrive_file("A/B.xlsx", tmp_path / "x.xlsx", runtime=runtime_graph) is False
     assert cp.upload_onedrive_file(tmp_path / "x.xlsx", "A/B.xlsx", runtime=runtime_graph) is False
     assert cp.list_onedrive_files("A", recursive=True, runtime=runtime_graph) == []
+
+
+def test_detect_onedrive_asf_handles_env_override_and_fallbacks(tmp_path, monkeypatch):
+    env_root = tmp_path / "env_root"
+    monkeypatch.setenv("ASF_ONEDRIVE_ROOT", str(env_root))
+    assert cp.detect_onedrive_asf() == env_root.resolve()
+
+    monkeypatch.delenv("ASF_ONEDRIVE_ROOT", raising=False)
+    monkeypatch.setattr(cp.Path, "home", lambda: tmp_path)
+    (tmp_path / "OneDrive").mkdir(parents=True, exist_ok=True)
+    assert cp.detect_onedrive_asf() == (tmp_path / "OneDrive").resolve()
+
+    (tmp_path / "OneDrive").rmdir()
+    assert cp.detect_onedrive_asf() == tmp_path.resolve()
+
+
+def test_download_and_copy_to_tmp_tolerate_placeholder_touch_errors(tmp_path, monkeypatch):
+    runtime = _build_runtime(tmp_path)
+    monkeypatch.setattr(cp, "download_onedrive_file", lambda *_a, **_k: False)
+    monkeypatch.setattr(cp.Path, "touch", lambda *_a, **_k: (_ for _ in ()).throw(OSError("boom")))
+
+    out_dl = cp._download_to_tmp("H/TDB.xlsx", "TABLEAU_DE_BORD.xlsx", strict=False, runtime=runtime)
+    out_cp = cp._copy_to_tmp(tmp_path / "missing.xlsx", "PLANNING_BENEVOLES.xlsx", strict=False, runtime=runtime)
+    assert out_dl.name == "TABLEAU_DE_BORD.xlsx"
+    assert out_cp.name == "PLANNING_BENEVOLES.xlsx"
+
+
+def test_prepare_paths_graph_mode_downloads_all_sources(tmp_path, monkeypatch):
+    runtime = replace(_build_runtime(tmp_path), use_graph_onedrive=True, is_streamlit_cloud=False)
+    calls: list[str] = []
+
+    def _fake_download(remote_path, dst_name, *, strict=False, runtime=None):
+        _ = strict, runtime
+        calls.append(str(remote_path))
+        dst = (tmp_path / "tmp") / dst_name
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_text("x", encoding="utf-8")
+        return dst.resolve()
+
+    monkeypatch.setenv("ASF_OUTPUT_DIR", str(tmp_path / "graph_output"))
+    monkeypatch.setattr(cp, "_download_to_tmp", _fake_download)
+
+    prepared = cp.prepare_paths(copy_sources=True, runtime=runtime)
+    assert calls == [runtime.tableau_de_bord_remote, runtime.planning_benevoles_remote, runtime.vols_remote]
+    assert prepared.tableau_de_bord_src == prepared.tableau_de_bord
+    assert prepared.planning_benevoles_src == prepared.planning_benevoles
+    assert prepared.vols_src == prepared.vols
+
+
+def test_prepare_paths_local_mode_uses_legacy_benev_when_main_missing(tmp_path, monkeypatch):
+    runtime = replace(_build_runtime(tmp_path), use_graph_onedrive=False, is_streamlit_cloud=False)
+    runtime.tableau_de_bord_src.parent.mkdir(parents=True, exist_ok=True)
+    runtime.tableau_de_bord_src.write_text("x", encoding="utf-8")
+    runtime.vols_src.write_text("x", encoding="utf-8")
+    runtime.planning_benevoles_src_legacy.parent.mkdir(parents=True, exist_ok=True)
+    runtime.planning_benevoles_src_legacy.write_text("x", encoding="utf-8")
+
+    copied_sources: list[Path] = []
+
+    def _fake_copy(src, dst_name, *, strict=False, runtime=None):
+        _ = strict, runtime
+        copied_sources.append(Path(src))
+        dst = (tmp_path / "tmp") / dst_name
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_text("x", encoding="utf-8")
+        return dst.resolve()
+
+    monkeypatch.setattr(cp, "_copy_to_tmp", _fake_copy)
+    cp.prepare_paths(copy_sources=True, runtime=runtime)
+    assert runtime.planning_benevoles_src_legacy in copied_sources
+
+
+def test_cleanup_tmp_handles_missing_dir_and_errors(tmp_path, monkeypatch):
+    runtime_missing = _build_runtime(tmp_path / "missing_case")
+    cp.cleanup_tmp(runtime=runtime_missing)
+
+    runtime = _build_runtime(tmp_path / "existing_case")
+    runtime.tmp_dir.mkdir(parents=True, exist_ok=True)
+    (runtime.tmp_dir / "f.txt").write_text("x", encoding="utf-8")
+    (runtime.tmp_dir / "sub").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(cp.Path, "unlink", lambda *_a, **_k: (_ for _ in ()).throw(OSError("boom")))
+    monkeypatch.setattr(cp.shutil, "rmtree", lambda *_a, **_k: (_ for _ in ()).throw(OSError("boom")))
+    cp.cleanup_tmp(runtime=runtime)
+
+
+def test_graph_client_builder_and_device_flow_success(tmp_path, monkeypatch):
+    runtime_missing = _build_runtime(tmp_path)
+    assert cp._build_graph_client(runtime=runtime_missing) is None
+
+    class _DummyConfig:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class _DummyClient:
+        def __init__(self, cfg):
+            self.cfg = cfg
+            self.completed_flow = None
+
+        def begin_device_flow(self):
+            return {"user_code": "ABC123"}
+
+        def complete_device_flow(self, flow):
+            self.completed_flow = flow
+
+    runtime_ok = replace(
+        _build_runtime(tmp_path),
+        graph_client_id="cid",
+        graph_tenant_id="tid",
+        graph_scopes=("scope1",),
+        graph_token_cache=tmp_path / "cache.json",
+    )
+    monkeypatch.setattr("scheduler.onedrive_graph.GraphConfig", _DummyConfig)
+    monkeypatch.setattr("scheduler.onedrive_graph.OneDriveGraphClient", _DummyClient)
+    built = cp._build_graph_client(runtime=runtime_ok)
+    assert isinstance(built, _DummyClient)
+    assert built.cfg.kwargs["tenant_id"] == "tid"
+
+    monkeypatch.setattr(cp, "get_graph_client", lambda **_kwargs: built)
+    flow = cp.begin_onedrive_device_flow(runtime=runtime_ok)
+    assert flow == {"user_code": "ABC123"}
+    assert cp.complete_onedrive_device_flow(flow, runtime=runtime_ok) is True
+
+
+def test_download_upload_list_return_empty_when_graph_client_absent(tmp_path, monkeypatch):
+    runtime_graph = replace(_build_runtime(tmp_path), use_graph_onedrive=True)
+    monkeypatch.setattr(cp, "get_graph_client", lambda **_kwargs: None)
+    assert cp.download_onedrive_file("A/B.xlsx", tmp_path / "x.xlsx", runtime=runtime_graph) is False
+    assert cp.upload_onedrive_file(tmp_path / "x.xlsx", "A/B.xlsx", runtime=runtime_graph) is False
+    assert cp.list_onedrive_files("A", runtime=runtime_graph) == []
+
+
+def test_list_onedrive_files_non_recursive_adds_item_paths(tmp_path, monkeypatch):
+    runtime_graph = replace(_build_runtime(tmp_path), use_graph_onedrive=True)
+
+    class _Client:
+        def list_children(self, remote_dir, interactive=False):
+            _ = interactive
+            return [{"name": "planning.xlsx"}, {"name": "nested"}]
+
+    monkeypatch.setattr(cp, "get_graph_client", lambda **_kwargs: _Client())
+    out = cp.list_onedrive_files("Planning/2026", recursive=False, runtime=runtime_graph)
+    assert out[0]["path"] == "Planning/2026/planning.xlsx"
+    assert out[1]["path"] == "Planning/2026/nested"

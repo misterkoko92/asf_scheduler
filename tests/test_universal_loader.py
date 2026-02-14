@@ -124,3 +124,49 @@ def test_load_and_normalize_drops_unnamed_ignores_columns_and_normalizes_phone(m
     assert "Telephone" in out.columns
     assert out.loc[0, "Telephone"] == "33612345678"
     assert "ColB" in out.columns
+
+
+def test_resolve_sheet_name_exact_match_and_no_candidate(monkeypatch):
+    class _Book:
+        sheet_names = [" ParamDest ", "Other"]
+
+    monkeypatch.setattr("loaders.universal_loader.pd.ExcelFile", lambda *_args, **_kwargs: _Book())
+    assert _resolve_sheet_name("dummy.xlsx", "paramdest") == " ParamDest "
+    assert _resolve_sheet_name("dummy.xlsx", "UnknownSheet") == "UnknownSheet"
+
+
+def test_normalize_header_returns_empty_for_non_string():
+    assert normalize_header(123) == ""
+    assert normalize_header(None) == ""
+
+
+def test_load_and_normalize_returns_empty_when_retry_on_resolved_sheet_fails(monkeypatch):
+    monkeypatch.setattr(
+        "loaders.universal_loader.pd.read_excel",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("boom")),
+    )
+    monkeypatch.setattr("loaders.universal_loader._resolve_sheet_name", lambda *_a, **_k: "Resolved")
+    warnings: list[str] = []
+    monkeypatch.setattr(ul, "warn_ui", lambda message: warnings.append(str(message)))
+
+    out = load_and_normalize("dummy.xlsx", "Missing", {"A": "ColA"}, header=0)
+    assert out.empty
+    assert warnings
+
+
+def test_load_and_normalize_skips_none_targets(monkeypatch):
+    monkeypatch.setattr(
+        "loaders.universal_loader.pd.read_excel",
+        lambda *_args, **_kwargs: pd.DataFrame({"A": [1], "B": [2]}),
+    )
+    out = load_and_normalize(
+        "dummy.xlsx",
+        "Sheet1",
+        {
+            "A": "KeepA",
+            "B": None,
+        },
+        header=0,
+    )
+    assert "KeepA" in out.columns
+    assert "B" in out.columns

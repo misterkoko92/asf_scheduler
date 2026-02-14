@@ -202,3 +202,86 @@ def test_build_flights_week_table_deduplicates_same_flight_label():
     cell = table.loc["DLA (2)", monday]
     assert cell.count("AF 822 - SSG-DLA") == 1
     assert status.loc["DLA (2)", monday] == "compatible"
+
+
+def test_compute_week_dates_uses_first_valid_date_from_sources():
+    df_benev = pd.DataFrame([{"Date": "19/01/26"}])
+    out = _compute_week_dates(
+        api_start_date=None,
+        week=None,
+        df_benev=df_benev,
+        df_flights=pd.DataFrame(),
+        today=pd.Timestamp("2026-02-01"),
+    )
+    assert out[0].date() == date(2026, 1, 19)
+
+
+def test_compute_week_dates_skips_sources_without_date_column():
+    out = _compute_week_dates(
+        api_start_date=None,
+        week=None,
+        df_benev=pd.DataFrame([{"Nom": "A"}]),
+        df_flights=pd.DataFrame([{"Destination": "RUN"}]),
+        today=pd.Timestamp("2026-02-01"),
+    )
+    assert out[0].date() == date(2026, 1, 26)
+
+
+def test_benev_helpers_handle_empty_invalid_and_missing_names():
+    week_dates = _week_4_2026_dates()
+    day_labels = _build_day_labels(week_dates)
+
+    table_none, mask_none = _build_benev_week_table(None, week_dates=week_dates, day_labels=day_labels)
+    assert table_none.empty
+    assert mask_none.empty
+
+    df_invalid = pd.DataFrame(
+        [
+            {"Nom": "", "Date": "invalid", "Arrivée": "10:00", "Départ": "12:00"},
+            {"Nom": "   ", "Date": "19/01/26", "Arrivée": "10:00", "Départ": "12:00"},
+        ]
+    )
+    table_invalid, mask_invalid = _build_benev_week_table(
+        df_invalid,
+        week_dates=week_dates,
+        day_labels=day_labels,
+    )
+    assert table_invalid.empty
+    assert mask_invalid.empty
+
+    assert _build_benev_ranges_by_date(pd.DataFrame()) == {}
+    ranges = _build_benev_ranges_by_date(pd.DataFrame([{"Date": "invalid", "Arrivée": "10:00", "Départ": "12:00"}]))
+    assert ranges == {}
+
+
+def test_build_flights_week_table_handles_invalid_rows_and_no_destinations():
+    week_dates = _week_4_2026_dates()
+    day_labels = _build_day_labels(week_dates)
+    df_flights_bad = pd.DataFrame(
+        [
+            {"Destination": "", "Date": "19/01/26", "Heure": "bad", "Routing": "CDG-", "Numero_Vol": "AF001"},
+            {"Destination": "RUN", "Date": "invalid", "Heure": "bad", "Routing": "CDG-RUN", "Numero_Vol": "AF002"},
+            {"Destination": "RUN", "Date": "19/01/26", "Heure": "bad", "Routing": "CDG-RUN", "Numero_Vol": "AF003"},
+        ]
+    )
+    table, status = _build_flights_week_table(
+        df_flights_bad,
+        df_be=pd.DataFrame(),
+        week_dates=week_dates,
+        day_labels=day_labels,
+        benev_by_date={},
+    )
+    # Une destination conservée mais vol incompatible (heure invalide => minute None)
+    assert "RUN (0)" in table.index
+    assert status.loc["RUN (0)", day_labels[0]] == "incompatible"
+
+    df_no_dest = pd.DataFrame([{"Destination": "", "Date": "19/01/26", "Heure": "10:00"}])
+    table_empty, status_empty = _build_flights_week_table(
+        df_no_dest,
+        df_be=pd.DataFrame(),
+        week_dates=week_dates,
+        day_labels=day_labels,
+        benev_by_date={},
+    )
+    assert table_empty.empty
+    assert status_empty.empty

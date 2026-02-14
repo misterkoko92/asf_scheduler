@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 
+import asf_app.ui.ui_simulation as ui_sim_module
 from asf_app.ui.ui_simulation import (
     _apply_manual_assignment,
     _build_be_options,
@@ -20,14 +21,18 @@ from asf_app.ui.ui_simulation import (
     _export_simulation_excel,
     _filter_vols_for_export,
     _filter_vols_for_selection,
+    _infer_non_affectation_reason,
     _normalize_sort_plan,
     _open_file,
     _recompute_be_non_planifies,
+    _recompute_benev,
     _recompute_bilan,
     _recompute_bilan_benevoles,
     _recompute_dest_stats,
     _recompute_vols,
     _resolve_tdb_write_path,
+    _style_manual_df,
+    _to_int_or_zero,
     _time_from_str,
 )
 
@@ -48,6 +53,34 @@ def test_build_mode_selector_data_formats_labels():
     assert values == ["colis", "benevoles"]
     assert labels[0] == "Priorité Colis — 10 colis / 2 bénév"
     assert labels[1] == "Priorité Bénévole — 8 colis / 3 bénév"
+
+
+def test_style_manual_df_handles_empty_and_manual_highlight():
+    empty = pd.DataFrame()
+    assert _style_manual_df(empty).empty
+
+    df = pd.DataFrame(
+        [
+            {"A": 1, "_MANUEL": True},
+            {"A": 2, "_MANUEL": False},
+        ]
+    )
+    styled = _style_manual_df(df)
+    html = styled.to_html()
+    assert "background-color: #f2f2f2" in html
+    assert "_MANUEL" not in styled.data.columns
+
+
+def test_to_int_or_zero_handles_nan_and_numeric_errors(monkeypatch):
+    assert _to_int_or_zero("7") == 7
+    assert _to_int_or_zero("not-a-number") == 0
+
+    monkeypatch.setattr(
+        ui_sim_module.pd,
+        "to_numeric",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(TypeError("boom")),
+    )
+    assert _to_int_or_zero("7") == 0
 
 
 def test_filter_vols_for_export_uses_api_dates_then_export_fallback():
@@ -82,12 +115,28 @@ def test_compute_week_year_falls_back_to_planning_dates():
     assert (week, year) == (3, 2026)
 
 
+def test_compute_week_year_falls_back_to_today_when_no_data(monkeypatch):
+    class _Today:
+        week = 9
+        year = 2030
+
+    monkeypatch.setattr(ui_sim_module.pd.Timestamp, "today", lambda: SimpleNamespace(isocalendar=lambda: _Today()))
+    week, year = _compute_week_year(pd.DataFrame(), current_week=None, current_year=None)
+    assert (week, year) == (9, 2030)
+
+
 def test_clean_for_excel_replaces_nan_with_none():
     df = pd.DataFrame([{"A": 1, "B": pd.NA}, {"A": 2, "B": None}])
     cleaned = _clean_for_excel(df)
     assert cleaned is not None
     assert cleaned.loc[0, "B"] is None
     assert cleaned.loc[1, "B"] is None
+
+
+def test_clean_for_excel_returns_input_when_none_or_empty():
+    assert _clean_for_excel(None) is None
+    empty = pd.DataFrame()
+    assert _clean_for_excel(empty).empty
 
 
 def test_recompute_bilan_marks_manual_rows():
@@ -109,6 +158,11 @@ def test_recompute_bilan_marks_manual_rows():
     assert len(out) == 1
     assert out.loc[0, "Raison"] == "MANUEL"
     assert bool(out.loc[0, "_MANUEL"]) is True
+
+
+def test_recompute_bilan_returns_empty_when_no_rows():
+    out = _recompute_bilan(pd.DataFrame())
+    assert out.empty
 
 
 def test_recompute_bilan_includes_non_partants_with_reason():
@@ -215,6 +269,11 @@ def test_recompute_vols_aggregates_be_and_benevole_counts():
     assert int(out.loc[0, "Nb_Benevoles"]) == 2
 
 
+def test_recompute_vols_and_benev_return_empty_when_plan_empty():
+    assert _recompute_vols(pd.DataFrame()).empty
+    assert _recompute_benev(pd.DataFrame()).empty
+
+
 def test_recompute_dest_stats_adds_existing_and_used_flights():
     df_plan = pd.DataFrame(
         [
@@ -263,11 +322,71 @@ def test_recompute_dest_stats_adds_existing_and_used_flights():
     assert int(row["Nb_Vols_Utilises"]) == 2
 
 
+def test_recompute_dest_stats_handles_invalid_vol_date_rows():
+    df_plan = pd.DataFrame(
+        [
+            {
+                "Date_Vol": "19/01/26",
+                "Heure_Vol": "11h00",
+                "Numero_Vol": "AF822",
+                "Destination": "DOUALA",
+                "BE_Numero": "1",
+                "BE_Nb_Colis": 2,
+                "BE_Nb_Equiv": 2,
+            }
+        ]
+    )
+    df_vols = pd.DataFrame(
+        [
+            {
+                "Date_Vol": "bad-date",
+                "Heure_Vol": "11h00",
+                "Numero_Vol": "AF822",
+                "IATA": "DLA",
+            }
+        ]
+    )
+    df_paramdest = pd.DataFrame(
+        [
+            {
+                "Dest_IATA": "DLA",
+                "Dest_Ville": "DOUALA",
+                "Freq_Lundi": 1,
+                "Freq_Mardi": 1,
+                "Freq_Mercredi": 1,
+                "Freq_Jeudi": 1,
+                "Freq_Vendredi": 1,
+                "Freq_Samedi": 0,
+                "Freq_Dimanche": 0,
+            }
+        ]
+    )
+
+    out = _recompute_dest_stats(
+        df_plan,
+        df_vols_src=df_vols,
+        df_paramdest=df_paramdest,
+        start_dt=pd.Timestamp("2026-01-19"),
+        end_dt=pd.Timestamp("2026-01-25"),
+    )
+    row = out.iloc[0]
+    assert int(row["Nb_Vols_Existant"]) == 0
+    assert int(row["Nb_Vols_Utilises"]) == 1
+
+
+def test_recompute_dest_stats_returns_empty_when_plan_empty():
+    assert _recompute_dest_stats(pd.DataFrame()).empty
+
+
 def test_recompute_be_non_planifies_filters_planned_numbers():
     df_plan = pd.DataFrame([{"BE_Numero": "260001"}])
     df_be = pd.DataFrame([{"BE_Numero": "260001"}, {"BE_Numero": "260002"}])
     out = _recompute_be_non_planifies(df_plan, df_be)
     assert list(out["BE_Numero"].astype(str)) == ["260002"]
+
+
+def test_recompute_be_non_planifies_returns_empty_when_source_empty():
+    assert _recompute_be_non_planifies(pd.DataFrame(), pd.DataFrame()).empty
 
 
 def test_recompute_bilan_benevoles_computes_requested_metrics():
@@ -343,6 +462,41 @@ def test_recompute_bilan_benevoles_computes_requested_metrics():
     assert int(charlie["Nb_BE_Affectes"]) == 0
 
 
+def test_recompute_bilan_benevoles_handles_none_and_blank_names():
+    assert _recompute_bilan_benevoles(
+        None,
+        None,
+        df_parambenev=pd.DataFrame(),
+        start_dt=None,
+        end_dt=None,
+    ).empty
+
+    out = _recompute_bilan_benevoles(
+        pd.DataFrame(),
+        pd.DataFrame(),
+        df_parambenev=pd.DataFrame([{"Benevole": ""}]),
+        start_dt=None,
+        end_dt=None,
+    )
+    assert out.empty
+
+
+def test_recompute_bilan_benevoles_handles_dispo_parse_errors(monkeypatch):
+    monkeypatch.setattr(
+        ui_sim_module,
+        "parse_time_series",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("boom")),
+    )
+    out = _recompute_bilan_benevoles(
+        pd.DataFrame(),
+        pd.DataFrame([{"Benevole": "ALICE", "Date": "2026-01-20"}]),
+        df_parambenev=42,
+        start_dt=None,
+        end_dt=None,
+    )
+    assert out.empty
+
+
 def test_compute_week_bounds_from_api_dates_and_planning_fallback():
     start, end = _compute_week_bounds(
         api_start_date="2026-01-19",
@@ -361,6 +515,16 @@ def test_compute_week_bounds_from_api_dates_and_planning_fallback():
     assert str(end2.date()) == "2026-01-22"
 
 
+def test_compute_week_bounds_returns_none_when_no_inputs():
+    start, end = _compute_week_bounds(
+        api_start_date=None,
+        api_end_date=None,
+        planning_df=pd.DataFrame(),
+    )
+    assert start is None
+    assert end is None
+
+
 def test_time_from_str_parses_and_handles_invalid():
     out = _time_from_str("10h30")
     assert out is not None
@@ -368,6 +532,14 @@ def test_time_from_str_parses_and_handles_invalid():
     assert out.minute == 30
     assert _time_from_str("") is None
     assert _time_from_str("not-a-time") is None
+
+
+def test_time_from_str_handles_time_instance_and_weird_values():
+    t = pd.Timestamp("10:15").time()
+    assert _time_from_str(t) == t
+    assert _time_from_str(None) is None
+    assert _time_from_str(float("nan")) is None
+    assert _time_from_str([1, 2, 3]) is None
 
 
 def test_build_be_options_sorts_and_formats_labels():
@@ -401,6 +573,22 @@ def test_filter_vols_for_selection_filters_destination_and_period():
     )
     assert len(out) == 1
     assert out.iloc[0]["IATA"] == "RUN"
+
+
+def test_filter_vols_for_selection_handles_date_parse_error(monkeypatch):
+    df_vols = pd.DataFrame([{"Date_Vol": "x", "IATA": "RUN", "Destination": "RUN", "Routing": "CDG-RUN"}])
+    monkeypatch.setattr(
+        ui_sim_module,
+        "parse_date_series",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("bad")),
+    )
+    out = _filter_vols_for_selection(
+        df_vols,
+        code_iata_be="RUN",
+        api_start_date="2026-01-19",
+        api_end_date="2026-01-25",
+    )
+    assert len(out) == 1
 
 
 def test_build_vol_selector_data_for_unplanned_and_planned():
@@ -441,6 +629,44 @@ def test_build_vol_selector_data_for_unplanned_and_planned():
     assert idx2 == 0
     assert values2[0][1] == "AF652"
     assert "déjà utilisé" in labels2[0]
+
+
+def test_build_vol_selector_data_handles_empty_and_bad_dates(monkeypatch):
+    labels, values, idx = _build_vol_selector_data(
+        pd.DataFrame(),
+        pd.DataFrame(),
+        code_iata_be="RUN",
+        planned_row=pd.Series({"Date_Vol": "", "Numero_Vol": ""}),
+    )
+    assert labels == ["Aucun vol pour cette destination"]
+    assert values == [("", "", "")]
+    assert idx == 0
+
+    df_vols_filt = pd.DataFrame(
+        [
+            {
+                "Date_Vol": object(),
+                "Numero_Vol": "AF001",
+                "Heure_Vol": "09:30",
+                "Routing": "CDG-XXX",
+                "IATA": "",
+                "Destination": "XXX",
+            }
+        ]
+    )
+    monkeypatch.setattr(
+        ui_sim_module,
+        "parse_date_series",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("bad")),
+    )
+    labels2, values2, _ = _build_vol_selector_data(
+        df_vols_filt,
+        pd.DataFrame(),
+        code_iata_be="RUN",
+        planned_row=pd.Series({"Date_Vol": "x", "Numero_Vol": "y"}),
+    )
+    assert values2[0][1] == "AF001"
+    assert "XXX" in labels2[0]
 
 
 def test_build_vol_selector_data_deduplicates_multistop_physical_flight():
@@ -542,6 +768,87 @@ def test_compute_bene_status_and_selector_data():
         planned_row=pd.Series({"Benevole": "ALICE"}),
     )
     assert values2[sel2] == "ALICE"
+
+
+def test_compute_bene_status_handles_parse_failures_and_unknown(monkeypatch):
+    monkeypatch.setattr(
+        ui_sim_module,
+        "coerce_datetime",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("bad date")),
+    )
+    status_err = _compute_bene_status(
+        name="ALICE",
+        benev_existing=pd.DataFrame(columns=["Benevole", "Numero_Vol", "Date_Vol"]),
+        df_dispo=pd.DataFrame(),
+        vol_choice_val="AF100",
+        date_choice="bad",
+        heure_choice="10:00",
+    )
+    assert status_err == "Inconnu"
+
+    monkeypatch.setattr(ui_sim_module, "coerce_datetime", pd.to_datetime)
+    monkeypatch.setattr(
+        ui_sim_module,
+        "parse_date_series",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("bad date")),
+    )
+    status_parse = _compute_bene_status(
+        name="ALICE",
+        benev_existing=pd.DataFrame(columns=["Benevole", "Numero_Vol", "Date_Vol"]),
+        df_dispo=pd.DataFrame([{"Benevole": "ALICE", "Date_dt": "2026-01-20"}]),
+        vol_choice_val="AF100",
+        date_choice="2026-01-20",
+        heure_choice="10:00",
+    )
+    assert status_parse == "Occupé"
+
+
+def test_infer_non_affectation_reason_edge_cases():
+    assert _infer_non_affectation_reason(dest_code="", reason_context={}) == "Destination manquante"
+    assert (
+        _infer_non_affectation_reason(
+            dest_code="RUN",
+            reason_context={"vols": pd.DataFrame(), "dispos": pd.DataFrame(), "plan_load": {}},
+        )
+        == "Aucun vol vers RUN sur la période"
+    )
+
+    vols_bad = pd.DataFrame([{"_Dest_Code": "RUN", "_Date_only": None, "_Heure_Min": None}])
+    assert (
+        _infer_non_affectation_reason(
+            dest_code="RUN",
+            reason_context={"vols": vols_bad, "dispos": pd.DataFrame(), "plan_load": {}},
+        )
+        == "Vols vers RUN sans horaire exploitable"
+    )
+
+    vols_ok = pd.DataFrame(
+        [
+            {
+                "_Dest_Code": "RUN",
+                "_Date_only": pd.Timestamp("2026-01-20").date(),
+                "_Heure_Min": 600,
+                "_Max_Colis": pd.NA,
+                "_Vol_Numero": "AF100",
+            }
+        ]
+    )
+    dispos_ok = pd.DataFrame(
+        [
+            {
+                "_Date_only": pd.Timestamp("2026-01-20").date(),
+                "_Arr_Min": 500,
+                "_Dep_Min": 700,
+            }
+        ]
+    )
+    assert (
+        _infer_non_affectation_reason(
+            dest_code="RUN",
+            reason_context={"vols": vols_ok, "dispos": dispos_ok, "plan_load": {}},
+        )
+        == "Conflit de contraintes (priorités/quotas)"
+    )
 
 
 def test_build_manual_row_data_uses_benevole_metadata():
@@ -652,6 +959,10 @@ def test_open_file_platforms_and_error_handling(monkeypatch):
     _open_file("d.xlsx")  # ne doit pas lever
 
 
+def test_open_file_noop_when_path_is_none():
+    _open_file(None)
+
+
 def test_resolve_tdb_write_path_prefers_source_when_available(monkeypatch, tmp_path):
     state = SimpleNamespace()
     paths = SimpleNamespace(tableau_de_bord=tmp_path / "tmp_tdb.xlsx")
@@ -666,6 +977,18 @@ def test_resolve_tdb_write_path_prefers_source_when_available(monkeypatch, tmp_p
 
     out2 = _resolve_tdb_write_path(state=state, write_source_excel=False)
     assert out2 == paths.tableau_de_bord
+
+
+def test_filter_vols_for_export_handles_coerce_errors(monkeypatch):
+    df_vols = pd.DataFrame([{"Date_Vol": "2026-01-18", "Numero_Vol": "AF100"}])
+    state = SimpleNamespace(api_start_date="2026-01-19", api_end_date="2026-01-21")
+    monkeypatch.setattr(
+        ui_sim_module,
+        "coerce_datetime",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(TypeError("boom")),
+    )
+    out = _filter_vols_for_export(df_vols, state=state, df_export=pd.DataFrame())
+    assert len(out) == 1
 
 
 def test_export_simulation_excel_calls_export_service(monkeypatch, tmp_path):
@@ -729,3 +1052,37 @@ def test_export_simulation_excel_calls_export_service(monkeypatch, tmp_path):
     assert captured["kwargs"]["write_source_excel"] is False
     assert captured["kwargs"]["increment_version"] is True
     assert captured["kwargs"]["create_tables"] is False
+
+
+def test_export_simulation_excel_tolerates_sort_error(monkeypatch, tmp_path):
+    state = SimpleNamespace(current_week=4, current_year=2026, api_start_date=None, api_end_date=None)
+    current_plan = pd.DataFrame([{"Date_Vol": "20/01/26", "Numero_Vol": "AF100", "Heure_Vol": "10h00"}])
+    monkeypatch.setattr("asf_app.ui.ui_simulation.sort_planning_df", lambda df: df)
+    monkeypatch.setattr("asf_app.ui.ui_simulation.build_export_view", lambda df, **_kwargs: df.copy())
+    monkeypatch.setattr(
+        "asf_app.ui.ui_simulation.get_excel_source_paths",
+        lambda _state: SimpleNamespace(
+            planning_benevoles=tmp_path / "PLANNING_BENEVOLES.xlsx",
+            tableau_de_bord=tmp_path / "TABLEAU_DE_BORD.xlsx",
+        ),
+    )
+    monkeypatch.setattr("asf_app.ui.ui_simulation.is_graph_onedrive", lambda: False)
+    monkeypatch.setattr("asf_app.ui.ui_simulation.get_tableau_de_bord_src", lambda: tmp_path / "TABLEAU_DE_BORD.xlsx")
+    monkeypatch.setattr(
+        pd.DataFrame,
+        "sort_values",
+        lambda self, *args, **kwargs: (_ for _ in ()).throw(TypeError("boom")),
+    )
+    monkeypatch.setattr("asf_app.services.export_service.export_planning_excel", lambda *_a, **_k: "OK")
+
+    out = _export_simulation_excel(
+        current_plan=current_plan,
+        state=state,
+        df_paramdest=pd.DataFrame(),
+        df_vols_all=pd.DataFrame(),
+        df_dispo=pd.DataFrame(),
+        df_parambenev=pd.DataFrame(),
+        write_source_excel=False,
+        increment_version=False,
+    )
+    assert out == "OK"

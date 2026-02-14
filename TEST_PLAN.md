@@ -114,6 +114,7 @@ For each test case, log:
 - Notes or screenshot
 - Files used
 
-## Current Quality Snapshot (2026-02-13)
-- Automated tests: `729 passed`
-- Coverage hardening scope (`asf_app + scheduler + loaders + utils`): `91.46%`
+## Current Quality Snapshot (2026-02-14)
+- Automated tests: `1015 passed`
+- Coverage hardening scope (`asf_app + scheduler + loaders + utils`): `99.61%`
+- Decision: stop on this pass; remaining uncovered branches are low business value and tested only on regression/bug demand.

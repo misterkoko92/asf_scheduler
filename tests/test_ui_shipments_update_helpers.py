@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import datetime as dt
+
 import pandas as pd
 
+import asf_app.ui.ui_shipments_update_helpers as sh
 from asf_app.ui.ui_shipments_update_helpers import (
     _add_queue_item,
     _apply_queue_action_to_session,
@@ -1757,3 +1760,179 @@ def test_send_named_outlook_drafts_with_feedback_variants():
     )
     assert level_empty == "warning"
     assert "Aucun email expéditeur" in message_empty
+
+
+def test_basic_formatters_and_numeric_coercion_branches(monkeypatch):
+    assert sh._fmt_date_long("") == ""
+    monkeypatch.setattr(sh, "format_time_value", lambda *_a, **_k: None)
+    assert sh._fmt_time("11h00") == "11h00"
+
+    monkeypatch.setattr(sh.pd, "isna", lambda _v: (_ for _ in ()).throw(TypeError("boom")))
+    assert sh._coerce_int("bad", 7) == 7
+    assert sh._coerce_int("12.0", 0) == 12
+    assert sh._coerce_int("not-a-number", 9) == 9
+
+
+def test_selection_and_bene_label_helpers_edge_cases():
+    assert _resolve_selected_vol([], [], "x") == ("", "", "")
+    assert _build_bene_options(pd.DataFrame(), be_scope="A planifier", status_for=lambda _n: "ok") == []
+    assert _build_default_bene_label(
+        prefill_bene="ALICE",
+        current_bene="",
+        be_scope="A planifier",
+        status_for=lambda _n: "disponible",
+    ) == "ALICE"
+    assert _build_default_bene_label(
+        prefill_bene=None,
+        current_bene="ALICE",
+        be_scope="Planning",
+        status_for=lambda _n: "disponible",
+    ) == "ALICE (disponible)"
+
+
+def test_fill_bene_name_from_parambenev_handles_empty_missing_and_errors():
+    out = _fill_bene_name_from_parambenev(
+        None,
+        bene_choice="ALICE",
+        bene_prenom_court="",
+        bene_nom="",
+    )
+    assert out == ("", "")
+
+    df = pd.DataFrame([{"Benevole": "BOB", "Prenom_Court": "B.", "Nom": "MARTIN"}])
+    out_missing = _fill_bene_name_from_parambenev(
+        df,
+        bene_choice="ALICE",
+        bene_prenom_court="",
+        bene_nom="",
+    )
+    assert out_missing == ("", "")
+
+    class _BadDf(pd.DataFrame):
+        @property
+        def _constructor(self):  # pragma: no cover
+            return _BadDf
+
+        @property
+        def empty(self):
+            raise TypeError("boom")
+
+    out_error = _fill_bene_name_from_parambenev(
+        _BadDf([{"Benevole": "ALICE"}]),
+        bene_choice="ALICE",
+        bene_prenom_court="P",
+        bene_nom="N",
+    )
+    assert out_error == ("P", "N")
+
+
+def test_queue_open_and_notification_email_helpers_branches(tmp_path):
+    queue, err = _add_queue_item([], {}, preview_path=None, existing_queue_path=None)
+    assert queue is None
+    assert "Impossible de trouver le fichier planning" in str(err)
+
+    assert _open_file_in_os("   ") is False
+    assert _open_file_in_os(
+        "x",
+        platform_system_fn=lambda: "Windows",
+        startfile_fn=None,
+        popen_fn=lambda _args: None,
+    ) is False
+
+    payloads = [
+        {"action": "Ajouter au planning", "bene_choice": "ALICE"},
+        {"action": "Changement de date ou bénévole", "current_bene": "ALICE", "bene_choice": "BOB"},
+    ]
+    mails = _collect_benevole_emails(
+        payloads,
+        pd.DataFrame([{"Benevole": "ALICE", "Email": "alice@test.com"}]),
+    )
+    assert mails == ["alice@test.com", "alice@test.com"]
+
+    planning = tmp_path / "planning.xlsx"
+    planning.write_text("x", encoding="utf-8")
+    pdf = _resolve_notification_pdf_path(
+        planning,
+        "",
+        export_pdf_fn=lambda _p: (_ for _ in ()).throw(RuntimeError("pdf err")),
+    )
+    assert pdf == ""
+
+
+def test_be_key_dest_and_planifiable_selector_helpers(monkeypatch):
+    assert _normalize_be_key_for_select("", year=2026) == ""
+    monkeypatch.setattr(sh.pd, "isna", lambda _v: (_ for _ in ()).throw(TypeError("boom")))
+    assert _normalize_be_key_for_select("001234", year="bad") == "001234"
+
+    class _BadParam(pd.DataFrame):
+        @property
+        def _constructor(self):  # pragma: no cover
+            return _BadParam
+
+        def dropna(self, *args, **kwargs):
+            raise KeyError("boom")
+
+    assert _dest_to_iata("douala", _BadParam()) == "DOUALA"
+    assert _build_planif_be_options(pd.DataFrame(), set()) == []
+
+    selector = _build_planifiable_be_selector_data(None, None, prefill_be=None)
+    assert selector["options"] == []
+    assert selector["labels"] == []
+    assert selector["values"] == []
+
+
+def test_prepare_lookup_and_format_helpers_cover_status_and_fallbacks():
+    df_status = pd.DataFrame(
+        [
+            {"BE_Numero_Str": "250001", "Destination": "DLA", "Source": "planning", "_STATUS": "new"},
+            {"BE_Numero_Str": "250002", "Destination": "RUN", "Source": "mag", "_STATUS": "old"},
+            {"BE_Numero_Str": "250003", "Destination": "ABJ", "Source": "mag", "_STATUS": "orig"},
+            {"BE_Numero_Str": "250004", "Destination": "CKY", "Source": "mag", "_STATUS": "weird"},
+            {"BE_Numero_Str": "250005", "Destination": "DLA", "Source": "mag", "_STATUS": ""},
+        ]
+    )
+    lookup, err = _prepare_be_lookup(
+        df_status,
+        None,
+        pd.DataFrame([{"Dest_IATA": "DLA", "Dest_Ville": "DOUALA"}]),
+    )
+    assert err is None
+    assert not lookup.empty
+
+    dup = pd.concat([lookup.iloc[[0]], lookup.iloc[[0]]], ignore_index=False)
+    label = _format_be_option_label(str(dup.index[0]), dup)
+    assert "BE" in label
+    assert _format_be_option_label("999999", lookup) == "999999"
+
+    assert _coerce_display_types(pd.DataFrame()).empty
+    assert _weeks_from_status_df(pd.DataFrame([{"week": 1, "year": 2026}])) == set()
+    weeks = _weeks_from_status_df(pd.DataFrame([{"Week": "x", "Year": "bad"}]))
+    assert weeks == set()
+
+    formatted = _format_preview_dataframe(
+        pd.DataFrame(
+            [
+                {
+                    "Date": pd.Timestamp("2026-01-20"),
+                    "Heure": dt.time(11, 30),
+                }
+            ]
+        )
+    )
+    assert formatted.iloc[0]["Date"] == "20/01/26"
+    assert formatted.iloc[0]["Heure"] == "11h30"
+
+
+def test_load_collect_and_find_helpers_edge_paths(tmp_path, monkeypatch):
+    assert _load_export_planning_sheet(None) is None
+
+    fake = tmp_path / "planning.xlsx"
+    fake.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(sh.pd, "read_excel", lambda *_a, **_k: (_ for _ in ()).throw(ValueError("boom")))
+    assert _load_export_planning_sheet(fake) is None
+
+    assert _bene_status(pd.DataFrame(), pd.DataFrame(), "ALICE", "bad-date", "bad-time") == "indisponible"
+    assert _collect_be_from_planning(pd.DataFrame(), week=4, year=2026).empty
+    assert _collect_be_from_planning(pd.DataFrame([{"Date_Vol": "20/01/26"}]), week=4, year=2026).empty
+    assert _find_row_in_df(pd.DataFrame(), "250001") is None
+    assert _find_row_in_df(pd.DataFrame([{"BE_Numero": "260001"}]), "999999") is None

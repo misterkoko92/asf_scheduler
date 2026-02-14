@@ -93,3 +93,43 @@ def test_to_dt_handles_objects_with_to_pydatetime_and_invalid():
     assert fr._to_dt(ts) == ts.to_pydatetime()
     assert fr._to_dt(None) is None
     assert fr._to_dt("invalid") is None
+
+
+def test_private_datetime_helpers_handle_internal_exceptions(monkeypatch):
+    monkeypatch.setattr(fr, "coerce_datetime", lambda *_a, **_k: (_ for _ in ()).throw(OverflowError("boom")))
+    assert fr._to_datetime("bad") is None
+    assert fr._to_dt("bad") is None
+
+
+def test_to_dt_handles_bad_to_pydatetime_then_falls_back(monkeypatch):
+    class _BadTs:
+        def to_pydatetime(self):
+            raise ValueError("boom")
+
+    monkeypatch.setattr(fr, "coerce_datetime", lambda *_a, **_k: pd.Timestamp("2026-01-23 11:00:00"))
+    out = fr._to_dt(_BadTs())
+    assert out == datetime(2026, 1, 23, 11, 0)
+
+
+def test_format_flight_number_handles_non_int_digits_object(monkeypatch):
+    class _BadInt:
+        def __int__(self):
+            raise TypeError("boom")
+
+    monkeypatch.setattr(fr, "_digits", lambda _v: _BadInt())
+    assert fr.format_flight_number("AF", "ignored") == "AF"
+
+
+def test_to_datetime_returns_none_when_coerce_returns_nat(monkeypatch):
+    monkeypatch.setattr(fr, "coerce_datetime", lambda *_a, **_k: pd.NaT)
+    assert fr._to_datetime("bad-date") is None
+
+
+def test_to_datetime_returns_raw_object_without_to_pydatetime(monkeypatch):
+    class _RawDatetime:
+        pass
+
+    raw = _RawDatetime()
+    monkeypatch.setattr(fr, "coerce_datetime", lambda *_a, **_k: raw)
+    monkeypatch.setattr(fr.pd, "isna", lambda _v: False)
+    assert fr._to_datetime("bad-date") is raw

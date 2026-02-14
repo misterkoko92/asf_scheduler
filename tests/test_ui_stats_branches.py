@@ -257,3 +257,102 @@ def test_load_all_plannings_handles_glob_oserror(monkeypatch, tmp_path):
     monkeypatch.setattr(ui_stats, "_resolve_stats_default_planning_dir", lambda: root)
     out = ui_stats._load_all_plannings(base_override=_BadRoot())
     assert out.empty
+
+
+def test_filter_period_additional_branches_and_select_non_general(monkeypatch):
+    df = _sample_df()
+    monthly = ui_stats._filter_period(df, "Mensuel")
+    quarterly = ui_stats._filter_period(df, "Trimestriel", ref_date=pd.Timestamp("2026-01-20"))
+    semestrial = ui_stats._filter_period(df, "Semestriel", ref_date=pd.Timestamp("2026-01-20"))
+    assert not monthly.empty
+    assert not quarterly.empty
+    assert not semestrial.empty
+
+    stub = _StubSt()
+    monkeypatch.setattr(ui_stats, "st", stub)
+    monkeypatch.setattr(stub, "selectbox", lambda _label, options, index=0, **_k: options[1])
+    monkeypatch.setattr(ui_stats, "_filter_period", lambda d, period, ref_date=None: d.iloc[0:1])
+    out = ui_stats._select_period(df, "Bloc Y", "Annuel")
+    assert len(out) == 1
+
+
+def test_plot_branches_cover_empty_period_and_parser_failures(monkeypatch):
+    stub = _StubSt()
+    monkeypatch.setattr(ui_stats, "st", stub)
+    df = _sample_df()
+
+    monkeypatch.setattr(ui_stats, "_select_period", lambda *_a, **_k: pd.DataFrame(columns=df.columns))
+    ui_stats.plot_hour_day_heatmap(df, "Annuel")
+    ui_stats.plot_quality_report(df, "Annuel")
+    ui_stats.plot_top_alerts(df, "Annuel")
+    assert any("Aucune donnée sur la période." in msg for msg in stub.infos)
+
+    bad_hours = df.copy()
+    bad_hours["heure"] = [{"x": 1}, {"y": 2}]
+    monkeypatch.setattr(ui_stats, "_select_period", lambda *_a, **_k: bad_hours)
+    monkeypatch.setattr(ui_stats, "coerce_datetime", lambda *_a, **_k: (_ for _ in ()).throw(ValueError("boom")))
+    ui_stats.plot_hour_day_heatmap(df, "Annuel")
+    assert any("Heures non exploitables." in msg for msg in stub.infos)
+
+
+def test_plot_type_quality_comparison_and_matrix_branches(monkeypatch):
+    stub = _StubSt()
+    monkeypatch.setattr(ui_stats, "st", stub)
+    df = _sample_df()
+
+    stub._radio_values["Afficher par :"] = "Répartition par destination"
+    monkeypatch.setattr(ui_stats, "_select_period", lambda *_a, **_k: df)
+    ui_stats.plot_type_colis(df, "Annuel")
+    assert stub.plot_calls >= 1
+
+    monkeypatch.setattr(
+        ui_stats,
+        "_select_period",
+        lambda *_a, **_k: pd.DataFrame([{"expediteur": "ASF", "destination_iata": "DLA", "nb_colis": 1}]),
+    )
+    ui_stats.plot_exp_dest_matrix(df, "Annuel")
+    assert stub.plot_calls >= 2
+
+    anomalous = _sample_df().copy()
+    anomalous.loc[0, "destination_iata"] = ""
+    anomalous = pd.concat([anomalous, anomalous.iloc[[0]]], ignore_index=True)
+    monkeypatch.setattr(ui_stats, "_select_period", lambda *_a, **_k: anomalous)
+    ui_stats.plot_quality_report(anomalous, "Annuel")
+    assert any("Anomalies détectées" in msg for msg in stub.warnings)
+    assert stub.dataframe_calls >= 1
+
+    same_day = _sample_df().copy()
+    same_day["date_dt"] = pd.Timestamp("2026-01-20")
+    ui_stats.plot_comparison(same_day, "Annuel")
+    assert any(("Période trop courte" in msg) or ("Période insuffisante" in msg) for msg in stub.infos)
+
+
+def test_render_stats_filters_returns_tuple_with_empty_filtered_df(monkeypatch):
+    class _StubForFilter(_StubSt):
+        def __init__(self):
+            super().__init__()
+            self._select_calls = 0
+
+        def selectbox(self, _label, options, index=0, **_kwargs):
+            self._select_calls += 1
+            if self._select_calls == 2:
+                return "Hebdomadaire"
+            return options[index]
+
+        def slider(self, _label, _min, _max, value, **_kwargs):
+            return (_max + 10, _max + 10)
+
+    stub = _StubForFilter()
+    monkeypatch.setattr(ui_stats, "st", stub)
+    df = pd.DataFrame(
+        [
+            {"year": 2026, "week": 4, "date_dt": pd.Timestamp("2026-01-19")},
+            {"year": 2026, "week": 5, "date_dt": pd.Timestamp("2026-01-27")},
+        ]
+    )
+    out = ui_stats._render_stats_filters(df)
+    assert out is not None
+    df_year, df_filtered, general_period = out
+    assert not df_year.empty
+    assert df_filtered.empty
+    assert general_period == "Annuel"

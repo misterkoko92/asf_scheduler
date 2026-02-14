@@ -397,3 +397,151 @@ def test_resolve_data_source_composite_and_unknown(monkeypatch, tmp_path):
 
     unknown = resolve_data_source("unknown", external_paths=paths)
     assert isinstance(unknown, ExcelDataSource)
+
+
+def test_base_data_source_is_available_true():
+    assert BaseDataSource().is_available() is True
+
+
+def test_excel_data_source_loads_missing_param_inputs(monkeypatch, tmp_path):
+    source = ExcelDataSource(
+        paths=ExcelSourcePaths(
+            tableau_de_bord=tmp_path / "tdb.xlsx",
+            planning_benevoles=tmp_path / "benev.xlsx",
+            vols=tmp_path / "vols.xlsx",
+        )
+    )
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(source, "load_param_be", lambda: pd.DataFrame([{"Type": "A"}]))
+    monkeypatch.setattr(source, "load_param_dest", lambda: pd.DataFrame([{"Dest_IATA": "DLA"}]))
+    def _fake_load_shipments_df(**kwargs):
+        captured["ship_kwargs"] = kwargs
+        return pd.DataFrame([{"BE_Numero": "1"}])
+
+    def _fake_load_vols_df(**kwargs):
+        captured["vol_kwargs"] = kwargs
+        return pd.DataFrame([{"Numero_Vol": "100"}])
+
+    monkeypatch.setattr("scheduler.data_sources.load_shipments_df", _fake_load_shipments_df)
+    monkeypatch.setattr("scheduler.data_sources.load_vols_df", _fake_load_vols_df)
+
+    out_ship = source.load_shipments_df()
+    out_vols = source.load_vols_df()
+
+    assert not out_ship.empty
+    assert not out_vols.empty
+    assert "param_be_raw" in captured["ship_kwargs"]
+    assert "param_dest_df" in captured["vol_kwargs"]
+
+
+def test_asf_wms_get_and_post_use_requests(monkeypatch, tmp_path):
+    monkeypatch.setenv("ASF_WMS_API_URL", "https://wms.example.test/api")
+    ds = AsfWmsDataSource(tmp_path, enabled=True)
+
+    calls: list[tuple[str, str]] = []
+
+    class _Resp:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    monkeypatch.setattr(
+        "scheduler.data_sources.requests.get",
+        lambda url, headers=None, params=None, timeout=None: (
+            calls.append(("get", url)),
+            _Resp({"ok": "get"}),
+        )[1],
+    )
+    monkeypatch.setattr(
+        "scheduler.data_sources.requests.post",
+        lambda url, headers=None, json=None, timeout=None: (
+            calls.append(("post", url)),
+            _Resp({"ok": "post"}),
+        )[1],
+    )
+
+    assert ds._get("integrations/test", params={"x": 1}) == {"ok": "get"}
+    assert ds._post("integrations/test", {"x": 1}) == {"ok": "post"}
+    assert calls[0][1].endswith("/integrations/test")
+    assert calls[1][1].endswith("/integrations/test")
+
+
+def test_asf_wms_load_param_benev_not_implemented(tmp_path):
+    with pytest.raises(NotImplementedError):
+        AsfWmsDataSource(tmp_path, enabled=True).load_param_benev()
+
+
+def test_asf_benev_get_and_post_use_requests(monkeypatch, tmp_path):
+    monkeypatch.setenv("ASF_BENEV_API_URL", "https://benev.example.test/api")
+    ds = AsfBenevDataSource(tmp_path, enabled=True)
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"ok": True}
+
+    monkeypatch.setattr("scheduler.data_sources.requests.get", lambda *args, **kwargs: _Resp())
+    monkeypatch.setattr("scheduler.data_sources.requests.post", lambda *args, **kwargs: _Resp())
+
+    assert ds._get("integrations/test") == {"ok": True}
+    assert ds._post("integrations/test", {"a": 1}) == {"ok": True}
+
+
+def test_asf_benev_load_benevoles_df_loads_param_when_missing_and_skips_nan(monkeypatch, tmp_path):
+    monkeypatch.setenv("ASF_BENEV_API_URL", "https://benev.example.test/api")
+    ds = AsfBenevDataSource(tmp_path, enabled=True)
+
+    monkeypatch.setattr(
+        ds,
+        "load_param_benev",
+        lambda: pd.DataFrame(
+            [
+                {"ID": pd.NA, "Benevole": "Unknown"},
+                {"ID": 7, "Benevole": "Alice", "Nom": "Dupont", "Prenom": "Alice", "Prenom_Court": "Ali"},
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        ds,
+        "_get",
+        lambda path, params=None: [{"volunteer_id": 7, "date": "2026-01-20", "start_time": "08:00", "end_time": "09:00"}]
+        if path == "integrations/availabilities/"
+        else [],
+    )
+
+    out = ds.load_benevoles_df(param_benev=None)
+    assert len(out) == 1
+    assert out.iloc[0]["Benevole"] == "Alice"
+
+
+def test_asf_benev_fetch_events_and_push_event(monkeypatch, tmp_path):
+    monkeypatch.setenv("ASF_BENEV_API_URL", "https://benev.example.test/api")
+    ds = AsfBenevDataSource(tmp_path, enabled=True)
+
+    captured: dict[str, object] = {}
+    def _fake_get(path, params=None):
+        captured["get"] = (path, params)
+        return {"results": [{"id": 1}]}
+
+    def _fake_post(path, payload):
+        captured["post"] = (path, payload)
+        return {"ok": True}
+
+    monkeypatch.setattr(ds, "_get", _fake_get)
+    monkeypatch.setattr(ds, "_post", _fake_post)
+
+    events = ds.fetch_events(direction="out", status="pending", source="scheduler")
+    out = ds.push_event("planning.updated", {"week": 4}, source="scheduler", target="benev", external_id="x")
+
+    assert events == [{"id": 1}]
+    assert out == {"ok": True}
+    assert captured["get"] == ("integrations/events/", {"direction": "out", "status": "pending", "source": "scheduler"})
+    assert captured["post"][0] == "integrations/events/"

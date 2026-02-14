@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import sys
 import types
+import importlib
 
 from asf_app.ui.ui_communication import outlook
 
@@ -133,3 +134,48 @@ def test_create_outlook_windows_returns_false_on_dispatch_error(monkeypatch):
     )
 
     assert ok is False
+
+
+def test_create_outlook_windows_handles_signature_read_error(monkeypatch):
+    class _MailWithBadSignature(_FakeMail):
+        @property
+        def HTMLBody(self):
+            raise OSError("signature unavailable")
+
+        @HTMLBody.setter
+        def HTMLBody(self, value):
+            self._html_value = value
+
+    mail = _MailWithBadSignature()
+    _install_fake_win32com(monkeypatch, mail)
+    ok = outlook._create_outlook_windows(
+        to_list=["a@x.com"],
+        cc_list=[],
+        bcc_list=[],
+        subject="Planning",
+        body_html="<p>Body</p>",
+        attachments=[],
+        use_signature=True,
+    )
+    assert ok is True
+    assert "<p>Body</p>" in getattr(mail, "_html_value", "")
+
+
+def test_outlook_import_extends_windows_errors_with_pywintypes(monkeypatch):
+    module_name = "asf_app.ui.ui_communication.outlook"
+    original = sys.modules.get(module_name)
+
+    class _ComError(Exception):
+        pass
+
+    fake_pywintypes = types.ModuleType("pywintypes")
+    fake_pywintypes.com_error = _ComError
+    monkeypatch.setitem(sys.modules, "pywintypes", fake_pywintypes)
+    sys.modules.pop(module_name, None)
+    try:
+        reloaded = importlib.import_module(module_name)
+        assert _ComError in reloaded.OUTLOOK_WINDOWS_ERRORS
+    finally:
+        sys.modules.pop(module_name, None)
+        if original is not None:
+            sys.modules[module_name] = original

@@ -59,3 +59,21 @@ def test_append_row_to_sheet_appends_known_columns_only(tmp_path, monkeypatch):
     assert len(out) == 2
     assert out.iloc[1]["A"] == "z"
     assert out.iloc[1]["B"] == ""
+
+
+def test_save_excel_sheet_handles_automation_exception_and_falls_back(tmp_path, monkeypatch):
+    import utils.excel_automation as ea
+
+    path = tmp_path / "automation_error.xlsx"
+    pd.DataFrame([{"A": "old"}]).to_excel(path, sheet_name="Data", index=False)
+    monkeypatch.setattr(
+        ea,
+        "write_sheet_table",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    monkeypatch.setattr(fs.cp, "sync_local_file_to_onedrive", lambda _p: None)
+
+    fs.save_excel_sheet(path, "Data", pd.DataFrame([{"A": "new"}]))
+
+    out = pd.read_excel(path, sheet_name="Data")
+    assert out.iloc[0]["A"] == "new"

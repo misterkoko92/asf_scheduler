@@ -58,3 +58,55 @@ def test_scheduler_requires_ortools(monkeypatch):
     scheduler = Scheduler()
     with pytest.raises(RuntimeError):
         scheduler.run()
+
+
+def test_scheduler_run_strict_schema_raises_on_invalid(monkeypatch):
+    monkeypatch.setenv("ASF_STRICT_SCHEMA", "1")
+    monkeypatch.setattr(
+        core_scheduler,
+        "solve_planning_ortools",
+        lambda **kwargs: (pd.DataFrame([{"Date_Vol": "01/01/2025"}]), pd.DataFrame(), {"status": "OPTIMAL"}),
+    )
+    monkeypatch.setattr(core_scheduler, "normalize_planning_df", lambda df: df)
+    monkeypatch.setattr(core_scheduler, "validate_planning_df", lambda _df: ["missing columns"])
+
+    scheduler = Scheduler()
+    with pytest.raises(ValueError, match="Planning schema invalid"):
+        scheduler.run()
+
+
+def test_scheduler_run_tolerates_run_stats_dump_error(monkeypatch):
+    planning_raw = pd.DataFrame(
+        [
+            {
+                "DATE": "01/01/2025",
+                "HEURE VOL": "10:00",
+                "NUMERO VOL": "AF 1234",
+                "IATA": "DLA",
+                "BE_Num": "250001",
+                "NOMBRE COLIS": 1,
+                "BE_Poids_Equiv": 1,
+                "BENEVOLE": "Dupont",
+                "ID": "1",
+            }
+        ]
+    )
+    monkeypatch.setattr(
+        core_scheduler,
+        "solve_planning_ortools",
+        lambda **kwargs: (
+            planning_raw,
+            pd.DataFrame([{"ok": True}]),
+            {"status": "OPTIMAL", "nb_be_total": 1, "nb_be_envoyes": 1},
+        ),
+    )
+    monkeypatch.setattr(
+        core_scheduler.json,
+        "dump",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("boom")),
+    )
+
+    scheduler = Scheduler()
+    planning_df, bilan_df = scheduler.run()
+    assert not planning_df.empty
+    assert not bilan_df.empty

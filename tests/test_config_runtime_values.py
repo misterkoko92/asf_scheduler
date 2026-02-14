@@ -38,3 +38,10 @@ def test_config_ignores_invalid_or_negative_env_values(monkeypatch):
 
     assert cfg.DUREE_MISSION_HEURES == 3.0
     assert cfg.MIN_HOURS_BETWEEN_FLIGHTS == 3.0
+
+
+def test_config_summary_contains_core_values():
+    cfg = _reload_config()
+    summary = cfg.get_config_summary()
+    assert "MAX_BE_PER_FLIGHT" in summary
+    assert "MAX_EQUIV_PER_VOLUNTEER" in summary

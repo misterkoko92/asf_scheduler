@@ -10,6 +10,7 @@ def test_clean_list_variants():
     assert outlook._clean_list(None) == []
     assert outlook._clean_list("a@x.com ; b@x.com, c@x.com") == ["a@x.com", "b@x.com", "c@x.com"]
     assert outlook._clean_list(["a@x.com", " ", None]) == ["a@x.com", "None"]
+    assert outlook._clean_list(("a@x.com",)) == []
 
 
 def test_create_outlook_draft_unsupported_system(monkeypatch):
@@ -80,3 +81,32 @@ def test_create_outlook_mac_returns_false_on_oserror(monkeypatch):
     )
 
     assert ok is False
+
+
+def test_create_outlook_mac_success_with_attachments(monkeypatch):
+    captured: dict[str, str] = {}
+
+    class _Res:
+        returncode = 0
+        stderr = ""
+        stdout = "ok"
+
+    def _fake_run(cmd, capture_output, text):
+        _ = capture_output, text
+        captured["cmd"] = str(cmd)
+        captured["script"] = str(cmd[-1])
+        return _Res()
+
+    monkeypatch.setattr(outlook.subprocess, "run", _fake_run)
+    ok = outlook._create_outlook_mac(
+        to_list=["a@x.com"],
+        cc_list=["b@x.com"],
+        bcc_list=["c@x.com"],
+        subject='Sujet "test"',
+        body_html="<p>Body</p>",
+        attachments=["/tmp/a.pdf", "/tmp/b.pdf"],
+        use_signature=True,
+    )
+    assert ok is True
+    assert "a.pdf" in captured["script"]
+    assert "b.pdf" in captured["script"]

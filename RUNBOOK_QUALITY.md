@@ -3,11 +3,10 @@
 ## Objectif
 Maintenir des garde-fous techniques stables (lint, typage, tests, securite) sans casser le delivery.
 
-## Etat de reference (2026-02-13)
-- `pytest -q`: `514 passed`
-- Couverture perimetre lot hardening (`asf_app + scheduler + utils`): `85%`
-- Dashboard global (incluant `loaders`): `83.64%`
-- Gates qualite: `ruff`, `mypy`, `coverage`, `secrets` = `pass`
+## Etat de reference (2026-02-14)
+- `pytest -q`: `1015 passed`
+- Dashboard global (incluant `loaders`): `99.61%`
+- Gates qualite: `mypy`, `coverage`, `secrets` = `pass`; `ruff` = `fail` (dette style residuelle)
 
 ## Frequence
 - Quotidien (avant merge): checks locaux rapides.
@@ -43,8 +42,9 @@ Fichiers mis a jour:
 
 ## Ratchet Coverage
 - Seuil CI courant: `75%`.
-- Niveau observe: `83.64%` (dashboard global) / `85%` (perimetre hardening).
-- Cible suivante: `80%` (CI) puis `85%` quand stable.
+- Niveau observe: `99.61%` (dashboard global).
+- Decision de passe: arret des lots coverage purs (les lignes restantes sont a faible ROI).
+- Cible suivante: stabiliser `ruff` puis monter progressivement le seuil CI (`80%` puis `85%`) sans casser le delivery.
 - Le ratchet se fait uniquement quand le niveau observe est durablement au-dessus de la cible.
 
 ## Liens

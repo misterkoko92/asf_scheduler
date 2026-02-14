@@ -6,6 +6,7 @@ from datetime import date, datetime
 import pandas as pd
 from openpyxl import Workbook, load_workbook
 
+import asf_app.services.export_service as es
 import scheduler.config_paths as cp
 import utils.excel_automation as excel_automation
 from asf_app.services.export_service import (
@@ -13,7 +14,10 @@ from asf_app.services.export_service import (
     _apply_planning_layout,
     _apply_routing_fallback_from_vols,
     _archive_latest_planning_if_needed,
+    _build_export_result_skip_versioning,
+    _build_export_workbook_context,
     _build_bene_display_map,
+    _clear_worksheet_tables,
     _collect_existing_planning_versions,
     _create_minimal_workbook,
     _export_pdf_with_warning,
@@ -22,12 +26,16 @@ from asf_app.services.export_service import (
     _format_bene_display,
     _friday_previous_week,
     _increment_q1_if_requested,
+    _load_workbook_with_minimal_fallback,
     _mag_lookup_keys,
+    _mag_sheet_names,
     _normalize_vol_key,
     _populate_planning_sheet,
     _prepare_export_dataframe,
     _prepare_output_workbook_path,
     _reset_planning_grid,
+    _resolve_target_sheets,
+    _resolve_template,
     _resolve_benevoles_export_dataframe,
     _resolve_depart_mag_date,
     _resolve_target_planning_path,
@@ -39,6 +47,7 @@ from asf_app.services.export_service import (
     _week_year_from_ws_plan,
     _write_dataframe_to_sheet,
     _write_planning_row,
+    export_planning_excel,
 )
 
 
@@ -52,6 +61,44 @@ def test_create_minimal_workbook_has_expected_sheets(tmp_path):
     assert "Export planning" in wb.sheetnames
     assert "Data Vols" in wb.sheetnames
     assert "Data Benevoles" in wb.sheetnames
+
+
+def test_resolve_template_prefers_onedrive_maquette_when_present(monkeypatch, tmp_path):
+    root = tmp_path / "onedrive"
+    maquette = root / "Planning MAB" / "ASFmm PLANNING 2025" / "aaSOURCE" / "Planning-maquette.xlsx"
+    maquette.parent.mkdir(parents=True, exist_ok=True)
+    maquette.touch()
+    monkeypatch.setattr(es, "get_onedrive_root", lambda: root)
+    monkeypatch.setattr(cp, "PLANNING_TEMPLATE", tmp_path / "fallback.xlsx")
+
+    assert _resolve_template() == maquette
+
+
+def test_resolve_template_falls_back_to_project_template(monkeypatch, tmp_path):
+    root = tmp_path / "onedrive"
+    fallback = tmp_path / "fallback.xlsx"
+    fallback.touch()
+    monkeypatch.setattr(es, "get_onedrive_root", lambda: root)
+    monkeypatch.setattr(cp, "PLANNING_TEMPLATE", fallback)
+
+    assert _resolve_template() == fallback
+
+
+def test_load_workbook_with_minimal_fallback_creates_file(tmp_path):
+    out = tmp_path / "missing.xlsx"
+    wb = _load_workbook_with_minimal_fallback(out, week=4, year=2026)
+    assert out.exists()
+    assert "Planning SXX" in wb.sheetnames
+
+
+def test_resolve_target_sheets_creates_missing_tabs():
+    wb = Workbook()
+    wb.active.title = "Main"
+    ws_plan, ws_export, ws_vols, ws_bene = _resolve_target_sheets(wb)
+    assert ws_plan.title == "Main"
+    assert ws_export.title == "Export planning"
+    assert ws_vols.title == "Data Vols"
+    assert ws_bene.title == "Data Benevoles"
 
 
 def test_week_year_from_ws_plan_datetime_value():
@@ -79,6 +126,16 @@ def test_week_year_from_ws_plan_invalid_fallback():
 
     week, year = _week_year_from_ws_plan(ws, fallback_week=5, fallback_year=2027)
     assert (week, year) == (5, 2027)
+
+
+def test_week_year_from_ws_plan_tolerates_coerce_errors(monkeypatch):
+    wb = Workbook()
+    ws = wb.active
+    ws["A1"] = "bad-date"
+    monkeypatch.setattr(es, "coerce_datetime", lambda *_a, **_k: (_ for _ in ()).throw(TypeError("boom")))
+
+    week, year = _week_year_from_ws_plan(ws, fallback_week=8, fallback_year=2030)
+    assert (week, year) == (8, 2030)
 
 
 def test_extract_version_from_planning_name_new_format():
@@ -731,3 +788,326 @@ def test_update_mag_central_dates_for_export_openpyxl_fallback(tmp_path, monkeyp
     assert ws2.cell(row=2, column=cp.MAG_CENTRAL_COL_BENEV).value == "DUPONT"
     assert ws2.cell(row=2, column=cp.MAG_CENTRAL_COL_VOL).value == "AF123"
     assert ws2.cell(row=2, column=cp.MAG_CENTRAL_COL_HEURE).value == "11h30"
+
+
+def test_write_export_workbook_data_raises_when_saved_workbook_is_invalid(monkeypatch, tmp_path):
+    wb = Workbook()
+    ws_plan = wb.active
+    ws_export = wb.create_sheet("Export planning")
+    ws_vols = wb.create_sheet("Data Vols")
+    ws_bene = wb.create_sheet("Data Benevoles")
+    out_path = tmp_path / "out.xlsx"
+
+    monkeypatch.setattr(es, "_populate_planning_sheet", lambda *_a, **_k: None)
+    monkeypatch.setattr(es, "_apply_planning_layout", lambda *_a, **_k: None)
+    monkeypatch.setattr(es, "_resolve_benevoles_export_dataframe", lambda *_a, **_k: None)
+    monkeypatch.setattr(es, "load_workbook", lambda *_a, **_k: (_ for _ in ()).throw(OSError("bad")))
+
+    try:
+        es._write_export_workbook_data(
+            wb=wb,
+            ws_plan=ws_plan,
+            ws_export=ws_export,
+            ws_vols=ws_vols,
+            ws_bene=ws_bene,
+            out_path=out_path,
+            week=4,
+            year=2026,
+            dfp=pd.DataFrame([{"DATE": pd.Timestamp("2026-01-20")}]),
+            df_vols=pd.DataFrame(),
+            df_dispos=pd.DataFrame(),
+            df_parambenev=pd.DataFrame(),
+            benev_path=None,
+            create_tables=False,
+        )
+        raised = False
+    except RuntimeError:
+        raised = True
+    assert raised is True
+
+
+def test_save_sync_and_move_output_falls_back_to_save_on_move_error(tmp_path, monkeypatch):
+    wb = Workbook()
+    wb.active["A1"] = "x"
+    out_path = tmp_path / "tmp.xlsx"
+    target_path = tmp_path / "final.xlsx"
+    wb.save(out_path)
+
+    monkeypatch.setattr(es, "is_graph_onedrive", lambda: False)
+    monkeypatch.setattr(es.shutil, "move", lambda *_a, **_k: (_ for _ in ()).throw(OSError("boom")))
+    moved = _save_sync_and_move_planning_output(
+        wb,
+        out_path=out_path,
+        target_path=target_path,
+        year_final=2026,
+    )
+    assert moved == target_path
+    assert target_path.exists()
+
+
+def test_archive_latest_planning_adds_suffix_when_destination_already_exists(tmp_path):
+    planning_dir = tmp_path / "planning"
+    planning_dir.mkdir(parents=True, exist_ok=True)
+    current = planning_dir / "ASFmm - PLANNING SEMAINE 2026-04-03.xlsx"
+    current.touch()
+    history = planning_dir / "Historique"
+    history.mkdir(parents=True, exist_ok=True)
+    (history / current.name).touch()
+
+    _archive_latest_planning_if_needed(
+        increment_version=False,
+        max_version=3,
+        existing_files=[current],
+        planning_dir_final=planning_dir,
+        week_final=4,
+        year_final=2026,
+    )
+    assert (history / "ASFmm - PLANNING SEMAINE 2026-04-03-2.xlsx").exists()
+
+
+def test_set_q1_version_and_increment_helpers_tolerate_bad_cells():
+    class _BadCell:
+        @property
+        def value(self):
+            return "x"
+
+        @value.setter
+        def value(self, _val):
+            raise ValueError("boom")
+
+    class _BadSheet:
+        def __getitem__(self, _key):
+            return _BadCell()
+
+    bad = _BadSheet()
+    _set_q1_version(bad, 5)
+    _increment_q1_if_requested(bad, increment_version=True)
+
+
+def test_export_planning_excel_routes_skip_or_versioned_paths(monkeypatch, tmp_path):
+    wb = Workbook()
+    ws_plan = wb.active
+    ws_export = wb.create_sheet("Export planning")
+    ws_vols = wb.create_sheet("Data Vols")
+    ws_bene = wb.create_sheet("Data Benevoles")
+    out = tmp_path / "out.xlsx"
+
+    skip_values = [True, False]
+
+    def _fake_context(**_k):
+        return (out, skip_values.pop(0), [], wb, ws_plan, ws_export, ws_vols, ws_bene)
+
+    monkeypatch.setattr(es, "_build_export_workbook_context", _fake_context)
+    monkeypatch.setattr(es, "_prepare_export_rows", lambda **_k: (pd.DataFrame([{"DATE": pd.Timestamp("2026-01-20")}]), "disabled"))
+    monkeypatch.setattr(es, "_write_export_workbook_data", lambda **_k: (4, 2026))
+    monkeypatch.setattr(
+        es,
+        "_build_export_result_skip_versioning",
+        lambda **_k: es.ExportResult(output_path=out, pdf_path=None, mag_write_method="disabled", warnings=["skip"]),
+    )
+    monkeypatch.setattr(
+        es,
+        "_build_export_result_versioned",
+        lambda **_k: es.ExportResult(output_path=out, pdf_path=None, mag_write_method="excel", warnings=["versioned"]),
+    )
+
+    skip_res = export_planning_excel(
+        pd.DataFrame([{"x": 1}]),
+        4,
+        2026,
+        skip_versioning=True,
+    )
+    assert skip_res.warnings == ["skip"]
+
+    versioned_res = export_planning_excel(
+        pd.DataFrame([{"x": 1}]),
+        4,
+        2026,
+        skip_versioning=False,
+    )
+    assert versioned_res.warnings == ["versioned"]
+
+
+def test_friday_previous_week_returns_none_on_invalid_values():
+    assert _friday_previous_week("bad", 2026) is None
+    assert _friday_previous_week(99, 2026) is None
+
+
+def test_mag_sheet_names_fallback_to_default_or_active():
+    wb = Workbook()
+    wb.active.title = "Main"
+    assert _mag_sheet_names(wb) == ["Main"]
+
+    wb2 = Workbook()
+    wb2.active.title = cp.SHEET_MAG_CENTRAL
+    assert _mag_sheet_names(wb2) == [cp.SHEET_MAG_CENTRAL]
+
+
+def test_find_mag_row_returns_none_for_empty_key_or_missing_index():
+    assert _find_mag_row(be_key="", mag_sheet_names=["MAG CENTRAL"], mag_indexes={}, preferred_year=2026) == (None, None)
+    assert _find_mag_row(
+        be_key="260001",
+        mag_sheet_names=["MAG CENTRAL 2026"],
+        mag_indexes={"MAG CENTRAL 2026": {}},
+        preferred_year=2026,
+    ) == (None, None)
+
+
+def test_safe_text_tolerates_pd_isna_type_error(monkeypatch):
+    class _Obj:
+        def __str__(self):
+            return "  value  "
+
+    monkeypatch.setattr(es.pd, "isna", lambda _v: (_ for _ in ()).throw(TypeError("boom")))
+    assert _safe_text(_Obj()) == "value"
+
+
+def test_clear_worksheet_tables_tolerates_invalid_setter():
+    class _BadWs:
+        def __init__(self):
+            object.__setattr__(self, "_tables", 1)
+
+        def __setattr__(self, name, value):
+            if name == "_tables":
+                raise TypeError("boom")
+            object.__setattr__(self, name, value)
+
+    _clear_worksheet_tables(_BadWs())
+
+
+def test_update_mag_central_dates_returns_no_updates_when_no_match(tmp_path, monkeypatch):
+    path = tmp_path / "tdb.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "MAG CENTRAL 2026"
+    ws["A1"] = "N° BE"
+    ws["A2"] = "260001"
+    wb.save(path)
+
+    monkeypatch.setattr(cp, "sync_local_file_to_onedrive", lambda *_args, **_kwargs: None)
+    df_export = pd.DataFrame([{"BE_KEY": "999999", "DATE": pd.Timestamp("2026-01-05")}])
+    used_dates, method = _update_mag_central_dates_for_export(
+        df_export=df_export,
+        week=1,
+        year=2026,
+        tdb_source_path=path,
+    )
+    assert used_dates == {}
+    assert method == "no_updates"
+
+
+def test_archive_latest_planning_ignores_move_errors(tmp_path, monkeypatch):
+    planning_dir = tmp_path / "planning"
+    planning_dir.mkdir(parents=True, exist_ok=True)
+    current = planning_dir / "ASFmm - PLANNING SEMAINE 2026-04-03.xlsx"
+    current.touch()
+    monkeypatch.setattr(es.shutil, "move", lambda *_a, **_k: (_ for _ in ()).throw(OSError("boom")))
+
+    _archive_latest_planning_if_needed(
+        increment_version=False,
+        max_version=3,
+        existing_files=[current],
+        planning_dir_final=planning_dir,
+        week_final=4,
+        year_final=2026,
+    )
+    assert current.exists()
+
+
+def test_write_export_workbook_data_ignores_title_value_error(monkeypatch, tmp_path):
+    class _BadTitleSheet:
+        def __init__(self):
+            self._title = "Planning SXX"
+
+        @property
+        def title(self):
+            return self._title
+
+        @title.setter
+        def title(self, _value):
+            raise ValueError("bad title")
+
+    wb = Workbook()
+    ws_export = wb.active
+    ws_vols = wb.create_sheet("Data Vols")
+    ws_bene = wb.create_sheet("Data Benevoles")
+    out_path = tmp_path / "out.xlsx"
+    bad_ws_plan = _BadTitleSheet()
+
+    monkeypatch.setattr(es, "_reset_planning_grid", lambda *_a, **_k: None)
+    monkeypatch.setattr(es, "_populate_planning_sheet", lambda *_a, **_k: None)
+    monkeypatch.setattr(es, "_apply_planning_layout", lambda *_a, **_k: None)
+    monkeypatch.setattr(es, "_resolve_benevoles_export_dataframe", lambda *_a, **_k: None)
+    monkeypatch.setattr(es, "load_workbook", lambda *_a, **_k: Workbook())
+    monkeypatch.setattr(es, "_week_year_from_ws_plan", lambda *_a, **_k: (10, 2030))
+
+    wk, yr = es._write_export_workbook_data(
+        wb=wb,
+        ws_plan=bad_ws_plan,
+        ws_export=ws_export,
+        ws_vols=ws_vols,
+        ws_bene=ws_bene,
+        out_path=out_path,
+        week=4,
+        year=2026,
+        dfp=pd.DataFrame([{"DATE": pd.Timestamp("2026-01-20")}]),
+        df_vols=pd.DataFrame(),
+        df_dispos=pd.DataFrame(),
+        df_parambenev=pd.DataFrame(),
+        benev_path=None,
+        create_tables=False,
+    )
+    assert (wk, yr) == (10, 2030)
+
+
+def test_build_export_workbook_context_adds_warning_when_template_missing(monkeypatch, tmp_path):
+    out_path = tmp_path / "out.xlsx"
+    wb = Workbook()
+    ws_plan = wb.active
+    ws_export = wb.create_sheet("Export planning")
+    ws_vols = wb.create_sheet("Data Vols")
+    ws_bene = wb.create_sheet("Data Benevoles")
+
+    monkeypatch.setattr(es, "_resolve_template", lambda: tmp_path / "missing-template.xlsx")
+    monkeypatch.setattr(es, "_prepare_output_workbook_path", lambda **_k: (out_path, False))
+    monkeypatch.setattr(es, "_load_workbook_with_minimal_fallback", lambda *_a, **_k: wb)
+    monkeypatch.setattr(es, "_resolve_target_sheets", lambda _wb: (ws_plan, ws_export, ws_vols, ws_bene))
+
+    context = _build_export_workbook_context(
+        week=4,
+        year=2026,
+        output_path=None,
+        output_dir=None,
+        skip_versioning=False,
+    )
+    warnings = context[2]
+    assert any("Maquette introuvable" in w for w in warnings)
+
+
+def test_build_export_result_skip_versioning_increments_and_exports_pdf(monkeypatch, tmp_path):
+    out_path = tmp_path / "planning.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws["Q1"] = 0
+    warnings: list[str] = []
+
+    monkeypatch.setattr(es, "is_graph_onedrive", lambda: False)
+
+    def _pdf_exporter(_src, dst):
+        dst.write_text("pdf", encoding="utf-8")
+        return dst
+
+    result = _build_export_result_skip_versioning(
+        wb=wb,
+        ws_plan=ws,
+        out_path=out_path,
+        increment_version=True,
+        generate_pdf=True,
+        pdf_exporter=_pdf_exporter,
+        warnings=warnings,
+        mag_write_method="excel",
+    )
+
+    assert result.output_path == out_path
+    assert result.pdf_path == out_path.with_suffix(".pdf")
+    assert ws["Q1"].value == 1

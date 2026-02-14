@@ -408,3 +408,185 @@ def test_render_tab_inputs_refresh_button_triggers_refresh(monkeypatch, tmp_path
 
     ui_inputs.render_tab_inputs()
     assert refreshed["count"] == 1
+
+
+def test_load_files_success_assigns_expected_dataframes(monkeypatch, tmp_path):
+    state = _build_state(tmp_path)
+    monkeypatch.setattr(
+        ui_inputs,
+        "load_tdb",
+        lambda *_a, **_k: SimpleNamespace(
+            df_be=pd.DataFrame([{"x": 1}]),
+            df_param_be=pd.DataFrame([{"x": 1}]),
+            df_param_dest=pd.DataFrame([{"Dest_IATA": "RUN"}]),
+        ),
+    )
+    monkeypatch.setattr(
+        ui_inputs,
+        "load_benev",
+        lambda *_a, **_k: SimpleNamespace(
+            df_param_benev=pd.DataFrame([{"ID": 1}]),
+            df_benev=pd.DataFrame([{"Nom": "A"}]),
+        ),
+    )
+    monkeypatch.setattr(ui_inputs, "load_vols", lambda *_a, **_k: pd.DataFrame([{"Numero_Vol": "AF652"}]))
+
+    ui_inputs.load_tdb_file(state, force=True)
+    ui_inputs.load_benev_file(state, force=True)
+    ui_inputs.load_vols_file(state, force=True)
+
+    assert not state.df_be.empty
+    assert not state.df_param_be.empty
+    assert not state.df_param_dest.empty
+    assert not state.df_param_benev.empty
+    assert not state.df_benev.empty
+    assert not state.df_vols.empty
+
+
+def test_overwrite_tmp_file_resets_tdb_and_benev_and_handles_errors(monkeypatch, tmp_path):
+    stub = _StubSt()
+    monkeypatch.setattr(ui_inputs, "st", stub)
+    monkeypatch.setattr(ui_inputs.cp, "sync_local_file_to_onedrive", lambda _p: None)
+    monkeypatch.setattr(ui_inputs, "sync_state_paths_to_engine", lambda _s: None)
+    state = _build_state(tmp_path)
+    state.tdb_tmp.write_bytes(b"old")
+    state.benev_tmp.write_bytes(b"old")
+    state.df_be = pd.DataFrame([{"x": 1}])
+    state.df_param_be = pd.DataFrame([{"x": 1}])
+    state.df_param_dest = pd.DataFrame([{"x": 1}])
+    state.df_benev = pd.DataFrame([{"x": 1}])
+    state.df_param_benev = pd.DataFrame([{"x": 1}])
+
+    class Upload:
+        def read(self):
+            return b"new"
+
+    ui_inputs.overwrite_tmp_file(Upload(), state, "tdb", lambda _s, force=False: None)
+    ui_inputs.overwrite_tmp_file(Upload(), state, "benev", lambda _s, force=False: None)
+    assert state.df_be is None
+    assert state.df_param_be is None
+    assert state.df_param_dest is None
+    assert state.df_benev is None
+    assert state.df_param_benev is None
+
+    monkeypatch.setattr("builtins.open", lambda *_a, **_k: (_ for _ in ()).throw(OSError("boom")))
+    ui_inputs.overwrite_tmp_file(Upload(), state, "vols", lambda _s, force=False: None)
+    assert any("Erreur mise à jour TMP" in msg for msg in stub.errors)
+
+
+def test_refresh_from_onedrive_resets_benev_branch(monkeypatch, tmp_path):
+    stub = _StubSt()
+    monkeypatch.setattr(ui_inputs, "st", stub)
+    monkeypatch.setattr(ui_inputs, "is_graph_onedrive", lambda: False)
+    monkeypatch.setattr(ui_inputs, "sync_state_paths_to_engine", lambda _state: None)
+    copied = tmp_path / "PLANNING_BENEVOLES.xlsx"
+    copied.write_bytes(b"x")
+    monkeypatch.setattr(ui_inputs, "ensure_tmp_file", lambda *_a, **_k: copied)
+    state = _build_state(tmp_path)
+    state.df_benev = pd.DataFrame([{"x": 1}])
+    state.df_param_benev = pd.DataFrame([{"x": 1}])
+    src = tmp_path / "src.xlsx"
+    src.write_bytes(b"x")
+
+    ui_inputs.refresh_from_onedrive(state, src, "benev", lambda _s, force=False: None)
+    assert state.df_benev is None
+    assert state.df_param_benev is None
+
+
+def test_render_tdb_and_benev_panels_cover_refresh_upload_and_errors(monkeypatch, tmp_path):
+    stub = _StubSt()
+    stub.set_button_sequence("🔄 Recharger TDB depuis OneDrive", [True])
+    stub.set_button_sequence("🔄 Recharger Bénévoles depuis OneDrive", [True])
+    monkeypatch.setattr(ui_inputs, "st", stub)
+    monkeypatch.setattr(ui_inputs, "pretty_mtime", lambda _p: "N/A")
+    monkeypatch.setattr(ui_inputs, "is_graph_onedrive", lambda: True)
+    monkeypatch.setattr(ui_inputs, "get_tableau_de_bord_src", lambda: Path("/src/TABLEAU_DE_BORD.xlsx"))
+    monkeypatch.setattr(ui_inputs, "get_planning_benevoles_src", lambda: Path("/src/PLANNING_BENEVOLES.xlsx"))
+    calls = {"refresh": 0, "overwrite": 0}
+    monkeypatch.setattr(
+        ui_inputs,
+        "refresh_from_onedrive",
+        lambda *_a, **_k: calls.__setitem__("refresh", calls["refresh"] + 1),
+    )
+    monkeypatch.setattr(
+        ui_inputs,
+        "overwrite_tmp_file",
+        lambda *_a, **_k: calls.__setitem__("overwrite", calls["overwrite"] + 1),
+    )
+    monkeypatch.setattr(ui_inputs, "_upload_too_large", lambda *_a, **_k: False)
+    monkeypatch.setattr(ui_inputs, "load_shipments_df", lambda **_k: (_ for _ in ()).throw(ValueError("boom")))
+    monkeypatch.setattr(ui_inputs, "benev_last_message", lambda _p: "none")
+
+    class Upload:
+        size = 10
+
+        def read(self):
+            return b"x"
+
+    stub.set_uploader(Upload())
+    state = _build_state(tmp_path)
+    state.tdb_tmp.write_bytes(b"x")
+    state.benev_tmp.write_bytes(b"x")
+    ui_inputs._render_tdb_panel(state, cloud_mode=False)
+    ui_inputs._render_benev_panel(state, cloud_mode=False)
+
+    assert calls["refresh"] == 2
+    assert calls["overwrite"] == 2
+    assert any("Erreur BE" in msg for msg in stub.errors)
+
+
+def test_render_vols_controls_cover_cache_success_and_api_failures(monkeypatch, tmp_path):
+    stub = _StubSt()
+    stub.set_button_sequence("Charger le dernier cache", [True])
+    stub.set_button_sequence("Appeler l'API Air France", [False, True, True])
+    monkeypatch.setattr(ui_inputs, "st", stub)
+    monkeypatch.setattr(ui_inputs, "get_api_limits", lambda: (100, 1.0))
+    monkeypatch.setattr(ui_inputs, "get_default_time_origin_type", lambda: "P")
+    monkeypatch.setattr(ui_inputs, "get_tmp_dir", lambda: tmp_path)
+    monkeypatch.setattr(ui_inputs.pd, "read_parquet", lambda *_a, **_k: pd.DataFrame([{"Numero_Vol": "AF652"}]))
+
+    cache_path = tmp_path / "vols_api_cache.parquet"
+    cache_path.write_bytes(b"x")
+    state = _build_state(tmp_path)
+    state.api_start_date = date(2026, 2, 16)
+    state.api_end_date = date(2026, 2, 22)
+
+    ui_inputs._render_vols_api_controls(state)
+    assert isinstance(state.df_vols, pd.DataFrame)
+    assert any("Vols chargés depuis cache" in msg for msg in stub.successes)
+
+    monkeypatch.setattr(ui_inputs, "load_vols_api", lambda *_a, **_k: pd.DataFrame([{"Numero_Vol": "AF652"}]))
+    monkeypatch.setattr(
+        pd.DataFrame,
+        "to_parquet",
+        lambda *_a, **_k: (_ for _ in ()).throw(OSError("disk full")),
+    )
+    monkeypatch.setattr(ui_inputs, "store_vols_api_sheet", lambda *_a, **_k: "API_S07")
+    monkeypatch.setattr(ui_inputs, "_try_load_api_sheet_into_tmp_state", lambda *_a, **_k: None)
+    ui_inputs._render_vols_api_controls(state)
+
+    monkeypatch.setattr(ui_inputs, "load_vols_api", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("api down")))
+    ui_inputs._render_vols_api_controls(state)
+    assert any("Erreur API AF" in msg for msg in stub.errors)
+
+
+def test_render_vols_excel_controls_returns_on_large_upload(monkeypatch, tmp_path):
+    stub = _StubSt()
+    monkeypatch.setattr(ui_inputs, "st", stub)
+    called = {"overwrite": 0}
+    monkeypatch.setattr(ui_inputs, "_upload_too_large", lambda *_a, **_k: True)
+    monkeypatch.setattr(
+        ui_inputs,
+        "overwrite_tmp_file",
+        lambda *_a, **_k: called.__setitem__("overwrite", called["overwrite"] + 1),
+    )
+
+    class Upload:
+        size = ui_inputs.MAX_UPLOAD_BYTES + 1
+
+        def read(self):
+            return b"x"
+
+    stub.set_uploader(Upload())
+    ui_inputs._render_vols_excel_controls(_build_state(tmp_path), cloud_mode=True)
+    assert called["overwrite"] == 0

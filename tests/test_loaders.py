@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import builtins
+import importlib
 import logging
 
 import pandas as pd
@@ -134,3 +136,76 @@ def test_load_vols_df_expands_multistop_routes_per_destination(tmp_path):
     assert monday_ssg["Routing"] == "CDG-SSG-DLA"
     assert int(monday_dla["Route_Pos"]) == 2
     assert int(monday_ssg["Route_Pos"]) == 1
+
+
+def test_load_benevoles_casts_numeric_and_tolerates_preview_error(monkeypatch, tmp_path):
+    import loaders.load_benevoles as lb_mod
+
+    df_raw = pd.DataFrame(
+        [
+            {
+                "ID": "12",
+                "Benevole": "Alice",
+                "Date": "19/01/26",
+                "Heure_Arrivee": "08:00",
+                "Heure_Depart": "12:30",
+                "Max_Jours_Semaine": "4",
+                "Max_Exp_Semaine": "7",
+                "Max_Exp_Jour": "2",
+                "Attente_Max_Heures": "5.5",
+            }
+        ]
+    )
+    monkeypatch.setattr(lb_mod, "load_and_normalize", lambda **_kwargs: df_raw.copy())
+    monkeypatch.setattr(
+        pd.DataFrame,
+        "to_string",
+        lambda *args, **kwargs: (_ for _ in ()).throw(TypeError("boom")),
+    )
+
+    out = lb_mod.load_benevoles(planning_path=tmp_path / "dummy.xlsx")
+    assert int(out.iloc[0]["ID"]) == 12
+    assert int(out.iloc[0]["Max_Jours_Semaine"]) == 4
+    assert int(out.iloc[0]["Max_Exp_Semaine"]) == 7
+    assert int(out.iloc[0]["Max_Exp_Jour"]) == 2
+    assert "Attente_Max_Heures_time" in out.columns
+
+
+def test_load_benevoles_handles_missing_date_column(monkeypatch, tmp_path):
+    import loaders.load_benevoles as lb_mod
+
+    df_raw = pd.DataFrame(
+        [
+            {
+                "ID": "12",
+                "Benevole": "Alice",
+                "Heure_Arrivee": "08:00",
+                "Heure_Depart": "09:00",
+            }
+        ]
+    )
+    monkeypatch.setattr(lb_mod, "load_and_normalize", lambda **_kwargs: df_raw.copy())
+    out = lb_mod.load_benevoles(planning_path=tmp_path / "dummy.xlsx")
+    assert "Date_dt" not in out.columns
+    assert out.iloc[0]["Heure_Arrivee"] == "08h00"
+
+
+def test_get_benevoles_cached_fallback_without_streamlit(monkeypatch):
+    import loaders.load_benevoles as lb_mod
+
+    real_import = builtins.__import__
+
+    def _fake_import(name, *args, **kwargs):
+        if name == "streamlit":
+            raise ImportError("streamlit missing")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _fake_import)
+    reloaded = importlib.reload(lb_mod)
+    monkeypatch.setattr(reloaded, "load_benevoles", lambda planning_path=None: pd.DataFrame([{"ok": 1}]))
+
+    out = reloaded.get_benevoles_cached()
+    assert int(out.iloc[0]["ok"]) == 1
+
+    monkeypatch.setattr(builtins, "__import__", real_import)
+    importlib.reload(reloaded)

@@ -12,3 +12,7 @@ def test_applescript_escape_quotes_and_backslashes():
 def test_applescript_escape_newlines():
     assert applescript_escape("a\nb") == "a b"
     assert applescript_escape("a\rb") == "a b"
+
+
+def test_applescript_escape_none_returns_empty():
+    assert applescript_escape(None) == ""

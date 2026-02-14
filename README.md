@@ -199,10 +199,11 @@ source .venv/bin/activate
 python -m pytest
 ```
 
-Snapshot qualité (2026-02-13):
-- `514` tests passés
-- `85%` de couverture sur le périmètre `asf_app + scheduler + utils`
-- dashboard global (incluant `loaders`): voir `QUALITY_DASHBOARD.md`
+Snapshot qualité (2026-02-14):
+- `1015` tests passés
+- `99.61%` de couverture sur le périmètre `asf_app + scheduler + loaders + utils`
+- arrêt volontaire des lots coverage purs sur cette passe (reste faible ROI) ; reprise ciblée en cas de bug/régression
+- dashboard global: voir `QUALITY_DASHBOARD.md`
 
 ## 🏭 Outillage Qualité (P2)
 

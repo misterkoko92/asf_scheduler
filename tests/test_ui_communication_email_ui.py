@@ -294,3 +294,48 @@ def test_render_email_expediteurs_ui_covers_global_and_targeted_send(monkeypatch
     assert any("3 mails Expéditeurs générés" in msg for msg in stub.successes)
     # 1 destination réussit (RUN), 1 échoue (DLA)
     assert any("1 mails générés pour MEDILAB" in msg for msg in stub.successes)
+
+
+def test_render_email_expediteurs_ui_handles_empty_planning(monkeypatch):
+    stub = _StubSt()
+    monkeypatch.setattr(exp_ui, "st", stub)
+
+    exp_ui.render_email_expediteurs_ui(
+        df_comm=pd.DataFrame(),
+        df_paramdest=pd.DataFrame(),
+        df_paramexpediteur=pd.DataFrame([{"Expediteur": "MEDILAB"}]),
+        week=4,
+        year=2026,
+    )
+
+    assert any("Aucun planning communication chargé" in msg for msg in stub.infos)
+
+
+def test_render_email_expediteurs_ui_warns_when_paramexpediteur_missing(monkeypatch):
+    stub = _StubSt()
+    monkeypatch.setattr(exp_ui, "st", stub)
+
+    exp_ui.render_email_expediteurs_ui(
+        df_comm=pd.DataFrame([{"Expediteur": "MEDILAB", "Destination": "RUN"}]),
+        df_paramdest=pd.DataFrame(),
+        df_paramexpediteur=pd.DataFrame(),
+        week=4,
+        year=2026,
+    )
+
+    assert any("ParamExpediteur non chargé" in msg for msg in stub.warnings)
+
+
+def test_render_email_expediteurs_ui_handles_only_asf_sender(monkeypatch):
+    stub = _StubSt()
+    monkeypatch.setattr(exp_ui, "st", stub)
+
+    exp_ui.render_email_expediteurs_ui(
+        df_comm=pd.DataFrame([{"Expediteur": "ASF", "Destination": "RUN"}]),
+        df_paramdest=pd.DataFrame(),
+        df_paramexpediteur=pd.DataFrame([{"Expediteur": "ASF"}]),
+        week=4,
+        year=2026,
+    )
+
+    assert any("Aucun expéditeur externe trouvé" in msg for msg in stub.infos)

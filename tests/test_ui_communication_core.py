@@ -322,3 +322,172 @@ def test_render_tab_communication_session_whatsapp_smoke(monkeypatch):
 
     assert any("Communication pour S4" in msg for msg in stub.successes)
     assert any("Pas de planning PDF trouvé" in msg for msg in stub.warnings)
+
+
+def test_list_local_planning_files_returns_empty_when_base_missing(monkeypatch, tmp_path):
+    monkeypatch.setattr(comm, "get_onedrive_root", lambda: tmp_path)
+    assert comm._list_local_planning_files(2026) == []
+
+
+def test_read_export_planning_returns_empty_when_sheet_is_empty(monkeypatch):
+    monkeypatch.setattr(comm.pd, "read_excel", lambda *args, **kwargs: pd.DataFrame())
+    out = comm._read_export_planning(Path("x.xlsx"))
+    assert out.empty
+
+
+def test_load_session_planning_ui_warns_when_no_available_plan(monkeypatch):
+    stub = _StubSt()
+    monkeypatch.setattr(comm, "st", stub)
+    monkeypatch.setattr(comm, "get_planning_state", lambda: SimpleNamespace(planning=pd.DataFrame()))
+    monkeypatch.setattr(comm, "normalize_planning_df", lambda df: df if df is not None else pd.DataFrame())
+
+    out = comm._load_session_planning_ui()
+    assert out is None
+    assert any("Aucun planning principal" in msg for msg in stub.warnings)
+
+
+def test_load_session_planning_ui_warns_when_selected_simulation_is_empty(monkeypatch):
+    stub = _StubSt()
+    stub.session_state["sim_results"] = {"colis": {"planning_df": pd.DataFrame()}}
+    stub.session_state["sim_active_mode"] = "colis"
+    stub._radio_values["Source session"] = "simulation"
+    monkeypatch.setattr(comm, "st", stub)
+    monkeypatch.setattr(comm, "get_planning_state", lambda: SimpleNamespace(planning=pd.DataFrame([{"x": 1}])))
+    monkeypatch.setattr(comm, "normalize_planning_df", lambda df: df if df is not None else pd.DataFrame())
+
+    out = comm._load_session_planning_ui()
+    assert out is None
+    assert any("planning choisi est vide" in msg.lower() for msg in stub.warnings)
+
+
+def test_load_onedrive_planning_ui_graph_branches(monkeypatch, tmp_path):
+    stub = _StubSt()
+    monkeypatch.setattr(comm, "st", stub)
+    monkeypatch.setattr(comm, "is_graph_onedrive", lambda: True)
+    monkeypatch.setattr(comm, "_list_onedrive_planning_files", lambda _year: [])
+
+    out_empty = comm._load_onedrive_planning_ui()
+    assert out_empty is None
+    assert any("Aucun fichier Excel" in msg for msg in stub.warnings)
+
+    stub_ok = _StubSt()
+    stub_ok._button_values["✅ Valider ce planning"] = True
+    monkeypatch.setattr(comm, "st", stub_ok)
+    monkeypatch.setattr(
+        comm,
+        "_list_onedrive_planning_files",
+        lambda _year: [{"name": "planning.xlsx", "path": "remote/planning.xlsx"}],
+    )
+    monkeypatch.setattr(comm, "get_tmp_dir", lambda: tmp_path)
+    monkeypatch.setattr(comm, "safe_cache_path", lambda root, _remote: root / "planning.xlsx")
+    monkeypatch.setattr(comm.cp, "download_onedrive_file", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(comm, "_read_export_planning", lambda _path: pd.DataFrame([{"A": 1}]))
+
+    out_ok = comm._load_onedrive_planning_ui()
+    assert isinstance(out_ok, pd.DataFrame)
+    assert stub_ok.session_state["comm_onedrive_file_path"] == "remote/planning.xlsx"
+
+
+def test_load_onedrive_planning_ui_local_empty_export_sheet(monkeypatch):
+    stub = _StubSt()
+    stub._button_values["✅ Valider ce planning"] = True
+    monkeypatch.setattr(comm, "st", stub)
+    monkeypatch.setattr(comm, "is_graph_onedrive", lambda: False)
+    monkeypatch.setattr(comm, "_list_local_planning_files", lambda _year: [Path("planning.xlsx")])
+    monkeypatch.setattr(comm, "_read_export_planning", lambda _path: pd.DataFrame())
+
+    out = comm._load_onedrive_planning_ui()
+    assert out is None
+    assert any("Export planning" in msg for msg in stub.errors)
+
+
+def test_select_communication_planning_source_onedrive(monkeypatch):
+    stub = _StubSt()
+    stub._radio_values["comm_source_mode"] = "onedrive"
+    monkeypatch.setattr(comm, "st", stub)
+    monkeypatch.setattr(comm, "_load_session_planning_ui", lambda: pd.DataFrame([{"x": 1}]))
+    monkeypatch.setattr(comm, "_load_onedrive_planning_ui", lambda: pd.DataFrame([{"y": 2}]))
+    out = comm._select_communication_planning_source()
+    assert "y" in out.columns
+
+
+def test_build_enriched_comm_dataframe_handles_shipments_io_error(monkeypatch):
+    monkeypatch.setattr(comm, "build_df_comm", lambda **_kwargs: pd.DataFrame([{"A": 1}]))
+    monkeypatch.setattr(comm, "get_shipments_df_cached", lambda **_kwargs: (_ for _ in ()).throw(OSError("boom")))
+    monkeypatch.setattr(comm, "build_destinataire_mapping", lambda **_kwargs: {})
+    monkeypatch.setattr(comm, "fill_missing_destinataire", lambda df, _map: df.assign(B=2))
+
+    out = comm._build_enriched_comm_dataframe(
+        df_planning=pd.DataFrame([{"x": 1}]),
+        df_paramdest=pd.DataFrame(),
+        df_parambenev=pd.DataFrame(),
+        tdb_path=Path("tdb.xlsx"),
+    )
+    assert list(out.columns) == ["A", "B"]
+
+
+def test_pdf_candidate_helpers_and_attachment_branches(monkeypatch, tmp_path):
+    monkeypatch.setattr(comm, "get_output_remote_dir", lambda year: f"Planning/{year}")
+    monkeypatch.setattr(
+        comm.cp,
+        "list_onedrive_files",
+        lambda *_a, **_k: [{"name": "ASFmm - PLANNING SEMAINE 2026-04-01.pdf"}],
+    )
+    assert len(comm._resolve_pdf_candidates_from_graph(4, 2026)) == 1
+
+    base = tmp_path / "Planning MAB" / "ASFmm PLANNING 2026"
+    base.mkdir(parents=True)
+    (base / "ASFmm - PLANNING SEMAINE 2026-04-01.pdf").write_text("pdf", encoding="utf-8")
+    monkeypatch.setattr(comm, "get_onedrive_root", lambda: tmp_path)
+    assert len(comm._resolve_pdf_candidates_from_local(4, 2026)) == 1
+
+    stub = _StubSt()
+    monkeypatch.setattr(comm, "st", stub)
+    monkeypatch.setattr(comm, "is_graph_onedrive", lambda: True)
+    monkeypatch.setattr(comm, "_resolve_pdf_candidates_from_graph", lambda _w, _y: [])
+    assert comm._resolve_pdf_attachment_path(4, 2026) is None
+
+    monkeypatch.setattr(
+        comm,
+        "_resolve_pdf_candidates_from_graph",
+        lambda _w, _y: [{"name": "p.pdf", "path": ""}],
+    )
+    assert comm._resolve_pdf_attachment_path(4, 2026) is None
+
+    monkeypatch.setattr(comm, "is_graph_onedrive", lambda: False)
+    monkeypatch.setattr(
+        comm,
+        "_resolve_pdf_candidates_from_local",
+        lambda _w, _y: (_ for _ in ()).throw(OSError("boom")),
+    )
+    assert comm._resolve_pdf_attachment_path(4, 2026) is None
+
+
+def test_render_whatsapp_section_warns_when_generation_returns_empty(monkeypatch):
+    class _WaStub(_StubSt):
+        def markdown(self, *_a, **_k):
+            return None
+
+        def code(self, *_a, **_k):
+            return None
+
+        def success(self, msg):
+            self.infos.append(str(msg))
+
+    stub = _WaStub()
+    stub._button_values["Générer les messages WhatsApp"] = True
+    monkeypatch.setattr(comm, "st", stub)
+    monkeypatch.setattr(comm, "generate_whatsapp_messages", lambda _df: [])
+    comm._render_whatsapp_section(pd.DataFrame([{"x": 1}]))
+    assert any("Aucun message généré." in msg for msg in stub.warnings)
+
+
+def test_render_tab_communication_returns_early_when_payload_none(monkeypatch):
+    stub = _RenderStubSt()
+    monkeypatch.setattr(comm, "st", stub)
+    monkeypatch.setattr(comm, "get_state", lambda: SimpleNamespace())
+    monkeypatch.setattr(comm, "get_excel_source_paths", lambda _state: SimpleNamespace(tableau_de_bord=Path("tdb.xlsx")))
+    monkeypatch.setattr(comm, "_build_communication_payload", lambda _paths: None)
+
+    comm.render_tab_communication()
+    assert stub.successes == []

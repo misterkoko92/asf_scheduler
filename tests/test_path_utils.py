@@ -28,3 +28,8 @@ def test_safe_cache_path_handles_backslashes(tmp_path):
     cache_root = tmp_path / "cache"
     out = safe_cache_path(cache_root, "Planning\\Exports\\file.xlsx")
     assert out == cache_root / "Planning" / "Exports" / "file.xlsx"
+
+
+def test_safe_cache_path_rejects_empty_remote_path(tmp_path):
+    with pytest.raises(ValueError, match="remote_path vide"):
+        safe_cache_path(tmp_path / "cache", "")

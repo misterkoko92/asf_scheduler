@@ -2,6 +2,7 @@ import datetime as dt
 import warnings
 
 import pandas as pd
+import utils.datetime_utils as du
 
 from utils.datetime_utils import (
     coerce_datetime,
@@ -184,3 +185,62 @@ def test_parse_date_long_fr_handles_nat_empty_and_short_text():
     assert pd.isna(parse_date_long_fr(pd.NaT))
     assert pd.isna(parse_date_long_fr(""))
     assert pd.isna(parse_date_long_fr("Lundi"))
+
+
+def test_parse_iso_datetime_handles_string_conversion_error():
+    class _BadStr:
+        def __str__(self):
+            raise TypeError("boom")
+
+    assert parse_iso_datetime(_BadStr()) is None
+
+
+def test_format_date_value_and_time_value_handle_strftime_errors():
+    class _BadDate(dt.date):
+        def strftime(self, _fmt):  # type: ignore[override]
+            raise ValueError("boom")
+
+    class _BadTime(dt.time):
+        def strftime(self, _fmt):  # type: ignore[override]
+            raise ValueError("boom")
+
+    assert format_date_value(_BadDate(2026, 1, 23), default="N/A") == "N/A"
+    assert format_time_value(_BadTime(10, 5), default="N/A") == "N/A"
+
+
+def test_format_date_long_fr_handles_day_and_format_exceptions(monkeypatch):
+    class _BadDt:
+        dayofweek = "x"
+
+        def strftime(self, _fmt):
+            raise ValueError("boom")
+
+    monkeypatch.setattr(du, "parse_date_value", lambda *_a, **_k: _BadDt())
+    assert du.format_date_long_fr("dummy") == ""
+
+
+def test_format_heure_hh_mm_falls_back_to_string_when_coerce_fails(monkeypatch):
+    monkeypatch.setattr(du, "coerce_datetime", lambda *_a, **_k: (_ for _ in ()).throw(TypeError("boom")))
+    assert du.format_heure_hh_mm("10:30") == "10h30"
+
+
+def test_parse_date_value_as_date_returns_none_when_date_extraction_fails(monkeypatch):
+    class _BadDateObj:
+        def date(self):
+            raise ValueError("boom")
+
+    monkeypatch.setattr(du, "parse_date_value", lambda *_a, **_k: _BadDateObj())
+    assert du.parse_date_value_as_date("23/01/26") is None
+
+
+def test_parse_time_value_as_time_handles_str_errors_and_blank_values():
+    class _BadStr:
+        def __str__(self):
+            raise TypeError("boom")
+
+    assert parse_time_value_as_time(_BadStr()) is None
+    assert parse_time_value_as_time("   ") is None
+
+
+def test_format_time_hm_loose_keeps_short_values():
+    assert format_time_hm_loose("9") == "9"

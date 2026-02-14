@@ -14,21 +14,25 @@ Solidifier le projet (qualité, sécurité, maintenabilité, évolutivité) sans
 - Fichiers suivis dans le repo (approx): `244`
 - Signaux de complexité (patterns `except/print` dans code + tests): `375`
 
-## État courant (mise à jour 2026-02-13)
-- Tests: `729 passed`
-- Tests collectés: `729` (`pytest --collect-only -q`)
+## État courant (mise à jour 2026-02-14)
+- Tests: `1015 passed`
+- Tests collectés: `1015` (`pytest --collect-only -q`)
 - Couverture locale:
-  - périmètre hardening (`asf_app + scheduler + loaders`): `~91%` (validation `tools/run_quality.py all`)
-  - dashboard global (`asf_app + scheduler + loaders + utils`): `91.46%`
+  - dashboard global (`asf_app + scheduler + loaders + utils`): `99.61%` (source: `QUALITY_DASHBOARD.md`)
 - Qualité statique:
-  - `ruff`: OK (`tools/run_quality.py all`)
-  - `mypy`: OK (`Success: no issues found in 101 source files`)
+  - `ruff`: `fail` (dette style résiduelle hors blocage métier)
+  - `mypy`: `pass`
 - Sécurité:
-  - `tools/scan_secrets.py`: OK (`no suspicious hardcoded secret found`)
-  - `tools/run_security.py secrets`: OK
-  - `tools/run_security.py deps`: skip contrôlé en offline (`ASF_FAIL_ON_OFFLINE_AUDIT=0`)
+  - `tools/scan_secrets.py`: `pass`
+  - `tools/run_security.py secrets`: `pass`
+  - `tools/run_security.py deps`: `not_run` (offline-safe)
 - Hygiène dépôt:
-  - artefacts runtime sortis de l’index Git: `Bilan.xlsx`, `Planning.xlsx`, `engine_run_stats.json`, `test_api/export_vols.xlsx`, `.vscode/settings.json`
+  - artefacts runtime critiques sortis de l’index (`Bilan.xlsx`, `Planning.xlsx`, `engine_run_stats.json`, `test_api/export_vols.xlsx`, `.vscode/settings.json`)
+
+## Décision de clôture passe couverture (2026-02-14)
+- Arrêt volontaire des lots “coverage-only” à `99.61%`.
+- Les lignes restantes sont majoritairement de faible valeur métier (branches défensives/UI/fallbacks difficiles à reproduire de manière fiable).
+- Réouverture coverage ciblée uniquement en cas de bug réel ou de régression sur un module concerné.
 
 ## Backlog priorisé
 1. Audit technique exhaustif (complexité, dette, duplication, robustesse erreurs, sécurité).
@@ -55,8 +59,8 @@ Solidifier le projet (qualité, sécurité, maintenabilité, évolutivité) sans
    - ✅ séquence d’optimisation hiérarchique V2/V3 mutualisée dans `solver_ortools_common.py::run_hierarchical_priority_optimization`  
    - ✅ simplification des solveurs V2/V3 (orchestration locale allégée, comportement inchangé validé par tests)  
    - ⏭️ prochain focus: poursuivre la réduction de duplication spécifique V3 (assignations `z`) pour atteindre un contrat solveur quasi unique
-4. **Couverture résiduelle hors P2/S1 (P3)**  
-   - modules encore faibles (global dashboard): `solver_ortools_v3.py`, `services/planning_exports_service.py`, `ui/ui_communication/email_expediteurs_ui.py`, `services/shipments_update_service.py`, `load_params.py`
+4. **Couverture résiduelle (gelée, P3)**  
+   - passe coverage close à `99.61%`; nouveaux tests uniquement lors d’un besoin métier/régression
 5. **Industrialisation CI avancée (P3)**  
    - monter progressivement le seuil coverage CI (75 -> 80) en gardant la stabilité des releases
    - exploiter le dashboard hebdo (`QUALITY_DASHBOARD.md`) pour piloter les lots coverage
@@ -121,6 +125,7 @@ Solidifier le projet (qualité, sécurité, maintenabilité, évolutivité) sans
 ## Journal d'actions
 | Date/Heure | Action | Résultat |
 |---|---|---|
+| 2026-02-14 | Clôture de la passe couverture: validation locale `1015 passed`, couverture globale `99.61%`, arrêt des tests à faible ROI et bascule sur maintenance/refactor | OK |
 | 2026-02-13 | Q1 multi-lots low-risk: couverture renforcée `load_vols.py` / `load_vols_api.py` (fallbacks parsing, wrappers cache, branches API sheet) | OK |
 | 2026-02-13 | Validation qualité globale: `tools/run_quality.py all` => `729 passed`, couverture globale `91.46%` | OK |
 | 2026-02-13 | Refresh suivi: `tools/quality_dashboard.py --refresh` + `tools/hardening_audit.py` | OK |

@@ -295,3 +295,140 @@ def test_list_files_recursive_filters_suffixes(monkeypatch, tmp_path):
         {"name": "A.xlsx", "path": "root/A.xlsx", "size": 0},
         {"name": "C.xlsm", "path": "root/sub/C.xlsm", "size": 0},
     ]
+
+
+def test_persist_cache_no_change_does_not_write(monkeypatch, tmp_path):
+    class _App:
+        pass
+
+    _, client, cache = _build_client(monkeypatch, tmp_path, app=_App())
+    cache.has_state_changed = False
+    client._persist_cache()
+    assert not client.config.token_cache_path.exists()
+
+
+def test_acquire_and_complete_device_flow_success_paths(monkeypatch, tmp_path):
+    class _App:
+        def get_accounts(self):
+            return [{"id": "acc"}]
+
+        def acquire_token_silent(self, scopes, account):
+            _ = scopes, account
+            return {"token_type": "Bearer"}
+
+        def initiate_device_flow(self, scopes):
+            _ = scopes
+            return {"user_code": "1234", "message": "ok"}
+
+        def acquire_token_by_device_flow(self, flow):
+            _ = flow
+            return {"access_token": "tok"}
+
+    _, client, _ = _build_client(monkeypatch, tmp_path, app=_App())
+    called = {"persist": 0}
+    monkeypatch.setattr(client, "_persist_cache", lambda: called.__setitem__("persist", called["persist"] + 1))
+
+    assert client.acquire_token_silent() is None
+    flow = client.begin_device_flow()
+    assert flow["user_code"] == "1234"
+    assert client.complete_device_flow(flow) == "tok"
+    monkeypatch.setattr(client, "acquire_token_silent", lambda: "tok")
+    assert client.ensure_token(interactive=False) == "tok"
+    assert called["persist"] == 1
+
+
+def test_ensure_remote_dir_empty_and_unexpected_status(monkeypatch, tmp_path):
+    class _App:
+        pass
+
+    odg, client, _ = _build_client(monkeypatch, tmp_path, app=_App())
+    calls = {"count": 0}
+
+    def _fake_post(url, headers, json, timeout):
+        _ = url, headers, json, timeout
+        calls["count"] += 1
+        return _Response(status_code=200)
+
+    monkeypatch.setattr(odg.requests, "post", _fake_post)
+    client._ensure_remote_dir("", "token")
+    client._ensure_remote_dir("a", "token")
+    assert calls["count"] == 1
+
+
+def test_upload_large_missing_upload_url_raises(monkeypatch, tmp_path):
+    class _App:
+        pass
+
+    odg, client, _ = _build_client(monkeypatch, tmp_path, app=_App())
+    monkeypatch.setattr(odg, "SMALL_UPLOAD_LIMIT", 1)
+    local = tmp_path / "big.bin"
+    local.write_bytes(b"abcdefgh")
+    monkeypatch.setattr(client, "ensure_token", lambda interactive=False: "token")
+    monkeypatch.setattr(client, "_ensure_remote_dir", lambda remote_dir, token: None)
+    monkeypatch.setattr(
+        odg.requests,
+        "post",
+        lambda *_a, **_k: _Response(status_code=200, json_data={}),
+    )
+
+    with pytest.raises(RuntimeError):
+        client.upload_file(local, "folder/big.bin")
+
+
+def test_upload_large_chunk_error_and_empty_chunk_break(monkeypatch, tmp_path):
+    class _App:
+        pass
+
+    odg, client, _ = _build_client(monkeypatch, tmp_path, app=_App())
+    monkeypatch.setattr(odg, "SMALL_UPLOAD_LIMIT", 1)
+    local = tmp_path / "big.bin"
+    local.write_bytes(b"abcdefgh")
+    monkeypatch.setattr(client, "ensure_token", lambda interactive=False: "token")
+    monkeypatch.setattr(client, "_ensure_remote_dir", lambda remote_dir, token: None)
+
+    upload_url = "https://upload.example/session"
+    monkeypatch.setattr(
+        odg.requests,
+        "post",
+        lambda *_a, **_k: _Response(status_code=200, json_data={"uploadUrl": upload_url}),
+    )
+    monkeypatch.setattr(
+        odg.requests,
+        "put",
+        lambda *_a, **_k: _Response(status_code=500),
+    )
+    with pytest.raises(requests.HTTPError):
+        client.upload_file(local, "folder/big.bin")
+
+    class _EmptyReader:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            _ = exc_type, exc, tb
+            return False
+
+        def read(self, _size):
+            return b""
+
+    monkeypatch.setattr(odg, "CHUNK_SIZE", 3)
+    monkeypatch.setattr("builtins.open", lambda *_a, **_k: _EmptyReader())
+    monkeypatch.setattr(odg.requests, "put", lambda *_a, **_k: _Response(status_code=202))
+    assert client.upload_file(local, "folder/big.bin") is True
+
+
+def test_list_children_root_directory_url(monkeypatch, tmp_path):
+    class _App:
+        pass
+
+    odg, client, _ = _build_client(monkeypatch, tmp_path, app=_App())
+    monkeypatch.setattr(client, "ensure_token", lambda interactive=False: "token")
+    seen: list[str] = []
+    monkeypatch.setattr(
+        odg.requests,
+        "get",
+        lambda url, headers, timeout: seen.append(url) or _Response(status_code=200, json_data={"value": []}),
+    )
+
+    assert client.list_children("") == []
+    assert seen and seen[0].endswith("/me/drive/root/children")

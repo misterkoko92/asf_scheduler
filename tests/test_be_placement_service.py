@@ -314,3 +314,165 @@ def test_place_be_forced_benevole_capacity_error(monkeypatch):
 
     with pytest.raises(BEPlacementError, match="capacité requise"):
         place_be(planning, "250071", 1, "DLA", None, None, "A")
+
+
+def test_norm_str_none_returns_empty():
+    assert be_service._norm_str(None) == ""
+
+
+def test_flight_capacity_fails_on_benevole_capacity(monkeypatch):
+    monkeypatch.setattr(config, "MAX_BE_PER_FLIGHT", 5)
+    monkeypatch.setattr(config, "MAX_EQUIV_PER_VOLUNTEER", 5)
+    monkeypatch.setattr(config, "MAX_CAPACITE_PAR_VOL", None)
+
+    row = pd.Series({"nb_be": 1, "total_equiv": 5, "benevoles": {"A"}})
+    assert be_service._flight_capacity_ok(row, 1) is False
+
+
+def test_choose_best_benevole_uses_nb_colis_when_equiv_missing(monkeypatch):
+    monkeypatch.setattr(config, "MAX_EQUIV_PER_VOLUNTEER", 50)
+    planning = _planning(
+        [
+            {
+                "Date_Vol": dt.date(2025, 1, 6),
+                "Heure_Vol": "10:00",
+                "Numero_Vol": "100",
+                "Destination": "DLA",
+                "BE_Numero": "250100",
+                "BE_Nb_Colis": 5,
+                "Benevole": "A",
+            },
+            {
+                "Date_Vol": dt.date(2025, 1, 6),
+                "Heure_Vol": "10:00",
+                "Numero_Vol": "100",
+                "Destination": "DLA",
+                "BE_Numero": "250101",
+                "BE_Nb_Colis": 1,
+                "Benevole": "B",
+            },
+        ]
+    )
+    out = be_service._choose_best_benevole_on_flight(planning, dt.date(2025, 1, 6), "10:00", "100", 1)
+    assert out == "B"
+
+
+def test_place_be_manual_without_matching_day_assigns_manuel_vol(monkeypatch):
+    monkeypatch.setattr(config, "MAX_BE_PER_FLIGHT", 5)
+    monkeypatch.setattr(config, "MAX_EQUIV_PER_VOLUNTEER", 100)
+    monkeypatch.setattr(config, "MAX_CAPACITE_PAR_VOL", 100)
+
+    planning = _planning(
+        [
+            {
+                "Date_Vol": dt.date(2025, 1, 1),
+                "Heure_Vol": "10:00",
+                "Numero_Vol": "100",
+                "Destination": "DLA",
+                "BE_Numero": "250001",
+                "BE_Nb_Colis": 2,
+                "BE_Nb_Equiv": 2,
+                "Benevole": "A",
+                "ID": "1",
+            }
+        ]
+    )
+
+    out = be_service._place_be_manual(
+        planning,
+        "250200",
+        1,
+        "DLA",
+        dt.date(2025, 1, 9),
+        dt.time(9, 0),
+        "B",
+    )
+    added = out[out["BE_Numero"] == "250200"].iloc[0]
+    assert added["Numero_Vol"] == "MANUEL"
+
+
+def test_place_be_semi_auto_with_existing_flight_keeps_best_flight_time_when_none(monkeypatch):
+    monkeypatch.setattr(config, "MAX_BE_PER_FLIGHT", 5)
+    monkeypatch.setattr(config, "MAX_EQUIV_PER_VOLUNTEER", 100)
+    monkeypatch.setattr(config, "MAX_CAPACITE_PAR_VOL", 100)
+
+    planning = _planning(
+        [
+            {
+                "Date_Vol": dt.date(2025, 1, 10),
+                "Heure_Vol": "11:30",
+                "Numero_Vol": "300",
+                "Destination": "RUN",
+                "BE_Numero": "250300",
+                "BE_Nb_Colis": 2,
+                "BE_Nb_Equiv": 2,
+                "Benevole": "A",
+                "ID": "1",
+            }
+        ]
+    )
+
+    out = place_be(
+        planning,
+        "250301",
+        1,
+        "RUN",
+        dt.date(2025, 1, 10),
+        None,
+        "",
+    )
+    added = out[out["BE_Numero"] == "250301"].iloc[0]
+    assert added["Numero_Vol"] == "300"
+    assert added["Heure_Vol"] == "11:30"
+
+
+def test_place_be_forced_benevole_no_matching_destination_raises(monkeypatch):
+    monkeypatch.setattr(config, "MAX_BE_PER_FLIGHT", 5)
+    monkeypatch.setattr(config, "MAX_EQUIV_PER_VOLUNTEER", 100)
+    monkeypatch.setattr(config, "MAX_CAPACITE_PAR_VOL", 100)
+
+    planning = _planning(
+        [
+            {
+                "Date_Vol": dt.date(2025, 1, 11),
+                "Heure_Vol": "12:00",
+                "Numero_Vol": "400",
+                "Destination": "RUN",
+                "BE_Numero": "250400",
+                "BE_Nb_Colis": 2,
+                "BE_Nb_Equiv": 2,
+                "Benevole": "A",
+                "ID": "1",
+            }
+        ]
+    )
+
+    with pytest.raises(BEPlacementError, match="Aucun vol compatible"):
+        place_be(planning, "250401", 1, "DLA", None, None, "A")
+
+
+def test_place_be_forced_benevole_success(monkeypatch):
+    monkeypatch.setattr(config, "MAX_BE_PER_FLIGHT", 5)
+    monkeypatch.setattr(config, "MAX_EQUIV_PER_VOLUNTEER", 100)
+    monkeypatch.setattr(config, "MAX_CAPACITE_PAR_VOL", 100)
+
+    planning = _planning(
+        [
+            {
+                "Date_Vol": dt.date(2025, 1, 12),
+                "Heure_Vol": "14:15",
+                "Numero_Vol": "500",
+                "Destination": "DLA",
+                "BE_Numero": "250500",
+                "BE_Nb_Colis": 2,
+                "BE_Nb_Equiv": 2,
+                "Benevole": "A",
+                "ID": "1",
+            }
+        ]
+    )
+
+    out = place_be(planning, "250501", 1, "", None, None, "A")
+    added = out[out["BE_Numero"] == "250501"].iloc[0]
+    assert added["Numero_Vol"] == "500"
+    assert added["Destination"] == "DLA"

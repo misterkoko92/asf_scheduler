@@ -252,3 +252,100 @@ def test_apply_planning_updates_batch(tmp_path):
     assert "250002" in bes
     assert "old" in statuses
     assert "new" in statuses
+
+
+def test_apply_planning_updates_batch_without_increment_and_with_mag_updates(monkeypatch, tmp_path):
+    path = tmp_path / "planning.xlsx"
+    path.write_text("x", encoding="utf-8")
+
+    base_df = pd.DataFrame([{"BE_Key": "250001", "BE_Numero": "250001"}])
+    monkeypatch.setattr("asf_app.services.shipments_update_service._load_export_df", lambda _p: base_df.copy())
+    monkeypatch.setattr("asf_app.services.shipments_update_service._sort_export_df", lambda df: df)
+    monkeypatch.setattr(
+        "asf_app.services.shipments_update_service._apply_update_to_export_df",
+        lambda df, **_kwargs: pd.concat([df, pd.DataFrame([{"BE_Key": "250002", "BE_Numero": "250002"}])], ignore_index=True),
+    )
+
+    class _Result:
+        output_path = tmp_path / "out.xlsx"
+
+    called_kwargs: list[dict] = []
+
+    def _fake_export(*_args, **kwargs):
+        called_kwargs.append(kwargs)
+        return _Result()
+
+    updated: list[str] = []
+    monkeypatch.setattr("asf_app.services.export_service.export_planning_excel", _fake_export)
+    monkeypatch.setattr("asf_app.services.shipments_update_service.cp.sync_local_file_to_onedrive", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        "asf_app.services.shipments_update_service._update_mag_central_for_be",
+        lambda **kwargs: updated.append(str(kwargs.get("be_num"))) or "updated",
+    )
+
+    out = apply_planning_updates_batch(
+        path=path,
+        updates=[
+            {"be_num": "250001", "action": "Replanification"},
+            {"be_num": "250002", "action": "Replanification"},
+        ],
+        week=4,
+        year=2026,
+        increment_version=False,
+        write_mag_central=True,
+    )
+
+    assert out == _Result.output_path
+    assert called_kwargs and called_kwargs[0]["increment_version"] is False
+    assert called_kwargs[0]["output_path"] == path
+    assert updated == ["250001", "250002"]
+
+
+def test_apply_planning_update_without_increment_and_with_mag_updates(monkeypatch, tmp_path):
+    path = tmp_path / "planning.xlsx"
+    path.write_text("x", encoding="utf-8")
+    base_df = pd.DataFrame([{"BE_Key": "250001", "BE_Numero": "250001"}])
+    monkeypatch.setattr("asf_app.services.shipments_update_service._load_export_df", lambda _p: base_df.copy())
+    monkeypatch.setattr("asf_app.services.shipments_update_service._sort_export_df", lambda df: df)
+    monkeypatch.setattr(
+        "asf_app.services.shipments_update_service._apply_update_to_export_df",
+        lambda df, **_kwargs: pd.concat([df, pd.DataFrame([{"BE_Key": "250001", "_STATUS": "new"}])], ignore_index=True),
+    )
+
+    class _Result:
+        output_path = tmp_path / "out_single.xlsx"
+
+    called_kwargs: list[dict] = []
+
+    def _fake_export(*_args, **kwargs):
+        called_kwargs.append(kwargs)
+        return _Result()
+
+    mag_calls: list[str] = []
+    monkeypatch.setattr("asf_app.services.export_service.export_planning_excel", _fake_export)
+    monkeypatch.setattr("asf_app.services.shipments_update_service.cp.sync_local_file_to_onedrive", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        "asf_app.services.shipments_update_service._update_mag_central_for_be",
+        lambda **kwargs: mag_calls.append(str(kwargs.get("be_num"))) or "updated",
+    )
+
+    out = apply_planning_update(
+        path=path,
+        action="Replanification",
+        be_num="250001",
+        dest_iata="DLA",
+        date_new="06/01/2025",
+        vol_new="AF123",
+        heure_new="11:30",
+        bene_choice="DUPONT",
+        be_info=pd.Series({"BE_Nb_Colis": 2}),
+        week=4,
+        year=2026,
+        increment_version=False,
+        write_mag_central=True,
+    )
+
+    assert out == _Result.output_path
+    assert called_kwargs and called_kwargs[0]["increment_version"] is False
+    assert called_kwargs[0]["output_path"] == path
+    assert mag_calls == ["250001"]

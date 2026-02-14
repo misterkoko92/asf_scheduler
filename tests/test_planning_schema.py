@@ -4,8 +4,9 @@ from __future__ import annotations
 import warnings
 
 import pandas as pd
+import pytest
 
-from scheduler.planning_schema import normalize_planning_df, validate_planning_df
+from scheduler.planning_schema import assert_planning_schema, normalize_planning_df, validate_planning_df
 from scheduler.planning_views import build_export_view
 
 
@@ -147,3 +148,45 @@ def test_normalize_planning_df_manual_flag_no_future_warning():
         norm = normalize_planning_df(df)
     assert bool(norm.loc[0, "_MANUEL"]) is False
     assert not any("Downcasting object dtype arrays on .fillna" in str(w.message) for w in caught)
+
+
+def test_normalize_planning_df_generates_uid_when_missing_or_blank():
+    df = pd.DataFrame(
+        [
+            {
+                "Date_Vol": "01/01/2025",
+                "Heure_Vol": "10:00",
+                "Numero_Vol": "AF 12",
+                "Destination": "DLA",
+                "BE_Numero": "250001",
+                "BE_Nb_Colis": 1,
+                "BE_Nb_Equiv": 1,
+                "Benevole": "Jean",
+                "ID": "1",
+                "UID": "",
+            },
+            {
+                "Date_Vol": "02/01/2025",
+                "Heure_Vol": "11:00",
+                "Numero_Vol": "AF 13",
+                "Destination": "RUN",
+                "BE_Numero": "250002",
+                "BE_Nb_Colis": 2,
+                "BE_Nb_Equiv": 2,
+                "Benevole": "Claire",
+                "ID": "2",
+                "UID": pd.NA,
+            },
+        ]
+    )
+
+    norm = normalize_planning_df(df)
+    assert norm["UID"].astype(str).str.strip().ne("").all()
+
+
+def test_validate_and_assert_planning_schema_errors():
+    assert validate_planning_df(None) == ["planning_df is None"]
+    errors = validate_planning_df(pd.DataFrame([{"Date_Vol": "01/01/2025"}]))
+    assert errors and "Missing columns" in errors[0]
+    with pytest.raises(ValueError, match="Planning schema invalid"):
+        assert_planning_schema(pd.DataFrame([{"Date_Vol": "01/01/2025"}]))

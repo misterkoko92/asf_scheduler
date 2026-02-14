@@ -5,6 +5,7 @@ import datetime as dt
 
 import pandas as pd
 
+import asf_app.services.params_service as params_service
 from asf_app.services.params_service import add_benevole_dispo, add_vol
 
 
@@ -93,3 +94,33 @@ def test_add_vol(tmp_path, monkeypatch):
     assert len(out) == 2
     assert str(out.iloc[-1]["PVOL_NUMERO"]) == "456"
     assert out.iloc[-1]["PVOL_FK_DESTINATION"] == "BZV"
+
+
+def test_params_service_load_save_wrappers(monkeypatch):
+    read_calls: list[tuple[str, str]] = []
+    save_calls: list[tuple[str, str, int]] = []
+
+    monkeypatch.setattr(
+        params_service,
+        "read_excel_sheet",
+        lambda path, sheet: read_calls.append((path, sheet)) or pd.DataFrame([{"ok": 1}]),
+    )
+    monkeypatch.setattr(
+        params_service,
+        "save_excel_sheet",
+        lambda path, sheet, df: save_calls.append((path, sheet, len(df))),
+    )
+
+    params_service.load_paramdest("tdb.xlsx")
+    params_service.load_parambe("tdb.xlsx")
+    params_service.load_parambenev("benev.xlsx")
+    params_service.save_paramdest("tdb.xlsx", pd.DataFrame([{"a": 1}]))
+    params_service.save_parambe("tdb.xlsx", pd.DataFrame([{"a": 1}]))
+    params_service.save_parambenev("benev.xlsx", pd.DataFrame([{"a": 1}]))
+
+    assert ("tdb.xlsx", "ParamDest") in read_calls
+    assert ("tdb.xlsx", "ParamBE") in read_calls
+    assert ("benev.xlsx", "ParamBenev") in read_calls
+    assert ("tdb.xlsx", "ParamDest", 1) in save_calls
+    assert ("tdb.xlsx", "ParamBE", 1) in save_calls
+    assert ("benev.xlsx", "ParamBenev", 1) in save_calls

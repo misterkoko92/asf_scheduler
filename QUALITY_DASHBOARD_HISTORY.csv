@@ -12,3 +12,7 @@ generated_at,iso_week,branch,commit,tests_collected,coverage_percent,coverage_ta
 2026-02-13 23:29:51 CET,2026-W07,main,0f74296,693,90.03,75,pass,pass,pass,pass,not_run
 2026-02-13 23:40:46 CET,2026-W07,main,0f74296,718,91.08,75,pass,pass,pass,pass,not_run
 2026-02-13 23:45:12 CET,2026-W07,main,0f74296,729,91.46,75,pass,pass,pass,pass,not_run
+2026-02-14 10:28:17 CET,2026-W07,main,9b8ff75,874,95.02,75,fail,pass,pass,pass,not_run
+2026-02-14 10:50:16 CET,2026-W07,main,9b8ff75,931,97.0,75,fail,pass,pass,pass,not_run
+2026-02-14 11:22:35 CET,2026-W07,main,9b8ff75,998,99.02,75,fail,pass,pass,pass,not_run
+2026-02-14 11:43:40 CET,2026-W07,main,9b8ff75,1015,99.61,75,fail,pass,pass,pass,not_run
